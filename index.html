@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WalterLund | Plataforma Interna</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+  <div class="app">
+
+    <!-- SIDEBAR -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <div class="logo-badge">W</div>
+        <span class="logo-text">WalterLund</span>
+      </div>
+
+      <nav class="sidebar-nav">
+        <div class="nav-group">
+          <span class="nav-group-title">⚡ ACCESOS RÁPIDOS</span>
+          <a href="#" class="nav-item" data-section="inicio">🏠 Inicio</a>
+          <a href="#" class="nav-item" data-section="despachos">🚚 Despachos</a>
+          <a href="#" class="nav-item" data-section="descargas">⬇ Descargas</a>
+        </div>
+
+        <div class="nav-group collapsible">
+          <button class="nav-group-title toggle" data-toggle="inventario">
+            <span>📦 INVENTARIO</span>
+            <span class="chevron">▾</span>
+          </button>
+          <div class="nav-subitems" id="inventario">
+            <a href="#" class="nav-item active" data-section="stock">📦 Stock</a>
+            <a href="#" class="nav-item" data-section="reposicion">🔄 Reposición de Productos</a>
+            <a href="#" class="nav-item" data-section="supervision">📊 Supervisión</a>
+            <a href="#" class="nav-item" data-section="apilador">🗂 Apilador</a>
+            <a href="#" class="nav-item" data-section="corte">✂ Corte</a>
+          </div>
+        </div>
+      </nav>
+
+      <div class="sidebar-footer">
+        <a href="#" class="nav-item" id="logout">⏻ Cerrar Sesión</a>
+      </div>
+    </aside>
+
+    <!-- MAIN -->
+    <div class="main">
+      <header class="topbar">
+        <button class="icon-btn" id="menuToggle" title="Menú">☰</button>
+        <div class="topbar-right">
+          <button class="icon-btn" title="Configuración">⚙</button>
+          <button class="btn-help">Ayuda TI</button>
+          <button class="icon-btn" title="Notificaciones">🔔</button>
+          <div class="user-chip">
+            <div class="avatar">W</div>
+            <span class="user-name">Sebastian Flores</span>
+          </div>
+        </div>
+      </header>
+
+      <main class="content" id="content">
+        <!-- El contenido de cada sección se inyecta aquí vía JS -->
+      </main>
+    </div>
+
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script src="js/importModal.js"></script>
+  <script src="js/excel.js"></script>
+  <script src="js/search.js"></script>
+  <script src="js/stock.js"></script>
+  <script src="js/reposicionParser.js"></script>
+  <script src="js/reposicion.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

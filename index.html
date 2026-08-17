@@ -21,8 +21,17 @@
         <div class="nav-group">
           <span class="nav-group-title">⚡ ACCESOS RÁPIDOS</span>
           <a href="#" class="nav-item" data-section="inicio">🏠 Inicio</a>
-          <a href="#" class="nav-item" data-section="despachos">🚚 Despachos</a>
           <a href="#" class="nav-item" data-section="descargas">⬇ Descargas</a>
+        </div>
+
+        <div class="nav-group collapsible">
+          <button class="nav-group-title toggle" data-toggle="despachos">
+            <span>🚚 DESPACHOS</span>
+            <span class="chevron">▾</span>
+          </button>
+          <div class="nav-subitems" id="despachos">
+            <a href="#" class="nav-item" data-section="control-facturas">🧾 Control de Facturas</a>
+          </div>
         </div>
 
         <div class="nav-group collapsible">
@@ -33,9 +42,6 @@
           <div class="nav-subitems" id="inventario">
             <a href="#" class="nav-item active" data-section="stock">📦 Stock</a>
             <a href="#" class="nav-item" data-section="reposicion">🔄 Reposición de Productos</a>
-            <a href="#" class="nav-item" data-section="supervision">📊 Supervisión</a>
-            <a href="#" class="nav-item" data-section="apilador">🗂 Apilador</a>
-            <a href="#" class="nav-item" data-section="corte">✂ Corte</a>
           </div>
         </div>
       </nav>

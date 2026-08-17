@@ -10,14 +10,19 @@
       en los centros de distribución y sugiere de qué bodega
       trasladar (prioridad VIEL, luego el otro centro sin bajar
       del 70% de su stock).
-   3) Se muestra la tabla en pantalla y se puede descargar el
-      PDF "Orden de Traslado".
+   3) Se muestra la tabla en pantalla (filtrable por bodega y
+      estado) y se puede descargar el PDF "Orden de Traslado"
+      (siempre con TODOS los traslados sugeridos, sin importar
+      el filtro activo en pantalla).
 ============================================ */
 
 const ReposicionSection = (() => {
 
   let allRecords = null;   // registros crudos del Excel importado
   let filas = null;        // resultado de ReposicionAnalysis.analizar()
+
+  let filtroBodega = '';   // '' = todas | 'sanFco' | 'aldunate'
+  let filtroEstado = '';   // '' = todos  | 'resuelto' | 'sinSolucion'
 
   function template() {
     return `
@@ -43,6 +48,15 @@ const ReposicionSection = (() => {
   }
 
   // ---------- Resultados ----------
+
+  function filasFiltradas() {
+    return filas.filter(f => {
+      if (filtroBodega && f.destino !== filtroBodega) return false;
+      if (filtroEstado === 'resuelto' && !f.resuelto) return false;
+      if (filtroEstado === 'sinSolucion' && f.resuelto) return false;
+      return true;
+    });
+  }
 
   function renderResults() {
     if (!allRecords) {
@@ -82,7 +96,44 @@ const ReposicionSection = (() => {
         </div>`;
     }
 
-    const rows = filas.map(f => `
+    const filtradas = filasFiltradas();
+
+    const filterBar = `
+      <div class="filter-body" style="padding:16px 24px 0;">
+        <div class="field" style="max-width:220px;">
+          <label>BODEGA</label>
+          <select id="filtroBodegaSelect">
+            <option value="" ${filtroBodega === '' ? 'selected' : ''}>Todas</option>
+            <option value="sanFco" ${filtroBodega === 'sanFco' ? 'selected' : ''}>SAN FRANCISCO 918</option>
+            <option value="aldunate" ${filtroBodega === 'aldunate' ? 'selected' : ''}>ALDUNATE</option>
+          </select>
+        </div>
+        <div class="field" style="max-width:220px;">
+          <label>ESTADO</label>
+          <select id="filtroEstadoSelect">
+            <option value="" ${filtroEstado === '' ? 'selected' : ''}>Todos</option>
+            <option value="resuelto" ${filtroEstado === 'resuelto' ? 'selected' : ''}>Traslado sugerido</option>
+            <option value="sinSolucion" ${filtroEstado === 'sinSolucion' ? 'selected' : ''}>Evaluar compra</option>
+          </select>
+        </div>
+      </div>`;
+
+    if (filtradas.length === 0) {
+      return `
+        ${cards}
+        ${filterBar}
+        <div class="empty-state">
+          <div class="icon">🔎</div>
+          <strong>No hay resultados con ese filtro</strong>
+          <span>Prueba con otra combinación de bodega y estado.</span>
+        </div>
+        <div class="import-row">
+          <span>El PDF siempre incluye todos los traslados sugeridos, sin importar el filtro.</span>
+          <button class="btn-primary" id="generateTrasladoPdf" type="button" ${r.totalConTraslado === 0 ? 'disabled' : ''}>🖨 Generar PDF de orden de traslado</button>
+        </div>`;
+    }
+
+    const rows = filtradas.map(f => `
       <tr>
         <td>${f.codigo}</td>
         <td>${f.nombre}</td>
@@ -99,8 +150,9 @@ const ReposicionSection = (() => {
 
     return `
       ${cards}
+      ${filterBar}
       <div class="results-count">
-        ${filas.length.toLocaleString('es-CL')} producto(s) con stock bajo detectado(s).
+        ${filtradas.length.toLocaleString('es-CL')} de ${filas.length.toLocaleString('es-CL')} producto(s) con stock bajo.
       </div>
       <div class="table-scroll">
         <table class="data-table">
@@ -120,13 +172,31 @@ const ReposicionSection = (() => {
         </table>
       </div>
       <div class="import-row">
-        <span>Revisa los traslados sugeridos antes de imprimir la orden.</span>
+        <span>Revisa los traslados sugeridos antes de imprimir la orden. El PDF siempre incluye todos, sin importar el filtro.</span>
         <button class="btn-primary" id="generateTrasladoPdf" type="button" ${r.totalConTraslado === 0 ? 'disabled' : ''}>🖨 Generar PDF de orden de traslado</button>
       </div>
     `;
   }
 
   function attachResultEvents() {
+    const bodegaSelect = document.getElementById('filtroBodegaSelect');
+    if (bodegaSelect) {
+      bodegaSelect.addEventListener('change', (e) => {
+        filtroBodega = e.target.value;
+        document.getElementById('reposicionResults').innerHTML = renderResults();
+        attachResultEvents();
+      });
+    }
+
+    const estadoSelect = document.getElementById('filtroEstadoSelect');
+    if (estadoSelect) {
+      estadoSelect.addEventListener('change', (e) => {
+        filtroEstado = e.target.value;
+        document.getElementById('reposicionResults').innerHTML = renderResults();
+        attachResultEvents();
+      });
+    }
+
     const btn = document.getElementById('generateTrasladoPdf');
     if (btn) {
       btn.addEventListener('click', () => {
@@ -149,6 +219,8 @@ const ReposicionSection = (() => {
 
       allRecords = records;
       filas = ReposicionAnalysis.analizar(records);
+      filtroBodega = '';
+      filtroEstado = '';
 
       statusEl.textContent = `${records.length.toLocaleString('es-CL')} productos importados desde "${file.name}".`;
 

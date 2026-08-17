@@ -46,6 +46,9 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'reposicion':
         ReposicionSection.render(content);
         break;
+      case 'control-facturas':
+        ControlFacturasSection.render(content);
+        break;
       default:
         content.innerHTML = placeholder(section);
     }

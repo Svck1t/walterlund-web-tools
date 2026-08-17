@@ -2,103 +2,140 @@
    reposicion.js
    Responsabilidad única: UI de la sección
    "Reposición de Productos".
-   Dos flujos:
-   1) Importar el stock consolidado -> genera Excels Viel/Aldunate.
-   2) Adjuntar el PDF escaneado ya con las cantidades a mano ->
-      OCR dirigido + verificación manual -> genera el PDF final.
+
+   Flujo:
+   1) Importar el Excel de stock consolidado (SAN FRANCISCO 918,
+      VIEL, ALDUNATE).
+   2) ReposicionAnalysis detecta productos con stock bajo (≤30)
+      en los centros de distribución y sugiere de qué bodega
+      trasladar (prioridad VIEL, luego el otro centro sin bajar
+      del 70% de su stock).
+   3) Se muestra la tabla en pantalla y se puede descargar el
+      PDF "Orden de Traslado".
 ============================================ */
 
 const ReposicionSection = (() => {
 
-  // Flujo 1: stock consolidado
-  let lastRecords = null;
-  let lastFilenames = null;   // incluye vielRecords / aldunateRecords (referencia para el OCR)
-
-  // Flujo 2: escaneo OCR
-  let scanBodega = 'viel';
-  let scanResults = null;     // [{codigo, nombre, unidad, ocrRaw, cantidad, cropDataUrl}]
+  let allRecords = null;   // registros crudos del Excel importado
+  let filas = null;        // resultado de ReposicionAnalysis.analizar()
 
   function template() {
     return `
       <div class="section-header">
         <div>
           <h1>Reposición de Productos</h1>
-          <p>Importa el stock consolidado por bodega, genera las planillas de solicitud, y luego sube el archivo ya completado para generar el PDF final.</p>
+          <p>Importa el stock consolidado y el sistema sugiere automáticamente qué traslados hacer entre bodegas para cubrir los productos con stock bajo.</p>
         </div>
       </div>
 
       <div class="panel">
-        <div class="filter-bar">▽ 1. Importar stock consolidado</div>
+        <div class="filter-bar">▽ Importar stock consolidado</div>
         <div class="import-row">
-          <span id="reposicionStatus">Aún no se ha importado ningún Excel.</span>
+          <span id="reposicionStatus">${allRecords ? `${allRecords.length.toLocaleString('es-CL')} productos importados.` : 'Aún no se ha importado ningún Excel.'}</span>
           <button class="btn-outline" id="openReposicionImport" type="button">Importar Excel</button>
         </div>
       </div>
 
       <div class="results-panel" id="reposicionResults">
-        ${renderResult()}
-      </div>
-
-      <div class="panel" style="margin-top:20px;">
-        <div class="filter-bar">▽ 2. Adjuntar archivo escaneado con las cantidades</div>
-        <div class="import-row">
-          <div class="field" style="max-width:220px;">
-            <label>BODEGA</label>
-            <select id="scanBodegaSelect">
-              <option value="viel">Viel</option>
-              <option value="aldunate">Aldunate</option>
-            </select>
-          </div>
-          <span id="scanStatus" style="flex:1;">Sube el PDF firmado/escaneado por la bodega.</span>
-          <button class="btn-outline" id="openScanImport" type="button">Adjuntar Archivo</button>
-        </div>
-      </div>
-
-      <div class="results-panel" id="scanResultsPanel">
-        ${renderScanResults()}
+        ${renderResults()}
       </div>
     `;
   }
 
-  // ---------- Flujo 1: stock consolidado ----------
+  // ---------- Resultados ----------
 
-  function renderResult() {
-    if (!lastRecords) {
+  function renderResults() {
+    if (!allRecords) {
       return `
         <div class="empty-state">
           <div class="icon">🔄</div>
-          <strong>Importa el Excel de stock por bodega</strong>
-          <span>Debe incluir las columnas Código Producto, Nombre Producto, Unidad de Medida, VIEL y ALDUNATE.</span>
+          <strong>Importa el Excel de stock consolidado</strong>
+          <span>Debe incluir las columnas Código Producto, Nombre Producto, Unidad de Medida, SAN FRANCISCO 918, VIEL y ALDUNATE.</span>
         </div>`;
     }
 
-    return `
+    const r = ReposicionAnalysis.resumen(filas);
+
+    const cards = `
       <div class="reposicion-summary">
         <div class="reposicion-card">
-          <span class="reposicion-card-label">Productos importados</span>
-          <span class="reposicion-card-value">${lastRecords.length.toLocaleString('es-CL')}</span>
+          <span class="reposicion-card-label">Productos con stock bajo (≤ ${ReposicionAnalysis.UMBRAL_STOCK_BAJO})</span>
+          <span class="reposicion-card-value">${r.totalStockBajo.toLocaleString('es-CL')}</span>
         </div>
         <div class="reposicion-card">
-          <span class="reposicion-card-label">${lastFilenames.vielCount.toLocaleString('es-CL')} productos con stock &gt; 0</span>
-          <span class="reposicion-card-value reposicion-filename">${lastFilenames.vielFilename}</span>
-          <button class="btn-outline reposicion-redownload" data-bodega="viel">Descargar de nuevo</button>
+          <span class="reposicion-card-label">Traslados sugeridos</span>
+          <span class="reposicion-card-value">${r.totalConTraslado.toLocaleString('es-CL')}</span>
         </div>
         <div class="reposicion-card">
-          <span class="reposicion-card-label">${lastFilenames.aldunateCount.toLocaleString('es-CL')} productos con stock &gt; 0</span>
-          <span class="reposicion-card-value reposicion-filename">${lastFilenames.aldunateFilename}</span>
-          <button class="btn-outline reposicion-redownload" data-bodega="aldunate">Descargar de nuevo</button>
+          <span class="reposicion-card-label">Sin reposición disponible</span>
+          <span class="reposicion-card-value">${r.totalSinSolucion.toLocaleString('es-CL')}</span>
         </div>
       </div>`;
+
+    if (filas.length === 0) {
+      return `
+        ${cards}
+        <div class="empty-state">
+          <div class="icon">✅</div>
+          <strong>Todo el stock está en niveles saludables</strong>
+          <span>Ningún producto de SAN FRANCISCO 918 o ALDUNATE está en ${ReposicionAnalysis.UMBRAL_STOCK_BAJO} unidades o menos.</span>
+        </div>`;
+    }
+
+    const rows = filas.map(f => `
+      <tr>
+        <td>${f.codigo}</td>
+        <td>${f.nombre}</td>
+        <td>${f.unidad}</td>
+        <td>${f.destinoLabel}</td>
+        <td style="text-align:right;">${f.stockDestino.toLocaleString('es-CL')}</td>
+        <td>${f.origenLabel ?? '—'}</td>
+        <td style="text-align:right;">${f.resuelto ? f.cantidad.toLocaleString('es-CL') : '—'}</td>
+        <td>${f.resuelto
+          ? '<span class="badge badge-ok">Traslado sugerido</span>'
+          : '<span class="badge badge-warn">Evaluar compra</span>'}
+        </td>
+      </tr>`).join('');
+
+    return `
+      ${cards}
+      <div class="results-count">
+        ${filas.length.toLocaleString('es-CL')} producto(s) con stock bajo detectado(s).
+      </div>
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Código</th>
+              <th>Producto</th>
+              <th>Unidad</th>
+              <th>Bodega con stock bajo</th>
+              <th>Stock actual</th>
+              <th>Origen sugerido</th>
+              <th>Cantidad a trasladar</th>
+              <th>Estado</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+      <div class="import-row">
+        <span>Revisa los traslados sugeridos antes de imprimir la orden.</span>
+        <button class="btn-primary" id="generateTrasladoPdf" type="button" ${r.totalConTraslado === 0 ? 'disabled' : ''}>🖨 Generar PDF de orden de traslado</button>
+      </div>
+    `;
   }
 
   function attachResultEvents() {
-    document.querySelectorAll('.reposicion-redownload').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        if (!lastRecords) return;
-        lastFilenames = await ReposicionParser.generateReposicionFiles(lastRecords);
+    const btn = document.getElementById('generateTrasladoPdf');
+    if (btn) {
+      btn.addEventListener('click', () => {
+        ReposicionOutputPdf.build(filas, ReposicionParser.todayLabel());
       });
-    });
+    }
   }
+
+  // ---------- Importación ----------
 
   async function importFile(file, setModalStatus, closeModal) {
     const statusEl = document.getElementById('reposicionStatus');
@@ -110,126 +147,13 @@ const ReposicionSection = (() => {
       const records = await ReposicionParser.readFile(file);
       if (records.length === 0) throw new Error('No se encontraron productos en el archivo.');
 
-      lastRecords = records;
-      if (setModalStatus) setModalStatus('Generando planillas de reposición...');
-      lastFilenames = await ReposicionParser.generateReposicionFiles(records);
+      allRecords = records;
+      filas = ReposicionAnalysis.analizar(records);
 
-      statusEl.textContent = `${records.length.toLocaleString('es-CL')} productos procesados desde "${file.name}". Se descargaron ${lastFilenames.vielFilename} y ${lastFilenames.aldunateFilename}.`;
+      statusEl.textContent = `${records.length.toLocaleString('es-CL')} productos importados desde "${file.name}".`;
 
-      document.getElementById('reposicionResults').innerHTML = renderResult();
+      document.getElementById('reposicionResults').innerHTML = renderResults();
       attachResultEvents();
-
-      if (closeModal) closeModal();
-    } catch (err) {
-      const msg = describeError(err);
-      console.error('Reposición:', err);
-      statusEl.textContent = `Error: ${msg}`;
-      if (setModalStatus) setModalStatus(`Error: ${msg}`);
-    }
-  }
-
-  // ---------- Flujo 2: escaneo OCR ----------
-
-  function renderScanResults() {
-    if (!scanResults) {
-      return `
-        <div class="empty-state">
-          <div class="icon">🖋️</div>
-          <strong>Adjunta el PDF con las cantidades escritas a mano</strong>
-          <span>El sistema detecta automáticamente qué productos tienen una cantidad anotada.</span>
-        </div>`;
-    }
-
-    if (scanResults.length === 0) {
-      return `
-        <div class="empty-state">
-          <div class="icon">🖋️</div>
-          <strong>No se detectó ninguna cantidad escrita</strong>
-          <span>Revisa que el PDF corresponda a la bodega seleccionada.</span>
-        </div>`;
-    }
-
-    const rows = scanResults.map((r, i) => `
-      <tr>
-        <td>${r.codigo}</td>
-        <td>${r.nombre}</td>
-        <td><img src="${r.cropDataUrl}" alt="recorte" class="scan-crop"></td>
-        <td><input type="number" min="0" step="1" class="scan-qty-input" data-index="${i}" value="${r.cantidad ?? ''}" placeholder="?"></td>
-      </tr>`).join('');
-
-    return `
-      <div class="results-count">
-        ${scanResults.length.toLocaleString('es-CL')} producto(s) con anotación detectada — revisa cada cantidad contra el recorte antes de generar el PDF.
-      </div>
-      <div class="table-scroll">
-        <table class="data-table">
-          <thead>
-            <tr>
-              <th>Código</th>
-              <th>Producto</th>
-              <th>Escrito en el PDF</th>
-              <th>Cantidad a confirmar</th>
-            </tr>
-          </thead>
-          <tbody>${rows}</tbody>
-        </table>
-      </div>
-      <div class="import-row">
-        <span>Corrige los valores que no coincidan con el recorte antes de continuar.</span>
-        <button class="btn-primary" id="generateSolicitudPdf" type="button">Generar PDF de solicitud</button>
-      </div>
-    `;
-  }
-
-  function attachScanResultEvents() {
-    document.querySelectorAll('.scan-qty-input').forEach(input => {
-      input.addEventListener('input', (e) => {
-        const idx = Number(e.target.dataset.index);
-        const val = e.target.value === '' ? null : parseInt(e.target.value, 10);
-        scanResults[idx].cantidad = isNaN(val) ? null : val;
-      });
-    });
-
-    const generateBtn = document.getElementById('generateSolicitudPdf');
-    if (generateBtn) {
-      generateBtn.addEventListener('click', () => {
-        const confirmedRows = scanResults.filter(r => r.cantidad > 0);
-        if (confirmedRows.length === 0) {
-          alert('No hay cantidades confirmadas mayores a 0 para generar el PDF.');
-          return;
-        }
-        const bodegaLabel = scanBodega === 'viel' ? 'Viel' : 'Aldunate';
-        ReposicionOutputPdf.build(confirmedRows, bodegaLabel, ReposicionParser.todayLabel());
-      });
-    }
-  }
-
-  async function runScan(file, setModalStatus, closeModal) {
-    const statusEl = document.getElementById('scanStatus');
-    const referenceRecords = scanBodega === 'viel'
-      ? (lastFilenames && lastFilenames.vielRecords)
-      : (lastFilenames && lastFilenames.aldunateRecords);
-
-    if (!referenceRecords) {
-      const msg = 'Primero importa el Excel de stock consolidado (paso 1) para tener la lista de productos de referencia.';
-      statusEl.textContent = msg;
-      if (setModalStatus) setModalStatus(msg);
-      return;
-    }
-
-    const onProgress = (text) => {
-      statusEl.textContent = text;
-      if (setModalStatus) setModalStatus(text);
-    };
-
-    try {
-      onProgress('Iniciando lectura del PDF...');
-      scanResults = await ReposicionScan.scan(file, referenceRecords, onProgress);
-
-      statusEl.textContent = `Listo: ${scanResults.length.toLocaleString('es-CL')} cantidad(es) detectada(s) en "${file.name}". Revísalas abajo antes de generar el PDF.`;
-
-      document.getElementById('scanResultsPanel').innerHTML = renderScanResults();
-      attachScanResultEvents();
 
       if (closeModal) closeModal();
     } catch (err) {
@@ -252,21 +176,7 @@ const ReposicionSection = (() => {
       });
     });
 
-    document.getElementById('scanBodegaSelect').addEventListener('change', (e) => {
-      scanBodega = e.target.value;
-    });
-
-    document.getElementById('openScanImport').addEventListener('click', () => {
-      ImportModal.open({
-        title: 'Adjuntar archivo escaneado',
-        hint: 'PDF escaneado con las cantidades solicitadas a mano (.pdf)',
-        accept: '.pdf',
-        onFile: (file, { setStatus, close }) => runScan(file, setStatus, close)
-      });
-    });
-
     attachResultEvents();
-    attachScanResultEvents();
   }
 
   function render(container) {

@@ -21,7 +21,7 @@ const ReposicionSection = (() => {
   let allRecords = null;   // registros crudos del Excel importado
   let filas = null;        // resultado de ReposicionAnalysis.analizar()
 
-  let filtroBodega = '';   // '' = todas | 'sanFco' | 'aldunate'
+  let filtroRuta = '';     // '' = todas | 'viel-aldunate' | 'viel-sanFco' | 'aldunate-sanFco' | 'sanFco-aldunate'
   let filtroEstado = '';   // '' = todos  | 'resuelto' | 'sinSolucion'
 
   function template() {
@@ -51,7 +51,7 @@ const ReposicionSection = (() => {
 
   function filasFiltradas() {
     return filas.filter(f => {
-      if (filtroBodega && f.destino !== filtroBodega) return false;
+      if (filtroRuta && `${f.origen}-${f.destino}` !== filtroRuta) return false;
       if (filtroEstado === 'resuelto' && !f.resuelto) return false;
       if (filtroEstado === 'sinSolucion' && f.resuelto) return false;
       return true;
@@ -100,12 +100,14 @@ const ReposicionSection = (() => {
 
     const filterBar = `
       <div class="filter-body" style="padding:16px 24px 0;">
-        <div class="field" style="max-width:220px;">
-          <label>BODEGA</label>
-          <select id="filtroBodegaSelect">
-            <option value="" ${filtroBodega === '' ? 'selected' : ''}>Todas</option>
-            <option value="sanFco" ${filtroBodega === 'sanFco' ? 'selected' : ''}>SAN FRANCISCO 918</option>
-            <option value="aldunate" ${filtroBodega === 'aldunate' ? 'selected' : ''}>ALDUNATE</option>
+        <div class="field" style="max-width:240px;">
+          <label>RUTA DE TRASLADO</label>
+          <select id="filtroRutaSelect">
+            <option value="" ${filtroRuta === '' ? 'selected' : ''}>Todas</option>
+            <option value="viel-aldunate" ${filtroRuta === 'viel-aldunate' ? 'selected' : ''}>Viel a Aldunate</option>
+            <option value="viel-sanFco" ${filtroRuta === 'viel-sanFco' ? 'selected' : ''}>Viel a San Francisco</option>
+            <option value="aldunate-sanFco" ${filtroRuta === 'aldunate-sanFco' ? 'selected' : ''}>Aldunate a San Francisco</option>
+            <option value="sanFco-aldunate" ${filtroRuta === 'sanFco-aldunate' ? 'selected' : ''}>San Francisco a Aldunate</option>
           </select>
         </div>
         <div class="field" style="max-width:220px;">
@@ -179,10 +181,10 @@ const ReposicionSection = (() => {
   }
 
   function attachResultEvents() {
-    const bodegaSelect = document.getElementById('filtroBodegaSelect');
-    if (bodegaSelect) {
-      bodegaSelect.addEventListener('change', (e) => {
-        filtroBodega = e.target.value;
+    const rutaSelect = document.getElementById('filtroRutaSelect');
+    if (rutaSelect) {
+      rutaSelect.addEventListener('change', (e) => {
+        filtroRuta = e.target.value;
         document.getElementById('reposicionResults').innerHTML = renderResults();
         attachResultEvents();
       });
@@ -219,7 +221,7 @@ const ReposicionSection = (() => {
 
       allRecords = records;
       filas = ReposicionAnalysis.analizar(records);
-      filtroBodega = '';
+      filtroRuta = '';
       filtroEstado = '';
 
       statusEl.textContent = `${records.length.toLocaleString('es-CL')} productos importados desde "${file.name}".`;

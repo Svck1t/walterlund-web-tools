@@ -1,13 +1,13 @@
 /* ============================================
    reposicionParser.js
-   Responsabilidad única:
-   1) Leer el Excel de stock consolidado (todas las bodegas)
-      — puede venir como .xlsx/.xls binario real, o como el
-      export típico de Softland: un .xls que en realidad es
-      una tabla HTML.
-   2) Generar y descargar los 2 Excels de reposición
-      (Stock Viel / Stock Aldunate) a partir de esos datos.
-   No sabe nada de la UI del módulo (eso vive en reposicion.js).
+   Responsabilidad única: leer el Excel de stock consolidado
+   (export de Softland) y devolver los registros normalizados
+   con el stock de las tres bodegas relevantes para reposición:
+   SAN FRANCISCO 918, VIEL y ALDUNATE. El resto de las columnas
+   del export (SAN IGNACIO, SANTIAGO CONCHA, Grupo, Reservas,
+   Disponible, etc.) se ignoran.
+   No sabe nada de análisis de reposición ni de la UI
+   (eso vive en reposicionAnalysis.js y reposicion.js).
 ============================================ */
 
 const ReposicionParser = (() => {
@@ -16,6 +16,7 @@ const ReposicionParser = (() => {
     codigo: 'Código Producto',
     nombre: 'Nombre Producto',
     unidad: 'Unidad de Medida',
+    sanFco: 'SAN FRANCISCO 918',
     viel: 'VIEL',
     aldunate: 'ALDUNATE'
   };
@@ -52,12 +53,13 @@ const ReposicionParser = (() => {
       codigo: headerRow.indexOf(COL.codigo),
       nombre: headerRow.indexOf(COL.nombre),
       unidad: headerRow.indexOf(COL.unidad),
+      sanFco: headerRow.indexOf(COL.sanFco),
       viel: headerRow.indexOf(COL.viel),
       aldunate: headerRow.indexOf(COL.aldunate)
     };
 
-    if (idx.codigo === -1 || idx.viel === -1 || idx.aldunate === -1) {
-      throw new Error('El archivo no tiene las columnas esperadas (Código Producto, VIEL, ALDUNATE).');
+    if (idx.codigo === -1 || idx.sanFco === -1 || idx.viel === -1 || idx.aldunate === -1) {
+      throw new Error('El archivo no tiene las columnas esperadas (Código Producto, SAN FRANCISCO 918, VIEL, ALDUNATE).');
     }
 
     const records = [];
@@ -68,6 +70,7 @@ const ReposicionParser = (() => {
         codigo,
         nombre: getCell(row, idx.nombre),
         unidad: getCell(row, idx.unidad),
+        sanFco: parseChileanNumber(getCell(row, idx.sanFco)),
         viel: parseChileanNumber(getCell(row, idx.viel)),
         aldunate: parseChileanNumber(getCell(row, idx.aldunate))
       });
@@ -106,7 +109,8 @@ const ReposicionParser = (() => {
 
   /**
    * Lee el archivo (detecta automáticamente si es HTML disfrazado de .xls
-   * o un binario real) y devuelve los registros consolidados por producto.
+   * o un binario real) y devuelve los registros consolidados por producto,
+   * con el stock de SAN FRANCISCO 918, VIEL y ALDUNATE.
    */
   async function readFile(file) {
     const text = await readAsText(file);
@@ -128,100 +132,5 @@ const ReposicionParser = (() => {
     return `${dd}-${mm}-${yyyy}`;
   }
 
-  /**
-   * Arma la hoja de una bodega con el formato pedido:
-   * - Encabezado en negrita, fuente 14; datos en fuente 14
-   * - Bordes finos solo dentro de la tabla (encabezado + datos)
-   * - Autofiltro en el encabezado
-   * - Solo productos con stock > 0 en esa bodega (equivalente al filtro manual de "Stock 0")
-   * - Configuración de página: vertical, ajustar a 1 hoja de ancho x 20 de alto,
-   *   tamaño carta, márgenes 0,3, centrado horizontalmente
-   */
-  function buildBodegaWorkbook(records, bodegaField, bodegaLabel) {
-    const workbook = new ExcelJS.Workbook();
-    const sheet = workbook.addWorksheet('Stock');
-
-    const headers = [COL.codigo, COL.nombre, COL.unidad, bodegaLabel, 'Solicitado'];
-    sheet.addRow(headers);
-
-    const filtered = records.filter(r => r[bodegaField] > 0);
-    filtered.forEach(r => {
-      sheet.addRow([r.codigo, r.nombre, r.unidad, r[bodegaField], '']);
-    });
-
-    sheet.columns = [
-      { width: 18 }, { width: 42 }, { width: 14 }, { width: 10 }, { width: 12 }
-    ];
-
-    const lastRow = filtered.length + 1;
-    const lastCol = headers.length;
-
-    for (let r = 1; r <= lastRow; r++) {
-      for (let c = 1; c <= lastCol; c++) {
-        const cell = sheet.getCell(r, c);
-        cell.font = { size: 14, bold: r === 1 };
-        cell.border = {
-          top: { style: 'thin' },
-          left: { style: 'thin' },
-          bottom: { style: 'thin' },
-          right: { style: 'thin' }
-        };
-      }
-    }
-
-    sheet.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: lastCol } };
-
-    sheet.pageSetup = {
-      orientation: 'portrait',
-      paperSize: 1, // Carta / Letter
-      fitToPage: true,
-      fitToWidth: 1,
-      fitToHeight: 20,
-      horizontalCentered: true,
-      margins: { left: 0.3, right: 0.3, top: 0.3, bottom: 0.3, header: 0.3, footer: 0.3 }
-    };
-
-    return { workbook, records: filtered };
-  }
-
-  async function downloadWorkbook(workbook, filename) {
-    const buffer = await workbook.xlsx.writeBuffer();
-    const blob = new Blob([buffer], {
-      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-    });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-  }
-
-  /**
-   * Genera y descarga los dos Excels de reposición a partir de los registros
-   * ya leídos. Devuelve los nombres de archivo y cuántos productos (con stock > 0)
-   * quedaron en cada uno.
-   */
-  async function generateReposicionFiles(records) {
-    const fecha = todayLabel();
-
-    const vielFilename = `Stock Viel ${fecha}.xlsx`;
-    const { workbook: vielWb, records: vielRecords } = buildBodegaWorkbook(records, 'viel', 'VIEL');
-    await downloadWorkbook(vielWb, vielFilename);
-
-    const aldunateFilename = `Stock Aldunate ${fecha}.xlsx`;
-    const { workbook: aldunateWb, records: aldunateRecords } = buildBodegaWorkbook(records, 'aldunate', 'ALDUNATE');
-    await downloadWorkbook(aldunateWb, aldunateFilename);
-
-    return {
-      vielFilename, aldunateFilename,
-      vielCount: vielRecords.length, aldunateCount: aldunateRecords.length,
-      vielRecords, aldunateRecords,
-      fecha
-    };
-  }
-
-  return { readFile, generateReposicionFiles, todayLabel };
+  return { readFile, todayLabel };
 })();

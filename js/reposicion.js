@@ -130,8 +130,8 @@ const ReposicionSection = (() => {
           <span>Prueba con otra combinación de bodega y estado.</span>
         </div>
         <div class="import-row">
-          <span>El PDF siempre incluye todos los traslados sugeridos, sin importar el filtro.</span>
-          <button class="btn-primary" id="generateTrasladoPdf" type="button" ${r.totalConTraslado === 0 ? 'disabled' : ''}>🖨 Generar PDF de orden de traslado</button>
+          <span>No hay traslados que exportar con este filtro.</span>
+          <button class="btn-primary" id="generateTrasladoPdf" type="button" disabled>🖨 Generar PDF de orden de traslado</button>
         </div>`;
     }
 
@@ -149,6 +149,9 @@ const ReposicionSection = (() => {
           : '<span class="badge badge-warn">Evaluar compra</span>'}
         </td>
       </tr>`).join('');
+
+    const resueltosFiltrados = filtradas.filter(f => f.resuelto).length;
+    const hayFiltroActivo = filtroRuta !== '' || filtroEstado !== '';
 
     return `
       ${cards}
@@ -174,8 +177,8 @@ const ReposicionSection = (() => {
         </table>
       </div>
       <div class="import-row">
-        <span>Revisa los traslados sugeridos antes de imprimir la orden. El PDF siempre incluye todos, sin importar el filtro.</span>
-        <button class="btn-primary" id="generateTrasladoPdf" type="button" ${r.totalConTraslado === 0 ? 'disabled' : ''}>🖨 Generar PDF de orden de traslado</button>
+        <span>${hayFiltroActivo ? 'El PDF se genera solo con los traslados que cumplen el filtro actual.' : 'Revisa los traslados sugeridos antes de imprimir la orden.'}</span>
+        <button class="btn-primary" id="generateTrasladoPdf" type="button" ${resueltosFiltrados === 0 ? 'disabled' : ''}>🖨 Generar PDF de orden de traslado</button>
       </div>
     `;
   }
@@ -202,7 +205,7 @@ const ReposicionSection = (() => {
     const btn = document.getElementById('generateTrasladoPdf');
     if (btn) {
       btn.addEventListener('click', () => {
-        ReposicionOutputPdf.build(filas, ReposicionParser.todayLabel());
+        ReposicionOutputPdf.build(filasFiltradas(), ReposicionParser.todayLabel());
       });
     }
   }

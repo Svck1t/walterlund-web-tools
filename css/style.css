@@ -487,6 +487,25 @@ table.data-table tbody tr:hover { background: #f5f8fc; }
   align-self: flex-start;
 }
 
+.badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.badge-ok {
+  background: #e3f2e6;
+  color: var(--accent-green);
+}
+
+.badge-warn {
+  background: #fdeaea;
+  color: #c62828;
+}
+
 .scan-crop {
   max-height: 40px;
   max-width: 140px;

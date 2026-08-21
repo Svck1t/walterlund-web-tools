@@ -487,21 +487,19 @@ table.data-table tbody tr:hover { background: #f5f8fc; }
   align-self: flex-start;
 }
 
-.iframe-wrap {
-  background: var(--bg-panel);
+.row-override { background: #eaf2fd; }
+
+.nivel-input {
+  width: 70px;
+  padding: 5px 8px;
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
-  overflow: hidden;
-  height: calc(100vh - 190px);
-  min-height: 480px;
+  border-radius: 5px;
+  font-size: 13px;
+  text-align: right;
+  font-family: inherit;
 }
 
-.iframe-wrap iframe {
-  width: 100%;
-  height: 100%;
-  border: 0;
-  display: block;
-}
+.nivel-input:focus { border-color: var(--accent-blue); outline: none; }
 
 .badge {
   display: inline-block;

@@ -12,7 +12,7 @@
 // Script (servidor a servidor — ahí no aplica CORS, que es una
 // restricción exclusiva del navegador).
 
-const APPS_SCRIPT_URL = 'PEGA_AQUI_LA_URL_DE_TU_WEB_APP'; // la misma URL /exec que usabas antes en nivelesMinimosStore.js
+const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxchbWwNZnnx72MF5d_NZockO1XD56He_Ti-nIb3Hx7HLb_0u-gpqRTh0Vy3c23BrXl/exec'; // la misma URL /exec que usabas antes en nivelesMinimosStore.js
 
 module.exports = async (req, res) => {
   try {

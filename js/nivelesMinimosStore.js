@@ -25,7 +25,7 @@ const NivelesMinimosStore = (() => {
 
   // Pega aquí la misma URL del Web App de Apps Script que usa Control de Facturas
   // (Implementar > Administrar implementaciones > copiar URL de la implementación activa)
-  const API_URL = 'PEGA_AQUI_LA_URL_DE_TU_WEB_APP';
+  const API_URL = https://script.google.com/macros/s/AKfycbxchbWwNZnnx72MF5d_NZockO1XD56He_Ti-nIb3Hx7HLb_0u-gpqRTh0Vy3c23BrXl/exec;
 
   let cache = null;      // { codigo: { nombre, unidad, sanFco:{min,max}, aldunate:{min,max}, actualizado } }
   let cargando = null;   // Promise en curso, para no disparar cargas duplicadas en paralelo

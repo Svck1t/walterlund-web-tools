@@ -1,87 +1,140 @@
 /* ============================================
    nivelesMinimosStore.js
    Responsabilidad única: guardar y recuperar los niveles
-   mínimos de stock configurados MANUALMENTE por producto,
-   para SAN FRANCISCO 918 y ALDUNATE (los únicos que disparan
-   necesidad de reposición). Reemplazan, producto por producto,
-   el umbral fijo por defecto del motor de reposición.
+   mínimo/máximo de stock configurados por producto, para
+   SAN FRANCISCO 918 y ALDUNATE (los únicos que disparan
+   necesidad de reposición). El mínimo reemplaza, producto
+   por producto, el umbral fijo por defecto del motor de
+   reposición; el máximo queda como dato de referencia.
 
-   Vive en localStorage de ESTE navegador — no se sincroniza
-   entre equipos ni usuarios. Si un producto no tiene override
-   configurado acá, el motor de reposición sigue usando el
-   umbral por defecto.
+   Vive en la misma hoja de Google Sheets que Control de
+   Facturas (pestaña "StockNiveles"), vía el mismo Apps
+   Script Web App — así se sincroniza entre equipos y
+   usuarios. Mantiene un caché en memoria para que las
+   lecturas dentro de la sesión sean instantáneas (el motor
+   de análisis las necesita de forma síncrona).
+
+   IMPORTANTE: antes de leer con `get`/`getAll`, hay que
+   esperar `await NivelesMinimosStore.cargar()` al menos una
+   vez (la sección de Reposición ya lo hace en su render).
+
    No sabe nada de UI ni del motor de análisis.
 ============================================ */
 
 const NivelesMinimosStore = (() => {
 
-  const KEY = 'wl_niveles_minimos_v1';
+  // Pega aquí la misma URL del Web App de Apps Script que usa Control de Facturas
+  // (Implementar > Administrar implementaciones > copiar URL de la implementación activa)
+  const API_URL = 'PEGA_AQUI_LA_URL_DE_TU_WEB_APP';
 
-  function readAll() {
-    try {
-      const raw = localStorage.getItem(KEY);
-      return raw ? JSON.parse(raw) : {};
-    } catch (err) {
-      console.error('No se pudo leer los niveles mínimos guardados:', err);
-      return {};
-    }
+  let cache = null;      // { codigo: { nombre, unidad, sanFco:{min,max}, aldunate:{min,max}, actualizado } }
+  let cargando = null;   // Promise en curso, para no disparar cargas duplicadas en paralelo
+
+  function limpiarNumero(v) {
+    return (v === null || v === undefined || v === '' || isNaN(v)) ? undefined : Number(v);
   }
 
-  function writeAll(data) {
-    try {
-      localStorage.setItem(KEY, JSON.stringify(data));
-      return true;
-    } catch (err) {
-      console.error('No se pudo guardar los niveles mínimos:', err);
-      return false;
-    }
+  /** Carga (o recarga si `forzar`) todo el listado desde Sheets al caché en memoria. */
+  async function cargar(forzar = false) {
+    if (cache && !forzar) return cache;
+    if (cargando) return cargando;
+
+    cargando = fetch(`${API_URL}?action=stockNiveles`)
+      .then(r => r.json())
+      .then(data => {
+        if (!data.ok) throw new Error(data.error || 'No se pudieron cargar los niveles mínimos');
+        const mapa = {};
+        data.productos.forEach(p => { mapa[p.codigo] = p; });
+        cache = mapa;
+        return cache;
+      })
+      .finally(() => { cargando = null; });
+
+    return cargando;
   }
 
-  /** Devuelve { sanFco, aldunate } (cada uno number|undefined) o null si no hay override. */
+  /** True una vez que `cargar()` terminó con éxito al menos una vez en esta sesión. */
+  function estaCargado() {
+    return cache !== null;
+  }
+
+  /** Devuelve { nombre, unidad, sanFco:{min,max}, aldunate:{min,max}, actualizado } o null. Síncrono: usa el caché. */
   function get(codigo) {
-    const all = readAll();
-    return all[codigo] || null;
+    if (!cache) return null;
+    return cache[codigo] || null;
   }
 
-  /** Devuelve el objeto completo { codigo: {sanFco, aldunate}, ... } */
+  /** Devuelve el objeto completo { codigo: {...}, ... } ya cargado. */
   function getAll() {
-    return readAll();
+    return cache || {};
+  }
+
+  /** Cantidad total de productos registrados en la hoja (con o sin mínimo/máximo configurado). */
+  function count() {
+    return cache ? Object.keys(cache).length : 0;
+  }
+
+  /** Cantidad de productos que tienen efectivamente algún mínimo o máximo configurado. */
+  function countConfigurados() {
+    if (!cache) return 0;
+    return Object.values(cache).filter(p =>
+      p.sanFco?.min != null || p.sanFco?.max != null ||
+      p.aldunate?.min != null || p.aldunate?.max != null
+    ).length;
   }
 
   /**
-   * Actualiza el override de un producto (merge parcial).
-   * Pasar `null`/`undefined`/'' en un campo lo borra.
-   * Si ambos campos quedan vacíos, se elimina la entrada completa.
+   * Actualiza el mínimo/máximo de un producto (merge parcial contra lo ya guardado).
+   * Campos no incluidos en el objeto mantienen su valor actual.
+   * Pasar '' en un campo lo borra (queda vacío, no elimina la fila completa).
    */
-  function set(codigo, { sanFco, aldunate } = {}) {
-    const all = readAll();
-    const actual = all[codigo] || {};
-
-    const limpiar = (v) => (v === null || v === undefined || v === '' || isNaN(v) ? undefined : Number(v));
-
-    const nuevo = {
-      sanFco: sanFco === undefined ? actual.sanFco : limpiar(sanFco),
-      aldunate: aldunate === undefined ? actual.aldunate : limpiar(aldunate)
+  async function set(codigo, { nombre, unidad, sanFcoMin, sanFcoMax, aldunateMin, aldunateMax } = {}) {
+    const body = {
+      accion: 'stockNiveles_set',
+      codigo, nombre, unidad,
+      minSanFco: sanFcoMin, maxSanFco: sanFcoMax,
+      minAldunate: aldunateMin, maxAldunate: aldunateMax,
     };
 
-    if (nuevo.sanFco === undefined && nuevo.aldunate === undefined) {
-      delete all[codigo];
-    } else {
-      all[codigo] = nuevo;
-    }
-
-    return writeAll(all);
+    const res = await fetch(API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // evita preflight CORS con Apps Script
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (data.ok) await cargar(true);
+    return data;
   }
 
-  function remove(codigo) {
-    const all = readAll();
-    delete all[codigo];
-    return writeAll(all);
+  /** Elimina por completo la fila de un producto (mínimo, máximo y registro). */
+  async function remove(codigo) {
+    const res = await fetch(API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ accion: 'stockNiveles_remove', codigo }),
+    });
+    const data = await res.json();
+    if (data.ok) await cargar(true);
+    return data;
   }
 
-  function count() {
-    return Object.keys(readAll()).length;
+  /**
+   * Registra en la base los productos importados que todavía no existen
+   * (sin mínimo/máximo configurado). Nunca pisa productos ya existentes.
+   * `productos`: [{ codigo, nombre, unidad }, ...]
+   */
+  async function registrarNuevos(productos) {
+    if (!productos || !productos.length) return { ok: true, agregados: 0 };
+
+    const res = await fetch(API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ accion: 'stockNiveles_bulkNuevos', productos }),
+    });
+    const data = await res.json();
+    if (data.ok && data.agregados > 0) await cargar(true);
+    return data;
   }
 
-  return { get, getAll, set, remove, count };
+  return { cargar, estaCargado, get, getAll, count, countConfigurados, set, remove, registrarNuevos };
 })();

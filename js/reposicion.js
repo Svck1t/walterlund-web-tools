@@ -10,6 +10,9 @@ traslados sugeridos (filtrables por ruta/estado, con PDF).
 mínimo (dispara reposición) y máximo de stock en SAN
 FRANCISCO 918 y ALDUNATE. Se guarda en Google Sheets vía
 NivelesMinimosStore — compartido entre equipos y usuarios.
+Los productos se pueden ubicar buscando por código/nombre,
+o filtrando por Familia (columna "Grupo" del Excel) para
+no tener que ir código por código.
 
 El análisis SIEMPRE se recalcula al vuelo con los niveles
 mínimos vigentes — no se cachea — así cualquier cambio hecho
@@ -220,22 +223,47 @@ const input = document.getElementById('nivelesSearchInput');
 return input ? input.value.trim().toLowerCase() : '';
 }
 
+function nivelesFamiliaSeleccionada() {
+const select = document.getElementById('nivelesFamiliaSelect');
+return select ? select.value : '';
+}
+
+/** Familias únicas presentes en el Excel importado (columna "Grupo"), ordenadas alfabéticamente. */
+function familiasDisponibles() {
+if (!allRecords) return [];
+const set = new Set();
+allRecords.forEach(r => { if (r.familia) set.add(r.familia); });
+return Array.from(set).sort((a, b) => a.localeCompare(b, 'es'));
+}
+
 function tieneAlgunNivel(producto) {
 if (!producto) return false;
 return producto.sanFco?.min != null || producto.sanFco?.max != null ||
 producto.aldunate?.min != null || producto.aldunate?.max != null;
 }
 
+const LIMITE_BUSQUEDA = 100;
+const LIMITE_FAMILIA = 200;
+
 function productosParaNiveles() {
 const term = nivelesSearchTerm();
+const familia = nivelesFamiliaSeleccionada();
+
+if (familia) {
+let productos = allRecords.filter(r => r.familia === familia);
+if (term.length >= 2) {
+productos = productos.filter(r => r.codigo.toLowerCase().includes(term) || r.nombre.toLowerCase().includes(term));
+}
+return productos.slice(0, LIMITE_FAMILIA);
+}
 
 if (term.length >= 2) {
 return allRecords
 .filter(r => r.codigo.toLowerCase().includes(term) || r.nombre.toLowerCase().includes(term))
-.slice(0, 100);
+.slice(0, LIMITE_BUSQUEDA);
 }
 
-// Sin búsqueda: mostrar solo los productos que ya tienen mínimo o máximo configurado
+// Sin búsqueda ni familia: mostrar solo los productos que ya tienen mínimo o máximo configurado
 // (no todos los registrados en la hoja — la importación registra a todos sin valores)
 const overrides = NivelesMinimosStore.getAll();
 return allRecords.filter(r => tieneAlgunNivel(overrides[r.codigo]));
@@ -247,18 +275,29 @@ return `
 <div class="empty-state">
 <div class="icon">🎚️</div>
 <strong>Importa el Excel de stock consolidado primero</strong>
-<span>Se usa para buscar productos por código o nombre y configurar su nivel mínimo y máximo.</span>
+<span>Se usa para buscar productos por código o nombre, filtrar por familia, y configurar su nivel mínimo y máximo.</span>
 </div>`;
 }
+
+const familias = familiasDisponibles();
+const familiaSelectHtml = familias.length > 0 ? `
+<div class="field" style="max-width:280px;">
+<label>FAMILIA</label>
+<select id="nivelesFamiliaSelect">
+<option value="">Todas</option>
+${familias.map(f => `<option value="${f}">${f}</option>`).join('')}
+</select>
+</div>` : '';
 
 return `
 <div class="panel">
 <div class="filter-bar">▽ Buscar producto</div>
-<div style="padding:16px 24px;">
-<div class="field" style="max-width:420px;">
+<div style="padding:16px 24px; display:flex; gap:16px; flex-wrap:wrap;">
+<div class="field" style="max-width:420px; flex:1;">
 <label>CÓDIGO O NOMBRE</label>
 <input type="text" id="nivelesSearchInput" placeholder="Ej: 1070005009 o DUPLEX..." autocomplete="off" />
 </div>
+${familiaSelectHtml}
 </div>
 </div>
 <div id="nivelesResultsBody">${renderNivelesResultsBody()}</div>
@@ -267,14 +306,29 @@ return `
 
 function renderNivelesResultsBody() {
 const term = nivelesSearchTerm();
+const familia = nivelesFamiliaSeleccionada();
 const productos = productosParaNiveles();
 
+const modoFamilia = !!familia;
+const modoBusqueda = !modoFamilia && term.length >= 2;
+
 if (productos.length === 0) {
+let strong, span;
+if (modoFamilia) {
+strong = 'Sin productos en esa familia';
+span = term.length >= 2 ? 'Prueba con otro código o nombre dentro de esta familia.' : 'Prueba con otra familia.';
+} else if (modoBusqueda) {
+strong = 'Sin resultados para esa búsqueda';
+span = 'Prueba con otro código o nombre.';
+} else {
+strong = 'Todavía no has configurado ningún nivel mínimo o máximo';
+span = 'Busca un producto o selecciona una familia arriba para asignarle un nivel distinto al de por defecto (30 unidades).';
+}
 return `
 <div class="empty-state">
 <div class="icon">🔎</div>
-<strong>${term.length >= 2 ? 'Sin resultados para esa búsqueda' : 'Todavía no has configurado ningún nivel mínimo o máximo'}</strong>
-<span>${term.length >= 2 ? 'Prueba con otro código o nombre.' : 'Busca un producto arriba (mínimo 2 caracteres) para asignarle un nivel distinto al de por defecto (30 unidades).'}</span>
+<strong>${strong}</strong>
+<span>${span}</span>
 </div>`;
 }
 
@@ -310,9 +364,18 @@ return `
 </tr>`;
 }).join('');
 
-const nota = term.length >= 2 && productos.length === 100
-? `<div class="results-count">Mostrando los primeros 100 resultados — sigue escribiendo para acotar la búsqueda.</div>`
-: `<div class="results-count">${productos.length.toLocaleString('es-CL')} producto(s)${term.length >= 2 ? ' encontrados' : ' con nivel personalizado'}.</div>`;
+let nota;
+if (modoFamilia) {
+nota = productos.length === LIMITE_FAMILIA
+? `<div class="results-count">Mostrando los primeros ${LIMITE_FAMILIA} resultados de esta familia — usa el buscador para acotar más.</div>`
+: `<div class="results-count">${productos.length.toLocaleString('es-CL')} producto(s) en esta familia${term.length >= 2 ? ' que coinciden con la búsqueda' : ''}.</div>`;
+} else if (modoBusqueda) {
+nota = productos.length === LIMITE_BUSQUEDA
+? `<div class="results-count">Mostrando los primeros ${LIMITE_BUSQUEDA} resultados — sigue escribiendo para acotar la búsqueda.</div>`
+: `<div class="results-count">${productos.length.toLocaleString('es-CL')} producto(s) encontrados.</div>`;
+} else {
+nota = `<div class="results-count">${productos.length.toLocaleString('es-CL')} producto(s) con nivel personalizado.</div>`;
+}
 
 return `
 ${nota}
@@ -400,6 +463,12 @@ const searchInput = document.getElementById('nivelesSearchInput');
 if (searchInput) {
 searchInput.addEventListener('input', () => refreshNivelesResults());
 }
+
+const familiaSelect = document.getElementById('nivelesFamiliaSelect');
+if (familiaSelect) {
+familiaSelect.addEventListener('change', () => refreshNivelesResults());
+}
+
 attachNivelesRowEvents();
 }
 }

@@ -29,6 +29,15 @@ let vista = 'analisis'; // 'analisis' | 'niveles'
 let filtroRuta = ''; // '' = todas | 'viel-aldunate' | 'viel-sanFco' | 'aldunate-sanFco' | 'sanFco-aldunate'
 let filtroEstado = ''; // '' = todos | 'resuelto' | 'sinSolucion'
 
+// Productos marcados para NO incluir en el próximo PDF (exclusión manual, temporal
+// para esta sesión de análisis — se reinicia solo al importar un Excel nuevo).
+// Clave: "codigo::destino" (un producto puede tener dos filas, una por bodega destino).
+let excluidosPdf = new Set();
+
+function claveFila(f) {
+return `${f.codigo}::${f.destino}`;
+}
+
 // ---------- Nivel mínimo configurado manualmente ----------
 
 function obtenerMinimo(codigo, bodega) {
@@ -81,6 +90,33 @@ if (filtroEstado === 'resuelto' && !f.resuelto) return false;
 if (filtroEstado === 'sinSolucion' && f.resuelto) return false;
 return true;
 });
+}
+
+function mensajePdfInfo(filtradas) {
+const incluidas = filtradas.filter(f => !excluidosPdf.has(claveFila(f)));
+const excluidasCount = filtradas.length - incluidas.length;
+const hayFiltroActivo = filtroRuta !== '' || filtroEstado !== '';
+
+if (excluidasCount > 0) {
+return `${incluidas.length.toLocaleString('es-CL')} de ${filtradas.length.toLocaleString('es-CL')} se incluirán en el PDF (${excluidasCount} excluido(s) manualmente).`;
+}
+return hayFiltroActivo
+? 'El PDF se genera solo con los traslados que cumplen el filtro actual.'
+: 'Revisa los traslados sugeridos antes de imprimir la orden.';
+}
+
+// Actualiza el aviso y el estado del botón de PDF sin re-renderizar toda la tabla
+// (así no se pierde el estado de scroll ni el foco al tildar/destildar una fila).
+function actualizarPdfIncludeInfo() {
+const infoEl = document.getElementById('pdfIncludeInfo');
+const btn = document.getElementById('generateTrasladoPdf');
+if (!infoEl || !btn) return;
+
+const filtradas = filasFiltradas();
+infoEl.textContent = mensajePdfInfo(filtradas);
+
+const incluidas = filtradas.filter(f => !excluidosPdf.has(claveFila(f)));
+btn.disabled = incluidas.filter(f => f.resuelto).length === 0;
 }
 
 function renderAnalisis() {
@@ -165,8 +201,16 @@ ${filterBar}
 </div>`;
 }
 
-const rows = filtradas.map(f => `
-<tr>
+const todasIncluidas = filtradas.every(f => !excluidosPdf.has(claveFila(f)));
+
+const rows = filtradas.map(f => {
+const key = claveFila(f);
+const incluido = !excluidosPdf.has(key);
+return `
+<tr ${incluido ? '' : 'style="opacity:0.45;"'}>
+<td style="text-align:center;">
+<input type="checkbox" class="fila-incluir-pdf" data-key="${key}" ${incluido ? 'checked' : ''} title="Incluir en el PDF" />
+</td>
 <td>${f.codigo}</td>
 <td>${f.nombre}</td>
 <td>${f.unidad}</td>
@@ -179,10 +223,11 @@ const rows = filtradas.map(f => `
 ? '<span class="badge badge-ok">Traslado sugerido</span>'
 : '<span class="badge badge-warn">Evaluar compra</span>'}
 </td>
-</tr>`).join('');
+</tr>`;
+}).join('');
 
-const resueltosFiltrados = filtradas.filter(f => f.resuelto).length;
-const hayFiltroActivo = filtroRuta !== '' || filtroEstado !== '';
+const incluidasParaPdf = filtradas.filter(f => !excluidosPdf.has(claveFila(f)));
+const resueltosFiltrados = incluidasParaPdf.filter(f => f.resuelto).length;
 
 return `
 ${cards}
@@ -195,6 +240,9 @@ ${filtradas.length.toLocaleString('es-CL')} de ${filas.length.toLocaleString('es
 <table class="data-table">
 <thead>
 <tr>
+<th style="text-align:center;">
+<input type="checkbox" id="pdfIncludeAllCheckbox" ${todasIncluidas ? 'checked' : ''} title="Incluir/excluir todos" />
+</th>
 <th>Código</th>
 <th>Producto</th>
 <th>Unidad</th>
@@ -210,7 +258,7 @@ ${filtradas.length.toLocaleString('es-CL')} de ${filas.length.toLocaleString('es
 </table>
 </div>
 <div class="import-row">
-<span>${hayFiltroActivo ? 'El PDF se genera solo con los traslados que cumplen el filtro actual.' : 'Revisa los traslados sugeridos antes de imprimir la orden.'}</span>
+<span id="pdfIncludeInfo">${mensajePdfInfo(filtradas)}</span>
 <button class="btn-primary" id="generateTrasladoPdf" type="button" ${resueltosFiltrados === 0 ? 'disabled' : ''}>🖨 Generar PDF de orden de traslado</button>
 </div>
 `;
@@ -452,10 +500,41 @@ rerenderResults();
 });
 }
 
+// Checkbox por fila: incluir/excluir del PDF (no re-renderiza toda la tabla)
+document.querySelectorAll('.fila-incluir-pdf').forEach(cb => {
+cb.addEventListener('change', (e) => {
+const key = e.target.dataset.key;
+if (e.target.checked) excluidosPdf.delete(key); else excluidosPdf.add(key);
+
+const tr = e.target.closest('tr');
+if (tr) tr.style.opacity = e.target.checked ? '' : '0.45';
+
+const selectAllCb = document.getElementById('pdfIncludeAllCheckbox');
+if (selectAllCb) {
+selectAllCb.checked = filasFiltradas().every(f => !excluidosPdf.has(claveFila(f)));
+}
+
+actualizarPdfIncludeInfo();
+});
+});
+
+// Checkbox del encabezado: incluir/excluir todas las filas visibles de una vez
+const selectAllCb = document.getElementById('pdfIncludeAllCheckbox');
+if (selectAllCb) {
+selectAllCb.addEventListener('change', (e) => {
+filasFiltradas().forEach(f => {
+const key = claveFila(f);
+if (e.target.checked) excluidosPdf.delete(key); else excluidosPdf.add(key);
+});
+rerenderResults();
+});
+}
+
 const btn = document.getElementById('generateTrasladoPdf');
 if (btn) {
 btn.addEventListener('click', () => {
-ReposicionOutputPdf.build(filasFiltradas(), ReposicionParser.todayLabel());
+const paraPdf = filasFiltradas().filter(f => !excluidosPdf.has(claveFila(f)));
+ReposicionOutputPdf.build(paraPdf, ReposicionParser.todayLabel());
 });
 }
 } else {
@@ -503,6 +582,7 @@ if (records.length === 0) throw new Error('No se encontraron productos en el arc
 allRecords = records;
 filtroRuta = '';
 filtroEstado = '';
+excluidosPdf.clear();
 
 statusEl.textContent = `${records.length.toLocaleString('es-CL')} productos importados desde "${file.name}".`;
 

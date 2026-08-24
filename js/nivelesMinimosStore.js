@@ -10,9 +10,15 @@
    Vive en la misma hoja de Google Sheets que Control de
    Facturas (pestaña "StockNiveles"), vía el mismo Apps
    Script Web App — así se sincroniza entre equipos y
-   usuarios. Mantiene un caché en memoria para que las
-   lecturas dentro de la sesión sean instantáneas (el motor
-   de análisis las necesita de forma síncrona).
+   usuarios. Las llamadas pasan por /api/stock-niveles (una
+   función serverless propia de este proyecto en Vercel) en
+   vez de ir directo a Apps Script, porque Apps Script no
+   permite devolver el header CORS que el navegador exige
+   para llamadas entre dominios distintos — ver api/stock-niveles.js.
+
+   Mantiene un caché en memoria para que las lecturas dentro
+   de la sesión sean instantáneas (el motor de análisis las
+   necesita de forma síncrona).
 
    IMPORTANTE: antes de leer con `get`/`getAll`, hay que
    esperar `await NivelesMinimosStore.cargar()` al menos una
@@ -23,23 +29,17 @@
 
 const NivelesMinimosStore = (() => {
 
-  // Pega aquí la misma URL del Web App de Apps Script que usa Control de Facturas
-  // (Implementar > Administrar implementaciones > copiar URL de la implementación activa)
-  const API_URL = 'https://script.google.com/macros/s/AKfycbxchbWwNZnnx72MF5d_NZockO1XD56He_Ti-nIb3Hx7HLb_0u-gpqRTh0Vy3c23BrXl/exec';
+  const API_URL = '/api/stock-niveles'; // proxy propio del proyecto (ver api/stock-niveles.js), no Apps Script directo
 
   let cache = null;      // { codigo: { nombre, unidad, sanFco:{min,max}, aldunate:{min,max}, actualizado } }
   let cargando = null;   // Promise en curso, para no disparar cargas duplicadas en paralelo
-
-  function limpiarNumero(v) {
-    return (v === null || v === undefined || v === '' || isNaN(v)) ? undefined : Number(v);
-  }
 
   /** Carga (o recarga si `forzar`) todo el listado desde Sheets al caché en memoria. */
   async function cargar(forzar = false) {
     if (cache && !forzar) return cache;
     if (cargando) return cargando;
 
-    cargando = fetch(`${API_URL}?action=stockNiveles`)
+    cargando = fetch(API_URL)
       .then(r => r.json())
       .then(data => {
         if (!data.ok) throw new Error(data.error || 'No se pudieron cargar los niveles mínimos');
@@ -83,37 +83,34 @@ const NivelesMinimosStore = (() => {
     ).length;
   }
 
+  async function post(body) {
+    const res = await fetch(API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    return res.json();
+  }
+
   /**
    * Actualiza el mínimo/máximo de un producto (merge parcial contra lo ya guardado).
    * Campos no incluidos en el objeto mantienen su valor actual.
    * Pasar '' en un campo lo borra (queda vacío, no elimina la fila completa).
    */
   async function set(codigo, { nombre, unidad, sanFcoMin, sanFcoMax, aldunateMin, aldunateMax } = {}) {
-    const body = {
+    const data = await post({
       accion: 'stockNiveles_set',
       codigo, nombre, unidad,
       minSanFco: sanFcoMin, maxSanFco: sanFcoMax,
       minAldunate: aldunateMin, maxAldunate: aldunateMax,
-    };
-
-    const res = await fetch(API_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // evita preflight CORS con Apps Script
-      body: JSON.stringify(body),
     });
-    const data = await res.json();
     if (data.ok) await cargar(true);
     return data;
   }
 
   /** Elimina por completo la fila de un producto (mínimo, máximo y registro). */
   async function remove(codigo) {
-    const res = await fetch(API_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ accion: 'stockNiveles_remove', codigo }),
-    });
-    const data = await res.json();
+    const data = await post({ accion: 'stockNiveles_remove', codigo });
     if (data.ok) await cargar(true);
     return data;
   }
@@ -125,13 +122,7 @@ const NivelesMinimosStore = (() => {
    */
   async function registrarNuevos(productos) {
     if (!productos || !productos.length) return { ok: true, agregados: 0 };
-
-    const res = await fetch(API_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ accion: 'stockNiveles_bulkNuevos', productos }),
-    });
-    const data = await res.json();
+    const data = await post({ accion: 'stockNiveles_bulkNuevos', productos });
     if (data.ok && data.agregados > 0) await cargar(true);
     return data;
   }

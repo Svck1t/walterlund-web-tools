@@ -280,11 +280,13 @@ return select ? select.value : '';
 }
 
 /** Familias únicas conocidas: las guardadas en Sheets, más las del Excel importado en esta
-sesión si trae alguna todavía no sincronizada (por ejemplo, justo mientras se está importando). */
+sesión si trae alguna todavía no sincronizada (por ejemplo, justo mientras se está importando).
+Se fuerza todo a String(): si algún valor quedó guardado como número en Sheets, no debe romper
+el orden alfabético. */
 function familiasDisponibles() {
 const set = new Set();
-Object.values(NivelesMinimosStore.getAll()).forEach(p => { if (p.familia) set.add(p.familia); });
-if (allRecords) allRecords.forEach(r => { if (r.familia) set.add(r.familia); });
+Object.values(NivelesMinimosStore.getAll()).forEach(p => { if (p.familia !== undefined && p.familia !== null && p.familia !== '') set.add(String(p.familia)); });
+if (allRecords) allRecords.forEach(r => { if (r.familia) set.add(String(r.familia)); });
 return Array.from(set).sort((a, b) => a.localeCompare(b, 'es'));
 }
 
@@ -306,7 +308,7 @@ return Object.keys(overrides)
 codigo,
 nombre: overrides[codigo].nombre,
 unidad: overrides[codigo].unidad,
-familia: overrides[codigo].familia || '',
+familia: String(overrides[codigo].familia || ''),
 }));
 }
 
@@ -317,8 +319,9 @@ const familia = nivelesFamiliaSeleccionada();
 if (familia) {
 // Preferir el Excel importado en esta sesión (más fresco); si no hay uno,
 // usar la Familia ya sincronizada a Sheets en una importación anterior.
+// String() por si la familia llegó como número desde Sheets o el Excel.
 let productos = allRecords
-? allRecords.filter(r => r.familia === familia)
+? allRecords.filter(r => String(r.familia) === familia)
 : productosDesdeStore().filter(r => r.familia === familia);
 if (term.length >= 2) {
 productos = productos.filter(r => r.codigo.toLowerCase().includes(term) || r.nombre.toLowerCase().includes(term));
@@ -566,8 +569,18 @@ attachNivelesRowEvents();
 
 function rerenderResults() {
 const el = document.getElementById('reposicionResults');
+try {
 el.innerHTML = vista === 'analisis' ? renderAnalisis() : renderNiveles();
 attachResultEvents();
+} catch (err) {
+console.error('Reposición: error mostrando esta vista:', err);
+el.innerHTML = `
+<div class="empty-state">
+<div class="icon">⚠️</div>
+<strong>Ocurrió un error mostrando esta vista</strong>
+<span>${describeError(err)}</span>
+</div>`;
+}
 }
 
 function attachTabEvents() {
@@ -660,8 +673,18 @@ return;
 }
 }
 
+try {
 container.innerHTML = template();
 attachEvents();
+} catch (err) {
+console.error('Reposición: error renderizando la sección:', err);
+container.innerHTML = `
+<div class="empty-state">
+<div class="icon">⚠️</div>
+<strong>Ocurrió un error mostrando esta sección</strong>
+<span>${describeError(err)}</span>
+</div>`;
+}
 }
 
 return { render };

@@ -10,9 +10,12 @@ traslados sugeridos (filtrables por ruta/estado, con PDF).
 mínimo (dispara reposición) y máximo de stock en SAN
 FRANCISCO 918 y ALDUNATE. Se guarda en Google Sheets vía
 NivelesMinimosStore — compartido entre equipos y usuarios.
-Los productos se pueden ubicar buscando por código/nombre,
-o filtrando por Familia (columna "Grupo" del Excel) para
-no tener que ir código por código.
+Disponible siempre, sin necesidad de importar un Excel en
+la sesión actual: la búsqueda por código/nombre y el listado
+de productos configurados salen directo de la base en Sheets.
+El filtro por Familia (columna "Grupo" del Excel) es la única
+parte que sigue requiriendo un Excel importado en esta sesión,
+porque esa columna no se guarda en Sheets.
 
 El análisis SIEMPRE se recalcula al vuelo con los niveles
 mínimos vigentes — no se cachea — así cualquier cambio hecho
@@ -293,11 +296,21 @@ producto.aldunate?.min != null || producto.aldunate?.max != null;
 const LIMITE_BUSQUEDA = 100;
 const LIMITE_FAMILIA = 200;
 
+/** Todos los productos conocidos por la base de Niveles Mínimos (Sheets), en forma de lista { codigo, nombre, unidad }. */
+function productosDesdeStore() {
+const overrides = NivelesMinimosStore.getAll();
+return Object.keys(overrides)
+.sort((a, b) => a.localeCompare(b, 'es'))
+.map(codigo => ({ codigo, nombre: overrides[codigo].nombre, unidad: overrides[codigo].unidad }));
+}
+
 function productosParaNiveles() {
 const term = nivelesSearchTerm();
 const familia = nivelesFamiliaSeleccionada();
 
-if (familia) {
+// El filtro por Familia usa la columna "Grupo" del Excel, que no se guarda en Sheets —
+// solo está disponible si hay un Excel importado en esta sesión.
+if (familia && allRecords) {
 let productos = allRecords.filter(r => r.familia === familia);
 if (term.length >= 2) {
 productos = productos.filter(r => r.codigo.toLowerCase().includes(term) || r.nombre.toLowerCase().includes(term));
@@ -306,27 +319,18 @@ return productos.slice(0, LIMITE_FAMILIA);
 }
 
 if (term.length >= 2) {
-return allRecords
-.filter(r => r.codigo.toLowerCase().includes(term) || r.nombre.toLowerCase().includes(term))
+return productosDesdeStore()
+.filter(r => r.codigo.toLowerCase().includes(term) || (r.nombre || '').toLowerCase().includes(term))
 .slice(0, LIMITE_BUSQUEDA);
 }
 
-// Sin búsqueda ni familia: mostrar solo los productos que ya tienen mínimo o máximo configurado
-// (no todos los registrados en la hoja — la importación registra a todos sin valores)
+// Sin búsqueda ni familia: mostrar los productos que ya tienen mínimo o máximo configurado,
+// sacados directamente de la base en Sheets (no depende de haber importado un Excel en esta sesión).
 const overrides = NivelesMinimosStore.getAll();
-return allRecords.filter(r => tieneAlgunNivel(overrides[r.codigo]));
+return productosDesdeStore().filter(r => tieneAlgunNivel(overrides[r.codigo]));
 }
 
 function renderNiveles() {
-if (!allRecords) {
-return `
-<div class="empty-state">
-<div class="icon">🎚️</div>
-<strong>Importa el Excel de stock consolidado primero</strong>
-<span>Se usa para buscar productos por código o nombre, filtrar por familia, y configurar su nivel mínimo y máximo.</span>
-</div>`;
-}
-
 const familias = familiasDisponibles();
 const familiaSelectHtml = familias.length > 0 ? `
 <div class="field" style="max-width:280px;">

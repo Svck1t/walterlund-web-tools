@@ -31,7 +31,7 @@ const NivelesMinimosStore = (() => {
 
   const API_URL = '/api/stock-niveles'; // proxy propio del proyecto (ver api/stock-niveles.js), no Apps Script directo
 
-  let cache = null;      // { codigo: { nombre, unidad, sanFco:{min,max}, aldunate:{min,max}, actualizado } }
+  let cache = null;      // { codigo: { nombre, unidad, sanFco:{min,max}, aldunate:{min,max}, actualizado, familia } }
   let cargando = null;   // Promise en curso, para no disparar cargas duplicadas en paralelo
 
   /** Carga (o recarga si `forzar`) todo el listado desde Sheets al caché en memoria. */
@@ -58,7 +58,7 @@ const NivelesMinimosStore = (() => {
     return cache !== null;
   }
 
-  /** Devuelve { nombre, unidad, sanFco:{min,max}, aldunate:{min,max}, actualizado } o null. Síncrono: usa el caché. */
+  /** Devuelve { nombre, unidad, sanFco:{min,max}, aldunate:{min,max}, actualizado, familia } o null. Síncrono: usa el caché. */
   function get(codigo) {
     if (!cache) return null;
     return cache[codigo] || null;
@@ -116,14 +116,16 @@ const NivelesMinimosStore = (() => {
   }
 
   /**
-   * Registra en la base los productos importados que todavía no existen
-   * (sin mínimo/máximo configurado). Nunca pisa productos ya existentes.
-   * `productos`: [{ codigo, nombre, unidad }, ...]
+   * Sincroniza con la base los productos detectados al importar un Excel:
+   * registra los que todavía no existen (sin mínimo/máximo configurado,
+   * nunca pisa productos ya existentes), y actualiza la Familia de los que
+   * ya existen si el Excel trae una distinta a la guardada.
+   * `productos`: [{ codigo, nombre, unidad, familia }, ...]
    */
   async function registrarNuevos(productos) {
-    if (!productos || !productos.length) return { ok: true, agregados: 0 };
+    if (!productos || !productos.length) return { ok: true, agregados: 0, familiasActualizadas: 0 };
     const data = await post({ accion: 'stockNiveles_bulkNuevos', productos });
-    if (data.ok && data.agregados > 0) await cargar(true);
+    if (data.ok && (data.agregados > 0 || data.familiasActualizadas > 0)) await cargar(true);
     return data;
   }
 

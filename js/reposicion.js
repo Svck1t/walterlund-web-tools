@@ -279,11 +279,12 @@ const select = document.getElementById('nivelesFamiliaSelect');
 return select ? select.value : '';
 }
 
-/** Familias únicas presentes en el Excel importado (columna "Grupo"), ordenadas alfabéticamente. */
+/** Familias únicas conocidas: las guardadas en Sheets, más las del Excel importado en esta
+sesión si trae alguna todavía no sincronizada (por ejemplo, justo mientras se está importando). */
 function familiasDisponibles() {
-if (!allRecords) return [];
 const set = new Set();
-allRecords.forEach(r => { if (r.familia) set.add(r.familia); });
+Object.values(NivelesMinimosStore.getAll()).forEach(p => { if (p.familia) set.add(p.familia); });
+if (allRecords) allRecords.forEach(r => { if (r.familia) set.add(r.familia); });
 return Array.from(set).sort((a, b) => a.localeCompare(b, 'es'));
 }
 
@@ -296,22 +297,29 @@ producto.aldunate?.min != null || producto.aldunate?.max != null;
 const LIMITE_BUSQUEDA = 100;
 const LIMITE_FAMILIA = 200;
 
-/** Todos los productos conocidos por la base de Niveles Mínimos (Sheets), en forma de lista { codigo, nombre, unidad }. */
+/** Todos los productos conocidos por la base de Niveles Mínimos (Sheets), en forma de lista { codigo, nombre, unidad, familia }. */
 function productosDesdeStore() {
 const overrides = NivelesMinimosStore.getAll();
 return Object.keys(overrides)
 .sort((a, b) => a.localeCompare(b, 'es'))
-.map(codigo => ({ codigo, nombre: overrides[codigo].nombre, unidad: overrides[codigo].unidad }));
+.map(codigo => ({
+codigo,
+nombre: overrides[codigo].nombre,
+unidad: overrides[codigo].unidad,
+familia: overrides[codigo].familia || '',
+}));
 }
 
 function productosParaNiveles() {
 const term = nivelesSearchTerm();
 const familia = nivelesFamiliaSeleccionada();
 
-// El filtro por Familia usa la columna "Grupo" del Excel, que no se guarda en Sheets —
-// solo está disponible si hay un Excel importado en esta sesión.
-if (familia && allRecords) {
-let productos = allRecords.filter(r => r.familia === familia);
+if (familia) {
+// Preferir el Excel importado en esta sesión (más fresco); si no hay uno,
+// usar la Familia ya sincronizada a Sheets en una importación anterior.
+let productos = allRecords
+? allRecords.filter(r => r.familia === familia)
+: productosDesdeStore().filter(r => r.familia === familia);
 if (term.length >= 2) {
 productos = productos.filter(r => r.codigo.toLowerCase().includes(term) || r.nombre.toLowerCase().includes(term));
 }
@@ -594,17 +602,19 @@ rerenderResults();
 
 if (closeModal) closeModal();
 
-// Registra en la base de Niveles Mínimos los productos que sean nuevos (en segundo
-// plano, sin bloquear la UI). Nunca pisa productos ya configurados.
+// Sincroniza con la base de Niveles Mínimos en segundo plano, sin bloquear la UI:
+// registra los productos nuevos y actualiza la Familia de los que ya existan
+// (para que el filtro por Familia funcione después sin depender de este Excel).
+// Nunca pisa mínimo/máximo ya configurados.
 NivelesMinimosStore
-.registrarNuevos(records.map(r => ({ codigo: r.codigo, nombre: r.nombre, unidad: r.unidad })))
+.registrarNuevos(records.map(r => ({ codigo: r.codigo, nombre: r.nombre, unidad: r.unidad, familia: r.familia })))
 .then(res => {
-if (res.ok && res.agregados > 0) {
-statusEl.textContent += ` ${res.agregados} producto(s) nuevo(s) agregado(s) a Niveles Mínimos.`;
+if (res.ok && (res.agregados > 0 || res.familiasActualizadas > 0)) {
+if (res.agregados > 0) statusEl.textContent += ` ${res.agregados} producto(s) nuevo(s) agregado(s) a Niveles Mínimos.`;
 if (vista === 'niveles') refreshNivelesResults();
 }
 })
-.catch(err => console.error('No se pudieron registrar productos nuevos en Niveles Mínimos:', err));
+.catch(err => console.error('No se pudieron sincronizar productos con Niveles Mínimos:', err));
 } catch (err) {
 const msg = describeError(err);
 console.error('Reposición:', err);

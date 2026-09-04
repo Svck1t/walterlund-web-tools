@@ -10,12 +10,9 @@ traslados sugeridos (filtrables por ruta/estado, con PDF).
 mínimo (dispara reposición) y máximo de stock en SAN
 FRANCISCO 918 y ALDUNATE. Se guarda en Google Sheets vía
 NivelesMinimosStore — compartido entre equipos y usuarios.
-Disponible siempre, sin necesidad de importar un Excel en
-la sesión actual: la búsqueda por código/nombre y el listado
-de productos configurados salen directo de la base en Sheets.
-El filtro por Familia (columna "Grupo" del Excel) es la única
-parte que sigue requiriendo un Excel importado en esta sesión,
-porque esa columna no se guarda en Sheets.
+Los productos se pueden ubicar buscando por código/nombre,
+o filtrando por Familia (columna "Grupo" del Excel) para
+no tener que ir código por código.
 
 El análisis SIEMPRE se recalcula al vuelo con los niveles
 mínimos vigentes — no se cachea — así cualquier cambio hecho
@@ -36,6 +33,14 @@ let filtroEstado = ''; // '' = todos | 'resuelto' | 'sinSolucion'
 // para esta sesión de análisis — se reinicia solo al importar un Excel nuevo).
 // Clave: "codigo::destino" (un producto puede tener dos filas, una por bodega destino).
 let excluidosPdf = new Set();
+
+// Anotación libre de "cantidad de Pallets" por fila — solo una nota visual para
+// pedir el traslado por teléfono/WhatsApp con la bodega (Pallet no existe como
+// unidad en Softland, y cada producto trae una cantidad distinta por pallet, así
+// que esto NO calcula nada ni se guarda en ningún lado — vive solo en esta sesión
+// y se reinicia al importar un Excel nuevo).
+// Clave: "codigo::destino" -> texto ingresado (string, tal cual lo escribió).
+let palletsPorFila = new Map();
 
 function claveFila(f) {
 return `${f.codigo}::${f.destino}`;
@@ -209,6 +214,7 @@ const todasIncluidas = filtradas.every(f => !excluidosPdf.has(claveFila(f)));
 const rows = filtradas.map(f => {
 const key = claveFila(f);
 const incluido = !excluidosPdf.has(key);
+const pallets = palletsPorFila.get(key) ?? '';
 return `
 <tr ${incluido ? '' : 'style="opacity:0.45;"'}>
 <td style="text-align:center;">
@@ -216,6 +222,9 @@ return `
 </td>
 <td>${f.codigo}</td>
 <td>${f.nombre}</td>
+<td>
+<input type="text" inputmode="decimal" class="fila-pallets" data-key="${key}" value="${pallets}" placeholder="—" title="Cantidad de pallets a pedir (solo nota, no se guarda)" style="width:56px; text-align:center;" />
+</td>
 <td>${f.unidad}</td>
 <td>${f.destinoLabel}</td>
 <td style="text-align:right;">${f.stockDestino.toLocaleString('es-CL')}</td>
@@ -248,6 +257,7 @@ ${filtradas.length.toLocaleString('es-CL')} de ${filas.length.toLocaleString('es
 </th>
 <th>Código</th>
 <th>Producto</th>
+<th>Pallets</th>
 <th>Unidad</th>
 <th>Bodega con stock bajo</th>
 <th>Stock actual</th>
@@ -279,14 +289,11 @@ const select = document.getElementById('nivelesFamiliaSelect');
 return select ? select.value : '';
 }
 
-/** Familias únicas conocidas: las guardadas en Sheets, más las del Excel importado en esta
-sesión si trae alguna todavía no sincronizada (por ejemplo, justo mientras se está importando).
-Se fuerza todo a String(): si algún valor quedó guardado como número en Sheets, no debe romper
-el orden alfabético. */
+/** Familias únicas presentes en el Excel importado (columna "Grupo"), ordenadas alfabéticamente. */
 function familiasDisponibles() {
+if (!allRecords) return [];
 const set = new Set();
-Object.values(NivelesMinimosStore.getAll()).forEach(p => { if (p.familia !== undefined && p.familia !== null && p.familia !== '') set.add(String(p.familia)); });
-if (allRecords) allRecords.forEach(r => { if (r.familia) set.add(String(r.familia)); });
+allRecords.forEach(r => { if (r.familia) set.add(r.familia); });
 return Array.from(set).sort((a, b) => a.localeCompare(b, 'es'));
 }
 
@@ -299,30 +306,12 @@ producto.aldunate?.min != null || producto.aldunate?.max != null;
 const LIMITE_BUSQUEDA = 100;
 const LIMITE_FAMILIA = 200;
 
-/** Todos los productos conocidos por la base de Niveles Mínimos (Sheets), en forma de lista { codigo, nombre, unidad, familia }. */
-function productosDesdeStore() {
-const overrides = NivelesMinimosStore.getAll();
-return Object.keys(overrides)
-.sort((a, b) => a.localeCompare(b, 'es'))
-.map(codigo => ({
-codigo,
-nombre: overrides[codigo].nombre,
-unidad: overrides[codigo].unidad,
-familia: String(overrides[codigo].familia || ''),
-}));
-}
-
 function productosParaNiveles() {
 const term = nivelesSearchTerm();
 const familia = nivelesFamiliaSeleccionada();
 
 if (familia) {
-// Preferir el Excel importado en esta sesión (más fresco); si no hay uno,
-// usar la Familia ya sincronizada a Sheets en una importación anterior.
-// String() por si la familia llegó como número desde Sheets o el Excel.
-let productos = allRecords
-? allRecords.filter(r => String(r.familia) === familia)
-: productosDesdeStore().filter(r => r.familia === familia);
+let productos = allRecords.filter(r => r.familia === familia);
 if (term.length >= 2) {
 productos = productos.filter(r => r.codigo.toLowerCase().includes(term) || r.nombre.toLowerCase().includes(term));
 }
@@ -330,18 +319,27 @@ return productos.slice(0, LIMITE_FAMILIA);
 }
 
 if (term.length >= 2) {
-return productosDesdeStore()
-.filter(r => r.codigo.toLowerCase().includes(term) || (r.nombre || '').toLowerCase().includes(term))
+return allRecords
+.filter(r => r.codigo.toLowerCase().includes(term) || r.nombre.toLowerCase().includes(term))
 .slice(0, LIMITE_BUSQUEDA);
 }
 
-// Sin búsqueda ni familia: mostrar los productos que ya tienen mínimo o máximo configurado,
-// sacados directamente de la base en Sheets (no depende de haber importado un Excel en esta sesión).
+// Sin búsqueda ni familia: mostrar solo los productos que ya tienen mínimo o máximo configurado
+// (no todos los registrados en la hoja — la importación registra a todos sin valores)
 const overrides = NivelesMinimosStore.getAll();
-return productosDesdeStore().filter(r => tieneAlgunNivel(overrides[r.codigo]));
+return allRecords.filter(r => tieneAlgunNivel(overrides[r.codigo]));
 }
 
 function renderNiveles() {
+if (!allRecords) {
+return `
+<div class="empty-state">
+<div class="icon">🎚️</div>
+<strong>Importa el Excel de stock consolidado primero</strong>
+<span>Se usa para buscar productos por código o nombre, filtrar por familia, y configurar su nivel mínimo y máximo.</span>
+</div>`;
+}
+
 const familias = familiasDisponibles();
 const familiaSelectHtml = familias.length > 0 ? `
 <div class="field" style="max-width:280px;">
@@ -533,6 +531,19 @@ actualizarPdfIncludeInfo();
 });
 });
 
+// Input de Pallets: solo una nota en memoria, no dispara ningún cálculo ni re-render
+document.querySelectorAll('.fila-pallets').forEach(input => {
+input.addEventListener('input', (e) => {
+const key = e.target.dataset.key;
+const valor = e.target.value.trim();
+if (valor === '') {
+palletsPorFila.delete(key);
+} else {
+palletsPorFila.set(key, valor);
+}
+});
+});
+
 // Checkbox del encabezado: incluir/excluir todas las filas visibles de una vez
 const selectAllCb = document.getElementById('pdfIncludeAllCheckbox');
 if (selectAllCb) {
@@ -569,18 +580,8 @@ attachNivelesRowEvents();
 
 function rerenderResults() {
 const el = document.getElementById('reposicionResults');
-try {
 el.innerHTML = vista === 'analisis' ? renderAnalisis() : renderNiveles();
 attachResultEvents();
-} catch (err) {
-console.error('Reposición: error mostrando esta vista:', err);
-el.innerHTML = `
-<div class="empty-state">
-<div class="icon">⚠️</div>
-<strong>Ocurrió un error mostrando esta vista</strong>
-<span>${describeError(err)}</span>
-</div>`;
-}
 }
 
 function attachTabEvents() {
@@ -608,6 +609,7 @@ allRecords = records;
 filtroRuta = '';
 filtroEstado = '';
 excluidosPdf.clear();
+palletsPorFila.clear();
 
 statusEl.textContent = `${records.length.toLocaleString('es-CL')} productos importados desde "${file.name}".`;
 
@@ -615,19 +617,17 @@ rerenderResults();
 
 if (closeModal) closeModal();
 
-// Sincroniza con la base de Niveles Mínimos en segundo plano, sin bloquear la UI:
-// registra los productos nuevos y actualiza la Familia de los que ya existan
-// (para que el filtro por Familia funcione después sin depender de este Excel).
-// Nunca pisa mínimo/máximo ya configurados.
+// Registra en la base de Niveles Mínimos los productos que sean nuevos (en segundo
+// plano, sin bloquear la UI). Nunca pisa productos ya configurados.
 NivelesMinimosStore
-.registrarNuevos(records.map(r => ({ codigo: r.codigo, nombre: r.nombre, unidad: r.unidad, familia: r.familia })))
+.registrarNuevos(records.map(r => ({ codigo: r.codigo, nombre: r.nombre, unidad: r.unidad })))
 .then(res => {
-if (res.ok && (res.agregados > 0 || res.familiasActualizadas > 0)) {
-if (res.agregados > 0) statusEl.textContent += ` ${res.agregados} producto(s) nuevo(s) agregado(s) a Niveles Mínimos.`;
+if (res.ok && res.agregados > 0) {
+statusEl.textContent += ` ${res.agregados} producto(s) nuevo(s) agregado(s) a Niveles Mínimos.`;
 if (vista === 'niveles') refreshNivelesResults();
 }
 })
-.catch(err => console.error('No se pudieron sincronizar productos con Niveles Mínimos:', err));
+.catch(err => console.error('No se pudieron registrar productos nuevos en Niveles Mínimos:', err));
 } catch (err) {
 const msg = describeError(err);
 console.error('Reposición:', err);
@@ -673,18 +673,8 @@ return;
 }
 }
 
-try {
 container.innerHTML = template();
 attachEvents();
-} catch (err) {
-console.error('Reposición: error renderizando la sección:', err);
-container.innerHTML = `
-<div class="empty-state">
-<div class="icon">⚠️</div>
-<strong>Ocurrió un error mostrando esta sección</strong>
-<span>${describeError(err)}</span>
-</div>`;
-}
 }
 
 return { render };

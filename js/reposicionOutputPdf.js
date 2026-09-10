@@ -6,6 +6,12 @@
    ruta, para que cada bodega imprima solo lo que le corresponde
    despachar) y agrega al final los productos sin reposición
    disponible, para evaluar compra.
+
+   Si una fila trae un valor en "pallets" (anotado a mano en la
+   vista de Análisis), ese valor reemplaza a la cantidad de
+   resmas calculada en la columna "Cantidad a Trasladar" — es
+   solo una nota práctica para pedir el traslado, no afecta el
+   cálculo interno.
 ============================================ */
 
 const ReposicionOutputPdf = (() => {
@@ -43,7 +49,7 @@ const ReposicionOutputPdf = (() => {
       doc.autoTable({
         startY: y + 20,
         head: [['Cod. Producto', 'Producto', 'Unidad', 'Cantidad a Trasladar']],
-        body: grupos[key].map(f => [f.codigo, f.nombre, f.unidad, String(f.cantidad)]),
+        body: grupos[key].map(f => [f.codigo, f.nombre, f.unidad, f.pallets ? f.pallets : String(f.cantidad)]),
         styles: { font: 'helvetica', fontSize: 9, cellPadding: 4, lineWidth: 0.5 },
         headStyles: { fillColor: [21, 101, 192], textColor: [255, 255, 255], fontStyle: 'bold' },
         columnStyles: {

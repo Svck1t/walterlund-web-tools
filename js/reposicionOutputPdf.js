@@ -7,14 +7,27 @@
    despachar) y agrega al final los productos sin reposición
    disponible, para evaluar compra.
 
-   Si una fila trae un valor en "pallets" (anotado a mano en la
-   vista de Análisis), ese valor reemplaza a la cantidad de
-   resmas calculada en la columna "Cantidad a Trasladar" — es
-   solo una nota práctica para pedir el traslado, no afecta el
-   cálculo interno.
+   La columna "Solicitado" muestra, por fila:
+   - Si se anotó una cantidad de Pallets en la vista de Análisis:
+     "<pallets> Pallets" (reemplaza la cantidad calculada — es
+     solo una nota práctica para pedir el traslado, no afecta el
+     cálculo interno).
+   - Si no se anotó ningún Pallet: la cantidad calculada junto al
+     nombre completo de la unidad (ej. "120 Resmas", "1 Cajas").
 ============================================ */
 
 const ReposicionOutputPdf = (() => {
+
+  const NOMBRES_UNIDAD = { RE: 'Resmas', CAJA: 'Cajas', UN: 'Unidades' };
+
+  function nombreUnidad(unidad) {
+    return NOMBRES_UNIDAD[unidad] || unidad;
+  }
+
+  function textoSolicitado(f) {
+    if (f.pallets) return `${f.pallets} Pallets`;
+    return `${f.cantidad.toLocaleString('es-CL')} ${nombreUnidad(f.unidad)}`;
+  }
 
   function build(filas, fecha) {
     const { jsPDF } = window.jspdf;
@@ -48,14 +61,13 @@ const ReposicionOutputPdf = (() => {
 
       doc.autoTable({
         startY: y + 20,
-        head: [['Cod. Producto', 'Producto', 'Unidad', 'Cantidad a Trasladar']],
-        body: grupos[key].map(f => [f.codigo, f.nombre, f.unidad, f.pallets ? f.pallets : String(f.cantidad)]),
+        head: [['Cod. Producto', 'Producto', 'Solicitado']],
+        body: grupos[key].map(f => [f.codigo, f.nombre, textoSolicitado(f)]),
         styles: { font: 'helvetica', fontSize: 9, cellPadding: 4, lineWidth: 0.5 },
         headStyles: { fillColor: [21, 101, 192], textColor: [255, 255, 255], fontStyle: 'bold' },
         columnStyles: {
           0: { cellWidth: 90 },
-          2: { cellWidth: 60, halign: 'center' },
-          3: { cellWidth: 110, halign: 'right' }
+          2: { cellWidth: 130, halign: 'right' }
         },
         theme: 'grid',
         margin: { left: 24, right: 24 }

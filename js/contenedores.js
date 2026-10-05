@@ -1,6 +1,6 @@
 // =====================================================
 // SECCIÓN: COLA DE CONTENEDORES (v3)
-// KPIs + Tabs (Próximos/Recepcionados) + Checkboxes
+// KPIs + Tabs (Próximos/Recepcionados)
 // =====================================================
 
 const ContendedoresSection = (() => {
@@ -244,7 +244,7 @@ const ContendedoresSection = (() => {
     `;
   }
 
-  // ============ RECEPCIONADOS (con checkbox) ============
+  // ============ RECEPCIONADOS ============
   function renderRecepcionados() {
     const list = document.getElementById('recepcionados-list');
     if (!list) return;
@@ -275,7 +275,7 @@ const ContendedoresSection = (() => {
       return;
     }
 
-    // Agrupar por fecha de recepción
+    // Agrupar por hora de recepción
     const byDate = {};
     recientes.forEach(c => {
       const key = c.horaRecepcion || 'Sin hora';

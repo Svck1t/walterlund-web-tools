@@ -11,12 +11,11 @@ const ContendedoresSection = (() => {
   let autoRefreshInterval = null;
 
   // ============ INICIALIZAR ============
-  async function init() {
+  async function init(container) {
     console.log('ContendedoresSection.init() iniciando...');
     
-    const container = document.getElementById('main-content');
     if (!container) {
-      console.error('No se encontró #main-content');
+      console.error('No se pasó container a ContendedoresSection.init()');
       return;
     }
 

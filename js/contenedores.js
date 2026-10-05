@@ -1,219 +1,387 @@
-/* ============================================
-   contenedores.js
-   Sección: Cola de Contenedores
-   - Consulta CSV desde Google Sheets
-   - Renderiza 3 ventanas: Hoy, Semana Actual, Próxima Semana
-   - Actualiza cada 30 segundos
-============================================ */
+// =====================================================
+// SECCIÓN: COLA DE CONTENEDORES (v3)
+// KPIs + Tabs (Próximos/Recepcionados) + Checkboxes
+// =====================================================
 
-const ContendedoresSection = {
+const ContendedoresSection = (() => {
+  const CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRDNIXS9XyYviXNTTkm2fR1wsLOl0y1Cyfm3udLOzAR4zh7KEQhvatuwSEat3L8Gz3QgFRYFk7DfJFz/pub?gid=0&single=true&output=csv';
   
-  CSV_URL: 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRDNIXS9XyYviXNTTkm2fR1wsLOl0y1Cyfm3udLOzAR4zh7KEQhvatuwSEat3L8Gz3QgFRYFk7DfJFz/pub?gid=0&single=true&output=csv',
-  
-  data: [],
-  refreshInterval: null,
-  
-  async fetchData() {
-    try {
-      const response = await fetch(this.CSV_URL);
-      const csv = await response.text();
-      this.parseCSV(csv);
-      this.render(document.getElementById('content'));
-    } catch (error) {
-      console.error('Error al cargar CSV:', error);
-      document.getElementById('content').innerHTML = `
-        <div class="section-header">
-          <h1>Cola de Contenedores</h1>
-        </div>
-        <div class="error-message">
-          Error al cargar datos: ${error.message}
-        </div>
-      `;
+  let allContainers = [];
+  let currentTab = 'proximos'; // proximos | recepcionados
+  let autoRefreshInterval = null;
+
+  // ============ INICIALIZAR ============
+  async function init() {
+    console.log('ContendedoresSection.init() iniciando...');
+    
+    const container = document.getElementById('main-content');
+    if (!container) {
+      console.error('No se encontró #main-content');
+      return;
     }
-  },
-  
-  parseCSV(csv) {
-    const lines = csv.trim().split('\n');
-    this.data = [];
-    
-    for (let i = 0; i < lines.length; i++) {
-      const parts = lines[i].split(',');
-      if (parts.length >= 9 && parts[0].match(/\d+\/\d+\/\d+/)) {
-        this.data.push({
-          fechaHora: parts[0].trim(),
-          contenedor: parts[1].trim(),
-          importNum: parts[2].trim(),
-          cantidad: parts[3].trim(),
-          peso: parts[4].trim(),
-          ref: parts[5].trim(),
-          devolucion: parts[6].trim(),
-          remitente: parts[7].trim(),
-          correoId: parts[8].trim()
-        });
-      }
-    }
-    
-    // Ordena por fecha/hora descendente
-    this.data.reverse();
-  },
-  
-  getDateInfo() {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    
-    const weekEnd = new Date(today);
-    weekEnd.setDate(weekEnd.getDate() + (6 - today.getDay()));
-    
-    const nextWeekEnd = new Date(weekEnd);
-    nextWeekEnd.setDate(nextWeekEnd.getDate() + 7);
-    
-    return { today, tomorrow, weekEnd, nextWeekEnd };
-  },
-  
-  parseDateTime(dateStr) {
-    // Formato: "5/10/2026 12:17:34"
-    const parts = dateStr.split(' ');
-    const dateParts = parts[0].split('/');
-    const timeParts = parts[1].split(':');
-    
-    return new Date(
-      parseInt(dateParts[2]), 
-      parseInt(dateParts[1]) - 1, 
-      parseInt(dateParts[0]),
-      parseInt(timeParts[0]),
-      parseInt(timeParts[1]),
-      parseInt(timeParts[2])
-    );
-  },
-  
-  filterHoy() {
-    const { today } = this.getDateInfo();
-    const cutoffTime = new Date(today);
-    cutoffTime.setHours(14, 0, 0, 0); // 2 PM
-    
-    return this.data.filter(item => {
-      const dt = this.parseDateTime(item.fechaHora);
-      return dt >= today && dt < cutoffTime;
-    });
-  },
-  
-  filterProximosDias() {
-    const { today, weekEnd } = this.getDateInfo();
-    const cutoffTime = new Date(today);
-    cutoffTime.setHours(14, 0, 0, 0);
-    
-    return this.data.filter(item => {
-      const dt = this.parseDateTime(item.fechaHora);
-      return (dt >= cutoffTime && dt < new Date(today).setDate(today.getDate() + 1)) ||
-             (dt >= new Date(today).setDate(today.getDate() + 1) && dt <= weekEnd);
-    });
-  },
-  
-  filterProximaSemana() {
-    const { weekEnd, nextWeekEnd } = this.getDateInfo();
-    const nextMonday = new Date(weekEnd);
-    nextMonday.setDate(nextMonday.getDate() + 1);
-    
-    return this.data.filter(item => {
-      const dt = this.parseDateTime(item.fechaHora);
-      return dt >= nextMonday && dt <= nextWeekEnd;
-    });
-  },
-  
-  render(container) {
-    const hoy = this.filterHoy();
-    const proximosDias = this.filterProximosDias();
-    const proximaSemana = this.filterProximaSemana();
-    
-    const html = `
+
+    container.innerHTML = `
       <div class="section-header">
         <div>
           <h1>📦 Cola de Contenedores</h1>
-          <p>Importaciones desde correos (actualiza cada 30s)</p>
+          <p>Seguimiento de importaciones y recepciones</p>
         </div>
         <div style="display: flex; gap: 10px;">
-          <button class="btn-primary" onclick="ContendedoresSection.fetchData()">🔄 Actualizar</button>
+          <button class="btn-primary" id="btn-refresh-contenedores">🔄 Actualizar Ahora</button>
         </div>
       </div>
+
+      <!-- KPIs DASHBOARD -->
+      <div class="contenedores-kpis">
+        <div class="kpi-card">
+          <div class="kpi-label">Hoy (antes 14:00)</div>
+          <div class="kpi-value" id="kpi-hoy">0</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Próximos Días</div>
+          <div class="kpi-value" id="kpi-proximos">0</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Próxima Semana</div>
+          <div class="kpi-value" id="kpi-semana">0</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">✅ Recepcionados</div>
+          <div class="kpi-value" id="kpi-recepcionados">0</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">⏳ Pendientes</div>
+          <div class="kpi-value" id="kpi-pendientes">0</div>
+        </div>
+      </div>
+
+      <div class="contenedores-refresh-info">
+        <span id="last-refresh">Cargando...</span>
+      </div>
+
+      <!-- TABS -->
+      <div class="contenedores-tabs">
+        <button class="tab-btn active" data-tab="proximos">📅 Próximos</button>
+        <button class="tab-btn" data-tab="recepcionados">✅ Recepcionados</button>
+      </div>
+
+      <!-- CONTENIDO TABS -->
+      <div id="tab-proximos" class="tab-content active">
+        <div class="contenedores-dashboard" id="dashboard-proximos"></div>
+      </div>
+
+      <div id="tab-recepcionados" class="tab-content">
+        <div class="recepcionados-list" id="recepcionados-list"></div>
+      </div>
+
+      <div id="error-message" class="error-message" style="display: none;"></div>
+    `;
+
+    // Event listeners
+    document.getElementById('btn-refresh-contenedores')?.addEventListener('click', loadData);
+    
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+      btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+    });
+
+    // Cargar datos
+    await loadData();
+
+    // Auto-refresh cada 30 segundos
+    autoRefreshInterval = setInterval(loadData, 30000);
+  }
+
+  // ============ CARGAR DATOS ============
+  async function loadData() {
+    try {
+      const response = await fetch(CSV_URL);
+      const csv = await response.text();
       
-      <div class="contenedores-dashboard">
-        <div class="dashboard-panel">
-          <div class="panel-title">📅 HOY (Antes de 2 PM)</div>
-          <div class="panel-count">${hoy.length}</div>
-          ${hoy.length === 0 
-            ? '<div class="panel-empty">Sin contenedores</div>' 
-            : this.renderPanel(hoy)}
-        </div>
+      // Parsear CSV
+      const lines = csv.trim().split('\n');
+      const headers = lines[0].split(',').map(h => h.trim());
+      
+      allContainers = [];
+      for (let i = 1; i < lines.length; i++) {
+        if (!lines[i].trim()) continue;
         
+        const cells = lines[i].split(',').map(c => c.trim());
+        const container = {
+          fechaLectura: cells[0],
+          numero: cells[1],
+          importNum: cells[2],
+          cantidad: cells[3],
+          peso: cells[4],
+          ref: cells[5],
+          devolucion: cells[6],
+          remitente: cells[7],
+          idCorreo: cells[8],
+          estado: cells[9] || 'Pendiente',
+          horaRecepcion: cells[10] || '',
+          index: i
+        };
+        allContainers.push(container);
+      }
+
+      console.log(`Cargados ${allContainers.length} contenedores`);
+      
+      renderKPIs();
+      renderTabs();
+      updateLastRefresh();
+
+    } catch (err) {
+      showError(`Error al cargar datos: ${err.message}`);
+      console.error(err);
+    }
+  }
+
+  // ============ KPIs ============
+  function renderKPIs() {
+    const hoy = filterHoy();
+    const proximos = filterProximosDias();
+    const semana = filterProximaSemana();
+    const recepcionados = allContainers.filter(c => c.estado === 'Recepcionado');
+    const pendientes = allContainers.filter(c => c.estado === 'Pendiente');
+
+    document.getElementById('kpi-hoy').textContent = hoy.length;
+    document.getElementById('kpi-proximos').textContent = proximos.length;
+    document.getElementById('kpi-semana').textContent = semana.length;
+    document.getElementById('kpi-recepcionados').textContent = recepcionados.length;
+    document.getElementById('kpi-pendientes').textContent = pendientes.length;
+  }
+
+  // ============ TABS ============
+  function switchTab(tabName) {
+    currentTab = tabName;
+
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.tab === tabName);
+    });
+
+    document.querySelectorAll('.tab-content').forEach(tab => {
+      tab.classList.toggle('active', tab.id === `tab-${tabName}`);
+    });
+
+    if (tabName === 'proximos') {
+      renderTabs();
+    } else if (tabName === 'recepcionados') {
+      renderRecepcionados();
+    }
+  }
+
+  // ============ RENDER PRÓXIMOS (3 ventanas) ============
+  function renderTabs() {
+    const dashboard = document.getElementById('dashboard-proximos');
+    if (!dashboard) return;
+
+    const hoy = filterHoy();
+    const proximos = filterProximosDias();
+    const semana = filterProximaSemana();
+
+    dashboard.innerHTML = `
+      ${renderPanel('📍 HOY (Antes 14:00)', 'hoy', hoy)}
+      ${renderPanel('⏰ PRÓXIMOS DÍAS (Semana)', 'proximos', proximos)}
+      ${renderPanel('📅 PRÓXIMA SEMANA', 'semana', semana)}
+    `;
+  }
+
+  function renderPanel(title, id, containers) {
+    if (containers.length === 0) {
+      return `
         <div class="dashboard-panel">
-          <div class="panel-title">📆 PRÓXIMOS DÍAS (Semana Actual)</div>
-          <div class="panel-count">${proximosDias.length}</div>
-          ${proximosDias.length === 0 
-            ? '<div class="panel-empty">Sin contenedores</div>' 
-            : this.renderPanel(proximosDias)}
+          <h3 class="panel-title">${title}</h3>
+          <div class="panel-count">0</div>
+          <div class="panel-empty">Sin contenedores</div>
         </div>
-        
-        <div class="dashboard-panel">
-          <div class="panel-title">📅 PRÓXIMA SEMANA</div>
-          <div class="panel-count">${proximaSemana.length}</div>
-          ${proximaSemana.length === 0 
-            ? '<div class="panel-empty">Sin contenedores</div>' 
-            : this.renderPanel(proximaSemana)}
+      `;
+    }
+
+    const html = `
+      <div class="dashboard-panel">
+        <h3 class="panel-title">${title}</h3>
+        <div class="panel-count">${containers.length}</div>
+        <div class="panel-content">
+          ${renderImportGroups(containers)}
         </div>
       </div>
     `;
     
-    container.innerHTML = html;
-  },
-  
-  renderPanel(containers) {
-    const grouped = {};
+    return html;
+  }
+
+  function renderImportGroups(containers) {
+    const groups = {};
+    
     containers.forEach(c => {
-      if (!grouped[c.importNum]) grouped[c.importNum] = [];
-      grouped[c.importNum].push(c);
+      const key = c.importNum;
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(c);
     });
+
+    return Object.entries(groups).map(([importNum, items]) => `
+      <div class="panel-import">
+        <div class="panel-import-header">
+          <strong>${importNum}</strong>
+          <span class="badge-count">${items.length}</span>
+        </div>
+        <div class="panel-items">
+          ${items.map(c => renderContainerItem(c)).join('')}
+        </div>
+      </div>
+    `).join('');
+  }
+
+  function renderContainerItem(c) {
+    return `
+      <div class="panel-item">
+        <div class="item-container">${c.numero}</div>
+        <div class="item-details">
+          <span class="item-peso">📦 ${c.cantidad}</span>
+          <span class="item-peso">${c.peso} kg</span>
+          <span style="font-size: 11px; color: #999;">Ref: ${c.ref || 'N/A'}</span>
+        </div>
+      </div>
+    `;
+  }
+
+  // ============ RECEPCIONADOS (con checkbox) ============
+  function renderRecepcionados() {
+    const list = document.getElementById('recepcionados-list');
+    if (!list) return;
+
+    const hoy = new Date();
+    hoy.setHours(0, 0, 0, 0);
     
-    let html = '<div class="panel-content">';
-    
-    for (const importNum in grouped) {
-      const items = grouped[importNum];
-      html += `
-        <div class="panel-import">
-          <div class="panel-import-header">
-            <strong>${importNum}</strong>
-            <span class="badge badge-count">${items.length}</span>
-          </div>
-          <div class="panel-items">
-            ${items.map(c => `
-              <div class="panel-item">
-                <div class="item-container">${c.contenedor}</div>
-                <div class="item-details">
-                  <span class="item-peso">${c.peso} ton</span>
-                  ${c.devolucion ? `<span class="badge ${c.devolucion === 'pendiente' ? 'badge-warning' : 'badge-info'}">${c.devolucion}</span>` : ''}
-                </div>
-              </div>
-            `).join('')}
-          </div>
+    const hace7 = new Date(hoy);
+    hace7.setDate(hace7.getDate() - 7);
+
+    // Filtrar: solo los recepcionados en últimos 7 días
+    const recientes = allContainers.filter(c => {
+      if (c.estado !== 'Recepcionado') return false;
+      
+      const parts = c.fechaLectura.split('/');
+      const fecha = new Date(parts[2], parts[1] - 1, parts[0]);
+      return fecha >= hace7;
+    });
+
+    if (recientes.length === 0) {
+      list.innerHTML = `
+        <div class="empty-state">
+          <div class="icon">📭</div>
+          <strong>Sin recepcionados</strong>
+          <span>No hay contenedores recepcionados en los últimos 7 días</span>
         </div>
       `;
+      return;
     }
-    
-    html += '</div>';
-    return html;
-  },
-  
-  init() {
-    this.fetchData();
-    
-    // Actualiza cada 30 segundos
-    if (this.refreshInterval) clearInterval(this.refreshInterval);
-    this.refreshInterval = setInterval(() => this.fetchData(), 30000);
-  },
-  
-  destroy() {
-    if (this.refreshInterval) clearInterval(this.refreshInterval);
+
+    // Agrupar por fecha de recepción
+    const byDate = {};
+    recientes.forEach(c => {
+      const key = c.horaRecepcion || 'Sin hora';
+      if (!byDate[key]) byDate[key] = [];
+      byDate[key].push(c);
+    });
+
+    list.innerHTML = `
+      <div style="padding: 20px;">
+        ${Object.entries(byDate).map(([hora, items]) => `
+          <div style="margin-bottom: 20px;">
+            <div style="font-weight: 700; color: #667eea; margin-bottom: 10px;">
+              🕐 Recepcionados a las ${hora}
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 10px;">
+              ${items.map(c => `
+                <div style="padding: 10px; border-left: 3px solid #1e7d34; background: #f0f7f0; border-radius: 4px;">
+                  <div style="font-weight: 600; color: #1c2733;">${c.numero}</div>
+                  <div style="font-size: 12px; color: #5b6b7a; margin-top: 4px;">
+                    ${c.importNum} • ${c.cantidad} un. • ${c.peso} kg
+                  </div>
+                  <div style="font-size: 11px; color: #999; margin-top: 4px;">
+                    Recibido por: ${c.remitente}
+                  </div>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    `;
   }
-};
+
+  // ============ FILTROS ============
+  function filterHoy() {
+    const now = new Date();
+    const hoy = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const las14 = new Date(hoy);
+    las14.setHours(14, 0, 0);
+
+    return allContainers.filter(c => {
+      if (c.estado === 'Recepcionado') return false;
+      
+      const parts = c.fechaLectura.split('/');
+      const fecha = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
+      
+      return fecha.getTime() === hoy.getTime();
+    });
+  }
+
+  function filterProximosDias() {
+    const now = new Date();
+    const hoy = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const las14 = new Date(hoy);
+    las14.setHours(14, 0, 0);
+
+    const finSemana = new Date(hoy);
+    finSemana.setDate(finSemana.getDate() + (7 - hoy.getDay()));
+    finSemana.setHours(23, 59, 59);
+
+    return allContainers.filter(c => {
+      if (c.estado === 'Recepcionado') return false;
+      
+      const parts = c.fechaLectura.split('/');
+      const fecha = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
+      
+      return fecha > las14 && fecha <= finSemana;
+    });
+  }
+
+  function filterProximaSemana() {
+    const now = new Date();
+    const hoy = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    
+    const inicioSemana = new Date(hoy);
+    inicioSemana.setDate(inicioSemana.getDate() + (8 - hoy.getDay()));
+    inicioSemana.setHours(0, 0, 0);
+
+    const finSemana = new Date(inicioSemana);
+    finSemana.setDate(finSemana.getDate() + 6);
+    finSemana.setHours(23, 59, 59);
+
+    return allContainers.filter(c => {
+      if (c.estado === 'Recepcionado') return false;
+      
+      const parts = c.fechaLectura.split('/');
+      const fecha = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
+      
+      return fecha >= inicioSemana && fecha <= finSemana;
+    });
+  }
+
+  // ============ UTILS ============
+  function updateLastRefresh() {
+    const now = new Date();
+    const time = now.toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' });
+    document.getElementById('last-refresh').textContent = `Última actualización: ${time}`;
+  }
+
+  function showError(msg) {
+    const errorDiv = document.getElementById('error-message');
+    if (errorDiv) {
+      errorDiv.textContent = msg;
+      errorDiv.style.display = 'block';
+    }
+  }
+
+  return { init };
+})();

@@ -2,7 +2,7 @@
    contenedores.js
    Sección: Cola de Contenedores
    - Consulta CSV desde Google Sheets
-   - Renderiza tabla con contenedores
+   - Renderiza 3 ventanas: Hoy, Semana Actual, Próxima Semana
    - Actualiza cada 30 segundos
 ============================================ */
 
@@ -40,7 +40,7 @@ const ContendedoresSection = {
       const parts = lines[i].split(',');
       if (parts.length >= 9 && parts[0].match(/\d+\/\d+\/\d+/)) {
         this.data.push({
-          fecha: parts[0].trim(),
+          fechaHora: parts[0].trim(),
           contenedor: parts[1].trim(),
           importNum: parts[2].trim(),
           cantidad: parts[3].trim(),
@@ -53,11 +53,81 @@ const ContendedoresSection = {
       }
     }
     
-    // Ordena por fecha descendente (más recientes arriba)
+    // Ordena por fecha/hora descendente
     this.data.reverse();
   },
   
+  getDateInfo() {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    
+    const weekEnd = new Date(today);
+    weekEnd.setDate(weekEnd.getDate() + (6 - today.getDay()));
+    
+    const nextWeekEnd = new Date(weekEnd);
+    nextWeekEnd.setDate(nextWeekEnd.getDate() + 7);
+    
+    return { today, tomorrow, weekEnd, nextWeekEnd };
+  },
+  
+  parseDateTime(dateStr) {
+    // Formato: "5/10/2026 12:17:34"
+    const parts = dateStr.split(' ');
+    const dateParts = parts[0].split('/');
+    const timeParts = parts[1].split(':');
+    
+    return new Date(
+      parseInt(dateParts[2]), 
+      parseInt(dateParts[1]) - 1, 
+      parseInt(dateParts[0]),
+      parseInt(timeParts[0]),
+      parseInt(timeParts[1]),
+      parseInt(timeParts[2])
+    );
+  },
+  
+  filterHoy() {
+    const { today } = this.getDateInfo();
+    const cutoffTime = new Date(today);
+    cutoffTime.setHours(14, 0, 0, 0); // 2 PM
+    
+    return this.data.filter(item => {
+      const dt = this.parseDateTime(item.fechaHora);
+      return dt >= today && dt < cutoffTime;
+    });
+  },
+  
+  filterProximosDias() {
+    const { today, weekEnd } = this.getDateInfo();
+    const cutoffTime = new Date(today);
+    cutoffTime.setHours(14, 0, 0, 0);
+    
+    return this.data.filter(item => {
+      const dt = this.parseDateTime(item.fechaHora);
+      return (dt >= cutoffTime && dt < new Date(today).setDate(today.getDate() + 1)) ||
+             (dt >= new Date(today).setDate(today.getDate() + 1) && dt <= weekEnd);
+    });
+  },
+  
+  filterProximaSemana() {
+    const { weekEnd, nextWeekEnd } = this.getDateInfo();
+    const nextMonday = new Date(weekEnd);
+    nextMonday.setDate(nextMonday.getDate() + 1);
+    
+    return this.data.filter(item => {
+      const dt = this.parseDateTime(item.fechaHora);
+      return dt >= nextMonday && dt <= nextWeekEnd;
+    });
+  },
+  
   render(container) {
+    const hoy = this.filterHoy();
+    const proximosDias = this.filterProximosDias();
+    const proximaSemana = this.filterProximaSemana();
+    
     const html = `
       <div class="section-header">
         <div>
@@ -69,72 +139,70 @@ const ContendedoresSection = {
         </div>
       </div>
       
-      <div class="contenedores-section">
-        ${this.data.length === 0 
-          ? '<div class="placeholder-section">No hay contenedores</div>' 
-          : this.renderTable()}
+      <div class="contenedores-dashboard">
+        <div class="dashboard-panel">
+          <div class="panel-title">📅 HOY (Antes de 2 PM)</div>
+          <div class="panel-count">${hoy.length}</div>
+          ${hoy.length === 0 
+            ? '<div class="panel-empty">Sin contenedores</div>' 
+            : this.renderPanel(hoy)}
+        </div>
+        
+        <div class="dashboard-panel">
+          <div class="panel-title">📆 PRÓXIMOS DÍAS (Semana Actual)</div>
+          <div class="panel-count">${proximosDias.length}</div>
+          ${proximosDias.length === 0 
+            ? '<div class="panel-empty">Sin contenedores</div>' 
+            : this.renderPanel(proximosDias)}
+        </div>
+        
+        <div class="dashboard-panel">
+          <div class="panel-title">📅 PRÓXIMA SEMANA</div>
+          <div class="panel-count">${proximaSemana.length}</div>
+          ${proximaSemana.length === 0 
+            ? '<div class="panel-empty">Sin contenedores</div>' 
+            : this.renderPanel(proximaSemana)}
+        </div>
       </div>
     `;
     
     container.innerHTML = html;
   },
   
-  renderTable() {
-    const grouped = this.groupByImportacion();
+  renderPanel(containers) {
+    const grouped = {};
+    containers.forEach(c => {
+      if (!grouped[c.importNum]) grouped[c.importNum] = [];
+      grouped[c.importNum].push(c);
+    });
     
-    let html = '<div class="contenedores-list">';
+    let html = '<div class="panel-content">';
     
     for (const importNum in grouped) {
-      const containers = grouped[importNum];
+      const items = grouped[importNum];
       html += `
-        <div class="import-group">
-          <div class="import-header">
-            <h3>${importNum}</h3>
-            <span class="container-count">${containers.length} contenedor${containers.length > 1 ? 'es' : ''}</span>
+        <div class="panel-import">
+          <div class="panel-import-header">
+            <strong>${importNum}</strong>
+            <span class="badge badge-count">${items.length}</span>
           </div>
-          <table class="contenedores-table">
-            <thead>
-              <tr>
-                <th>Contenedor</th>
-                <th>Cantidad</th>
-                <th>Peso (ton)</th>
-                <th>Referencia</th>
-                <th>Devolución</th>
-                <th>Fecha</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${containers.map(c => `
-                <tr>
-                  <td><strong>${c.contenedor}</strong></td>
-                  <td>${c.cantidad}</td>
-                  <td>${c.peso}</td>
-                  <td>${c.ref || '-'}</td>
-                  <td>
-                    <span class="badge ${c.devolucion === 'pendiente' ? 'badge-warning' : 'badge-info'}">
-                      ${c.devolucion || '-'}
-                    </span>
-                  </td>
-                  <td>${new Date(c.fecha).toLocaleDateString('es-CL')}</td>
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>
+          <div class="panel-items">
+            ${items.map(c => `
+              <div class="panel-item">
+                <div class="item-container">${c.contenedor}</div>
+                <div class="item-details">
+                  <span class="item-peso">${c.peso} ton</span>
+                  ${c.devolucion ? `<span class="badge ${c.devolucion === 'pendiente' ? 'badge-warning' : 'badge-info'}">${c.devolucion}</span>` : ''}
+                </div>
+              </div>
+            `).join('')}
+          </div>
         </div>
       `;
     }
     
     html += '</div>';
     return html;
-  },
-  
-  groupByImportacion() {
-    const grouped = {};
-    this.data.forEach(c => {
-      if (!grouped[c.importNum]) grouped[c.importNum] = [];
-      grouped[c.importNum].push(c);
-    });
-    return grouped;
   },
   
   init() {

@@ -16,6 +16,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const SECTION_TITLES = {
     inicio: 'Inicio',
     despachos: 'Despachos',
+    'cola-contenedores': 'Cola de Contenedores',
     'control-facturas': 'Control de Facturas',
     stock: 'Stock',
     reposicion: 'Reposición de Productos',
@@ -40,6 +41,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function loadSection(section) {
     switch (section) {
+      case 'cola-contenedores':
+        ContendedoresSection.init();
+        break;
       case 'stock':
         StockSection.render(content);
         break;

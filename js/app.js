@@ -42,7 +42,7 @@ document.addEventListener('DOMContentLoaded', () => {
   function loadSection(section) {
     switch (section) {
       case 'cola-contenedores':
-        ContendedoresSection.init();
+        ContendedoresSection.init(content);
         break;
       case 'stock':
         StockSection.render(content);

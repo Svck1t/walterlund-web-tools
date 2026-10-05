@@ -641,3 +641,109 @@ table.data-table tbody tr:hover { background: #f5f8fc; }
   .filter-body { grid-template-columns: 1fr; }
   .sidebar { position: fixed; z-index: 20; height: 100%; }
 }
+/* Estilos para sección Cola de Contenedores */
+
+.contenedores-section {
+  padding: 0 20px 20px;
+}
+
+.contenedores-list {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.import-group {
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #fafafa;
+}
+
+.import-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  padding: 12px 16px;
+}
+
+.import-header h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.container-count {
+  background: rgba(255,255,255,0.3);
+  padding: 4px 8px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.contenedores-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: white;
+}
+
+.contenedores-table thead {
+  background: #f5f5f5;
+}
+
+.contenedores-table th {
+  padding: 12px 14px;
+  text-align: left;
+  font-size: 13px;
+  font-weight: 600;
+  color: #333;
+  border-bottom: 2px solid #e0e0e0;
+}
+
+.contenedores-table td {
+  padding: 12px 14px;
+  border-bottom: 1px solid #f0f0f0;
+  font-size: 13px;
+  color: #555;
+}
+
+.contenedores-table tbody tr:hover {
+  background: #f9f9f9;
+}
+
+.badge {
+  display: inline-block;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.badge-warning {
+  background: #fff3cd;
+  color: #856404;
+}
+
+.badge-info {
+  background: #d1ecf1;
+  color: #0c5460;
+}
+
+.error-message {
+  background: #f8d7da;
+  color: #721c24;
+  border: 1px solid #f5c6cb;
+  border-radius: 4px;
+  padding: 12px 16px;
+  margin: 20px;
+}
+
+.placeholder-section {
+  text-align: center;
+  padding: 40px 20px;
+  color: #999;
+  font-size: 14px;
+}

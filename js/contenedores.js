@@ -5,7 +5,7 @@
 
 const ContendedoresSection = (() => {
   const CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRDNIXS9XyYviXNTTkm2fR1wsLOl0y1Cyfm3udLOzAR4zh7KEQhvatuwSEat3L8Gz3QgFRYFk7DfJFz/pub?gid=0&single=true&output=csv';
-  const APPS_SCRIPT_URL = 'https://script.google.com/macros/d/AKfycbyYourScriptIdHere/usercontent'; // ← Reemplazar con tu ID
+  const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbyk6eefZ4wvCL1NgroFAQ6f9cAKBWAA0DFQiCx_-jtHDzXxpet_DsrTnqVC74Ewi8bq/exec'; // ← Reemplazar con tu ID
   
   // ⚙️ CONFIGURACIÓN
   const HORA_LIMITE = 14; // Cambiar aquí si el límite no es 2 PM (14:00)

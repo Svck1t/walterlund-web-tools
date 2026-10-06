@@ -1,13 +1,17 @@
 // =====================================================
-// SECCIÓN: COLA DE CONTENEDORES (v3)
-// KPIs + Tabs (Próximos/Recepcionados)
+// SECCIÓN: COLA DE CONTENEDORES (v4)
+// KPIs + Tabs + Checkbox + Hora Salida + Configurable
 // =====================================================
 
 const ContendedoresSection = (() => {
   const CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRDNIXS9XyYviXNTTkm2fR1wsLOl0y1Cyfm3udLOzAR4zh7KEQhvatuwSEat3L8Gz3QgFRYFk7DfJFz/pub?gid=0&single=true&output=csv';
+  const APPS_SCRIPT_URL = 'https://script.google.com/macros/d/AKfycbyYourScriptIdHere/usercontent'; // ← Reemplazar con tu ID
+  
+  // ⚙️ CONFIGURACIÓN
+  const HORA_LIMITE = 14; // Cambiar aquí si el límite no es 2 PM (14:00)
   
   let allContainers = [];
-  let currentTab = 'proximos'; // proximos | recepcionados
+  let currentTab = 'proximos';
   let autoRefreshInterval = null;
 
   // ============ INICIALIZAR ============
@@ -23,7 +27,7 @@ const ContendedoresSection = (() => {
       <div class="section-header">
         <div>
           <h1>📦 Cola de Contenedores</h1>
-          <p>Seguimiento de importaciones y recepciones</p>
+          <p>Seguimiento de importaciones y recepciones (Límite: ${HORA_LIMITE}:00 PM)</p>
         </div>
         <div style="display: flex; gap: 10px;">
           <button class="btn-primary" id="btn-refresh-contenedores">🔄 Actualizar Ahora</button>
@@ -33,7 +37,7 @@ const ContendedoresSection = (() => {
       <!-- KPIs DASHBOARD -->
       <div class="contenedores-kpis">
         <div class="kpi-card">
-          <div class="kpi-label">Hoy (antes 14:00)</div>
+          <div class="kpi-label">Hoy (antes ${HORA_LIMITE}:00)</div>
           <div class="kpi-value" id="kpi-hoy">0</div>
         </div>
         <div class="kpi-card">
@@ -74,19 +78,16 @@ const ContendedoresSection = (() => {
       </div>
 
       <div id="error-message" class="error-message" style="display: none;"></div>
+      <div id="success-message" class="success-message" style="display: none;"></div>
     `;
 
-    // Event listeners
     document.getElementById('btn-refresh-contenedores')?.addEventListener('click', loadData);
     
     document.querySelectorAll('.tab-btn').forEach(btn => {
       btn.addEventListener('click', () => switchTab(btn.dataset.tab));
     });
 
-    // Cargar datos
     await loadData();
-
-    // Auto-refresh cada 30 segundos
     autoRefreshInterval = setInterval(loadData, 30000);
   }
 
@@ -96,7 +97,6 @@ const ContendedoresSection = (() => {
       const response = await fetch(CSV_URL);
       const csv = await response.text();
       
-      // Parsear CSV
       const lines = csv.trim().split('\n');
       const headers = lines[0].split(',').map(h => h.trim());
       
@@ -116,7 +116,7 @@ const ContendedoresSection = (() => {
           remitente: cells[7],
           idCorreo: cells[8],
           estado: cells[9] || 'Pendiente',
-          horaRecepcion: cells[10] || '',
+          horaSalida: cells[11] || '', // ← Columna L (Hora Salida)
           index: i
         };
         allContainers.push(container);
@@ -178,10 +178,15 @@ const ContendedoresSection = (() => {
     const semana = filterProximaSemana();
 
     dashboard.innerHTML = `
-      ${renderPanel('📍 HOY (Antes 14:00)', 'hoy', hoy)}
+      ${renderPanel(`📍 HOY (Antes ${HORA_LIMITE}:00)`, 'hoy', hoy)}
       ${renderPanel('⏰ PRÓXIMOS DÍAS (Semana)', 'proximos', proximos)}
       ${renderPanel('📅 PRÓXIMA SEMANA', 'semana', semana)}
     `;
+
+    // Agregar event listeners a los checkboxes
+    document.querySelectorAll('.checkbox-recibir').forEach(checkbox => {
+      checkbox.addEventListener('change', (e) => handleRecibir(e, checkbox.dataset.index));
+    });
   }
 
   function renderPanel(title, id, containers) {
@@ -195,7 +200,7 @@ const ContendedoresSection = (() => {
       `;
     }
 
-    const html = `
+    return `
       <div class="dashboard-panel">
         <h3 class="panel-title">${title}</h3>
         <div class="panel-count">${containers.length}</div>
@@ -204,8 +209,6 @@ const ContendedoresSection = (() => {
         </div>
       </div>
     `;
-    
-    return html;
   }
 
   function renderImportGroups(containers) {
@@ -231,16 +234,67 @@ const ContendedoresSection = (() => {
   }
 
   function renderContainerItem(c) {
+    const horaSalidaText = c.horaSalida ? `📤 ${c.horaSalida}` : '⏳ Sin hora';
+    
     return `
       <div class="panel-item">
-        <div class="item-container">${c.numero}</div>
+        <div class="item-header">
+          <div class="item-container">${c.numero}</div>
+          <label class="checkbox-container">
+            <input type="checkbox" class="checkbox-recibir" data-index="${c.index}" 
+              ${c.estado === 'Recepcionado' ? 'checked' : ''}>
+            <span class="checkmark"></span>
+          </label>
+        </div>
         <div class="item-details">
           <span class="item-peso">📦 ${c.cantidad}</span>
           <span class="item-peso">${c.peso} kg</span>
+          <span class="item-hora">${horaSalidaText}</span>
           <span style="font-size: 11px; color: #999;">Ref: ${c.ref || 'N/A'}</span>
         </div>
       </div>
     `;
+  }
+
+  // ============ HANDLE CHECKBOX ============
+  async function handleRecibir(e, index) {
+    const checked = e.target.checked;
+    const container = allContainers.find(c => c.index == index);
+    
+    if (!container) return;
+
+    try {
+      const now = new Date();
+      const horaRecepcion = now.toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      
+      const newEstado = checked ? 'Recepcionado' : 'Pendiente';
+      const newHora = checked ? horaRecepcion : '';
+
+      // Llamar a Apps Script
+      const response = await fetch(APPS_SCRIPT_URL, {
+        method: 'POST',
+        mode: 'no-cors',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: `index=${index}&estado=${newEstado}&horaRecepcion=${newHora}`
+      });
+
+      // Actualizar localmente
+      container.estado = newEstado;
+      container.horaRecepcion = newHora;
+
+      showSuccess(`Contenedor ${newEstado === 'Recepcionado' ? 'recepcionado' : 'marcado pendiente'} ✓`);
+      
+      // Rerender
+      setTimeout(() => {
+        renderKPIs();
+        renderTabs();
+      }, 500);
+
+    } catch (err) {
+      console.error('Error al guardar:', err);
+      showError(`Error al guardar cambios: ${err.message}`);
+      e.target.checked = !e.target.checked;
+    }
   }
 
   // ============ RECEPCIONADOS ============
@@ -254,7 +308,6 @@ const ContendedoresSection = (() => {
     const hace7 = new Date(hoy);
     hace7.setDate(hace7.getDate() - 7);
 
-    // Filtrar: solo los recepcionados en últimos 7 días
     const recientes = allContainers.filter(c => {
       if (c.estado !== 'Recepcionado') return false;
       
@@ -274,17 +327,16 @@ const ContendedoresSection = (() => {
       return;
     }
 
-    // Agrupar por hora de recepción
-    const byDate = {};
+    const byHora = {};
     recientes.forEach(c => {
       const key = c.horaRecepcion || 'Sin hora';
-      if (!byDate[key]) byDate[key] = [];
-      byDate[key].push(c);
+      if (!byHora[key]) byHora[key] = [];
+      byHora[key].push(c);
     });
 
     list.innerHTML = `
       <div style="padding: 20px;">
-        ${Object.entries(byDate).map(([hora, items]) => `
+        ${Object.entries(byHora).map(([hora, items]) => `
           <div style="margin-bottom: 20px;">
             <div style="font-weight: 700; color: #667eea; margin-bottom: 10px;">
               🕐 Recepcionados a las ${hora}
@@ -296,8 +348,9 @@ const ContendedoresSection = (() => {
                   <div style="font-size: 12px; color: #5b6b7a; margin-top: 4px;">
                     ${c.importNum} • ${c.cantidad} un. • ${c.peso} kg
                   </div>
+                  ${c.horaSalida ? `<div style="font-size: 11px; color: #667eea; margin-top: 4px;">📤 Salida: ${c.horaSalida}</div>` : ''}
                   <div style="font-size: 11px; color: #999; margin-top: 4px;">
-                    Recibido por: ${c.remitente}
+                    Remitente: ${c.remitente}
                   </div>
                 </div>
               `).join('')}
@@ -312,24 +365,31 @@ const ContendedoresSection = (() => {
   function filterHoy() {
     const now = new Date();
     const hoy = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const las14 = new Date(hoy);
-    las14.setHours(14, 0, 0);
+    const limiteHora = new Date(hoy);
+    limiteHora.setHours(HORA_LIMITE, 0, 0);
 
     return allContainers.filter(c => {
       if (c.estado === 'Recepcionado') return false;
+      if (!c.horaSalida) return false;
       
-      const parts = c.fechaLectura.split('/');
-      const fecha = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
+      const parts = c.horaSalida.split(' ');
+      if (!parts[1]) return false;
       
-      return fecha.getTime() === hoy.getTime();
+      const timeParts = parts[1].split(':');
+      const fechaParts = parts[0].split('/');
+      const fecha = new Date(fechaParts[2], fechaParts[1] - 1, fechaParts[0], 
+                             parseInt(timeParts[0]), parseInt(timeParts[1]));
+      
+      return fecha.getTime() === hoy.getTime() || 
+             (fecha >= hoy && fecha < limiteHora);
     });
   }
 
   function filterProximosDias() {
     const now = new Date();
     const hoy = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const las14 = new Date(hoy);
-    las14.setHours(14, 0, 0);
+    const limiteHora = new Date(hoy);
+    limiteHora.setHours(HORA_LIMITE, 0, 0);
 
     const finSemana = new Date(hoy);
     finSemana.setDate(finSemana.getDate() + (7 - hoy.getDay()));
@@ -337,11 +397,17 @@ const ContendedoresSection = (() => {
 
     return allContainers.filter(c => {
       if (c.estado === 'Recepcionado') return false;
+      if (!c.horaSalida) return false;
       
-      const parts = c.fechaLectura.split('/');
-      const fecha = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
+      const parts = c.horaSalida.split(' ');
+      if (!parts[1]) return false;
       
-      return fecha > las14 && fecha <= finSemana;
+      const timeParts = parts[1].split(':');
+      const fechaParts = parts[0].split('/');
+      const fecha = new Date(fechaParts[2], fechaParts[1] - 1, fechaParts[0], 
+                             parseInt(timeParts[0]), parseInt(timeParts[1]));
+      
+      return fecha > limiteHora && fecha <= finSemana;
     });
   }
 
@@ -359,9 +425,15 @@ const ContendedoresSection = (() => {
 
     return allContainers.filter(c => {
       if (c.estado === 'Recepcionado') return false;
+      if (!c.horaSalida) return false;
       
-      const parts = c.fechaLectura.split('/');
-      const fecha = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
+      const parts = c.horaSalida.split(' ');
+      if (!parts[1]) return false;
+      
+      const timeParts = parts[1].split(':');
+      const fechaParts = parts[0].split('/');
+      const fecha = new Date(fechaParts[2], fechaParts[1] - 1, fechaParts[0], 
+                             parseInt(timeParts[0]), parseInt(timeParts[1]));
       
       return fecha >= inicioSemana && fecha <= finSemana;
     });
@@ -379,6 +451,16 @@ const ContendedoresSection = (() => {
     if (errorDiv) {
       errorDiv.textContent = msg;
       errorDiv.style.display = 'block';
+      setTimeout(() => errorDiv.style.display = 'none', 4000);
+    }
+  }
+
+  function showSuccess(msg) {
+    const successDiv = document.getElementById('success-message');
+    if (successDiv) {
+      successDiv.textContent = msg;
+      successDiv.style.display = 'block';
+      setTimeout(() => successDiv.style.display = 'none', 3000);
     }
   }
 

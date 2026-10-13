@@ -232,7 +232,7 @@ const ReposicionSection = (() => {
           <td style="text-align:right;">${f.stockDestino.toLocaleString('es-CL')}</td>
           <td style="text-align:right; color:#6b7280;">${f.umbralDestino.toLocaleString('es-CL')}</td>
           <td>${f.origenLabel ?? '—'}</td>
-          <td style="text-align:right;">${f.resuelto ? f.cantidad.toLocaleString('es-CL') : '—'}</td>
+          <td style="text-align:right;">${f.resuelto && f.stockOrigenActual != null ? f.stockOrigenActual.toLocaleString('es-CL') : '—'}</td>
           <td>${f.resuelto
             ? '<span class="badge badge-ok">Traslado sugerido</span>'
             : '<span class="badge badge-warn">Evaluar compra</span>'}
@@ -265,7 +265,7 @@ const ReposicionSection = (() => {
               <th>Stock actual</th>
               <th>Nivel mín.</th>
               <th>Origen sugerido</th>
-              <th>Cantidad a trasladar</th>
+              <th>Stock en origen</th>
               <th>Estado</th>
             </tr>
           </thead>

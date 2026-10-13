@@ -44,6 +44,11 @@ const ReposicionSection = (() => {
   // Clave: "codigo::destino" -> texto ingresado (string, tal cual lo escribió).
   let palletsPorFila = new Map();
 
+  // Unidad con la que se imprime el valor anotado en el PDF: 'pallet' (por defecto)
+  // o 'unidad' (usa la unidad de medida del producto: Resmas, Cajas, Unidades...).
+  // Clave: "codigo::destino" -> 'pallet' | 'unidad'. Solo en memoria, igual que palletsPorFila.
+  let modoPorFila = new Map();
+
   function claveFila(f) {
     return `${f.codigo}::${f.destino}`;
   }
@@ -217,6 +222,7 @@ const ReposicionSection = (() => {
       const key = claveFila(f);
       const incluido = !excluidosPdf.has(key);
       const pallets = palletsPorFila.get(key) ?? '';
+      const modo = modoPorFila.get(key) ?? 'pallet';
       return `
         <tr ${incluido ? '' : 'style="opacity:0.45;"'}>
           <td style="text-align:center;">
@@ -225,7 +231,11 @@ const ReposicionSection = (() => {
           <td>${f.codigo}</td>
           <td>${f.nombre}</td>
           <td>
-            <input type="text" inputmode="decimal" class="fila-pallets" data-key="${key}" value="${pallets}" placeholder="—" title="Cantidad de pallets a pedir (reemplaza la cantidad de resmas en el PDF)" style="width:56px; text-align:center;" />
+            <input type="text" inputmode="decimal" class="fila-pallets" data-key="${key}" value="${pallets}" placeholder="—" title="Cantidad a pedir (reemplaza la cantidad calculada en el PDF)" style="width:56px; text-align:center;" />
+            <select class="fila-modo" data-key="${key}" title="Unidad con la que se imprime en el PDF" style="margin-top:4px; font-size:12px;">
+              <option value="pallet" ${modo === 'pallet' ? 'selected' : ''}>Pallet</option>
+              <option value="unidad" ${modo === 'unidad' ? 'selected' : ''}>${f.unidad}</option>
+            </select>
           </td>
           <td>${f.unidad}</td>
           <td>${f.destinoLabel}</td>
@@ -259,7 +269,7 @@ const ReposicionSection = (() => {
               </th>
               <th>Código</th>
               <th>Producto</th>
-              <th>Pallets</th>
+              <th>Pedir</th>
               <th>Unidad</th>
               <th>Bodega con stock bajo</th>
               <th>Stock actual</th>
@@ -547,6 +557,14 @@ const ReposicionSection = (() => {
         });
       });
 
+      // Selector Pallet / unidad del producto: solo cambia cómo se imprime en el PDF.
+      document.querySelectorAll('.fila-modo').forEach(sel => {
+        sel.addEventListener('change', (e) => {
+          const key = e.target.dataset.key;
+          if (e.target.value === 'pallet') modoPorFila.delete(key); else modoPorFila.set(key, e.target.value);
+        });
+      });
+
       // Checkbox del encabezado: incluir/excluir todas las filas visibles de una vez
       const selectAllCb = document.getElementById('pdfIncludeAllCheckbox');
       if (selectAllCb) {
@@ -566,7 +584,11 @@ const ReposicionSection = (() => {
           // lo use en vez de la cantidad de resmas calculada — ver ReposicionOutputPdf.
           const paraPdf = filasFiltradas()
             .filter(f => !excluidosPdf.has(claveFila(f)))
-            .map(f => ({ ...f, pallets: palletsPorFila.get(claveFila(f)) || null }));
+            .map(f => ({
+              ...f,
+              pallets: palletsPorFila.get(claveFila(f)) || null,
+              palletsModo: modoPorFila.get(claveFila(f)) || 'pallet',
+            }));
           ReposicionOutputPdf.build(paraPdf, ReposicionParser.todayLabel());
         });
       }
@@ -617,6 +639,7 @@ const ReposicionSection = (() => {
       filtroEstado = '';
       excluidosPdf.clear();
       palletsPorFila.clear();
+      modoPorFila.clear();
 
       statusEl.textContent = `${records.length.toLocaleString('es-CL')} productos importados desde "${file.name}".`;
 

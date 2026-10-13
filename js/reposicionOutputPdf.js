@@ -12,6 +12,8 @@
      "<pallets> Pallets" (reemplaza la cantidad calculada — es
      solo una nota práctica para pedir el traslado, no afecta el
      cálculo interno).
+     Si en el selector se eligió la unidad del producto en vez de
+     "Pallet", se imprime "<valor> <Unidad>" (ej. "40 Resmas").
    - Si no se anotó ningún Pallet: la cantidad calculada junto al
      nombre completo de la unidad (ej. "120 Resmas", "1 Cajas").
 ============================================ */
@@ -31,7 +33,10 @@ const ReposicionOutputPdf = (() => {
   }
 
   function textoSolicitado(f) {
-    if (f.pallets) return `${f.pallets} Pallets`;
+    if (f.pallets) {
+      if (f.palletsModo === 'unidad') return `${f.pallets} ${nombreUnidad(f.unidad)}`;
+      return `${f.pallets} Pallets`;
+    }
     return `${f.cantidad.toLocaleString('es-CL')} ${nombreUnidad(f.unidad)}`;
   }
 

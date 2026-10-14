@@ -69,7 +69,7 @@ const StockSection = (() => {
         <td>${r.codProducto}</td>
         <td>${r.producto}</td>
         <td>${r.unidadMedida}</td>
-        <td>${r.pesoUnitario.toLocaleString('es-CL')}</td>
+        <td>${r.pesoUnitario == null ? '—' : r.pesoUnitario.toLocaleString('es-CL')}</td>
         <td>${r.stockTotal.toLocaleString('es-CL')}</td>
       </tr>`).join('');
 
@@ -141,7 +141,7 @@ const StockSection = (() => {
     document.getElementById('openImportModal').addEventListener('click', () => {
       ImportModal.open({
         title: 'Importar Excel',
-        hint: 'Formatos aceptados: .xlsx, .xls',
+        hint: 'Formatos aceptados: informe Softland (.xlsx/.xls) o export de stock (.xls)',
         accept: '.xlsx,.xls',
         onFile: (file, { setStatus, close }) => importFile(file, setStatus, close)
       });

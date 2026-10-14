@@ -12,10 +12,11 @@ const ExcelReader = (() => {
   const COLUMN_ALIASES = {
     codGrupo: ['Cod.Grupo', 'Cod. Grupo', 'Codigo Grupo', 'Código de Grupo'],
     grupo: ['Grupo'],
-    codProducto: ['Cod. Producto', 'Cod.Producto', 'Código de Producto'],
-    producto: ['Producto', 'Descripción', 'Descripcion del Producto'],
+    codProducto: ['Cod. Producto', 'Cod.Producto', 'Código de Producto', 'Código Producto', 'Codigo Producto'],
+    producto: ['Producto', 'Descripción', 'Descripcion del Producto', 'Nombre Producto'],
     pesoUnitario: ['Peso Kgs.', 'Peso Unitario', 'Peso Kgs', 'Peso Kilos'],
-    stockTotal: ['Stock Total'],
+    // 'General' = stock total del export web (formato 2, columnas por bodega)
+    stockTotal: ['Stock Total', 'General'],
     unidadMedida: ['Cod. U. Medida', 'Cod.U.Medida', 'Unidad de Medida', 'U. Medida', 'Unidad Medida']
   };
 
@@ -47,6 +48,40 @@ const ExcelReader = (() => {
   }
 
   /**
+   * Convierte un valor a número. Acepta números reales (xlsx) y textos en
+   * formato chileno del export HTML: "1.010,00" -> 1010, "5,00" -> 5.
+   */
+  function toNumber(value) {
+    if (typeof value === 'number') return value;
+    let txt = (value ?? '').toString().trim();
+    if (!txt) return 0;
+    if (txt.includes(',')) txt = txt.replace(/\./g, '').replace(',', '.');
+    const n = parseFloat(txt);
+    return Number.isFinite(n) ? n : 0;
+  }
+
+  /** ¿El archivo es en realidad una página HTML con extensión .xls? (formato 2: export web) */
+  function isHtml(bytes) {
+    const head = new TextDecoder('utf-8').decode(bytes.slice(0, 512)).replace(/^\uFEFF/, '').trim().toLowerCase();
+    return head.startsWith('<html') || head.startsWith('<!doctype') || head.startsWith('<table') || head.includes('<html');
+  }
+
+  /**
+   * Lee la primera <table> de un HTML y devuelve array de arrays de texto,
+   * igual que sheet_to_json({header:1}). Se lee como texto para que SheetJS
+   * no malinterprete "5,00" como 500.
+   */
+  function htmlToRows(bytes) {
+    const html = new TextDecoder('utf-8').decode(bytes);
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const table = doc.querySelector('table');
+    if (!table) return [];
+    return [...table.querySelectorAll('tr')].map(tr =>
+      [...tr.querySelectorAll('th,td')].map(cell => cell.textContent.trim())
+    );
+  }
+
+  /**
    * Lee un File (input type=file) y devuelve una Promise que resuelve
    * con un array de objetos: { codGrupo, grupo, codProducto, producto, pesoUnitario, stockTotal }
    */
@@ -59,12 +94,17 @@ const ExcelReader = (() => {
       reader.onload = (e) => {
         try {
           const data = new Uint8Array(e.target.result);
-          const workbook = XLSX.read(data, { type: 'array' });
-          const firstSheetName = workbook.SheetNames[0];
-          const sheet = workbook.Sheets[firstSheetName];
-
-          // header:1 -> array de arrays, sin asumir que la fila 1 son encabezados
-          const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+          let rows;
+          if (isHtml(data)) {
+            // Formato 2: "export_stock.xls" (HTML con stock por bodega)
+            rows = htmlToRows(data);
+          } else {
+            // Formato 1: informe Softland "Stock Acumulado Valorizado" (.xlsx/.xls real)
+            const workbook = XLSX.read(data, { type: 'array' });
+            const sheet = workbook.Sheets[workbook.SheetNames[0]];
+            // header:1 -> array de arrays, sin asumir que la fila 1 son encabezados
+            rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+          }
 
           const headerRowIdx = findHeaderRow(rows);
           if (headerRowIdx === -1) {
@@ -87,13 +127,18 @@ const ExcelReader = (() => {
             // Las filas de subtotal/total no traen código de producto -> se descartan.
             if (!codProducto) continue;
 
+            let codGrupo = (row[columnIndex.codGrupo] ?? '').toString().trim();
+            const grupo = (row[columnIndex.grupo] ?? '').toString().trim();
+            // En el formato 2 la columna "Grupo" trae el código (ej. 1029), no el nombre.
+            if (columnIndex.codGrupo === undefined && /^\d+$/.test(grupo)) codGrupo = grupo;
+
             records.push({
-              codGrupo: (row[columnIndex.codGrupo] ?? '').toString().trim(),
-              grupo: (row[columnIndex.grupo] ?? '').toString().trim(),
+              codGrupo,
+              grupo,
               codProducto,
               producto: (row[columnIndex.producto] ?? '').toString().trim(),
-              pesoUnitario: parseFloat(row[columnIndex.pesoUnitario]) || 0,
-              stockTotal: parseFloat(row[columnIndex.stockTotal]) || 0,
+              pesoUnitario: columnIndex.pesoUnitario === undefined ? null : toNumber(row[columnIndex.pesoUnitario]),
+              stockTotal: toNumber(row[columnIndex.stockTotal]),
               unidadMedida: (row[columnIndex.unidadMedida] ?? '').toString().trim()
             });
           }

@@ -1,7 +1,7 @@
 // =====================================================
 // SECCIÓN: COLA DE CONTENEDORES (v5)
 // Fuente: pestaña "Importaciones" (espejo del Excel Control Contenedores 2026)
-// Checkbox web -> pestaña "RecepcionesWeb" vía Apps Script
+// Solo lectura: el estado se marca en el Excel
 // =====================================================
 
 const ContendedoresSection = (() => {
@@ -22,7 +22,7 @@ const ContendedoresSection = (() => {
   const fLarga = iso => { if (!iso) return '—'; const [y, m, d] = iso.split('-'); return `${d}/${m}/${y}`; };
   const kg = n => n ? n.toLocaleString('es-CL', { maximumFractionDigits: 0 }) + ' kg' : '—';
   const isoToDay = iso => { const [y, m, d] = iso.split('-').map(Number); return Date.UTC(y, m - 1, d) / 86400000; };
-  const recep = r => r.recepExcel || r.recepWeb;
+  const recep = r => r.recepExcel; // solo manda el Excel
   const fechaRef = r => r.llegada || r.eta;
 
   // ============ INIT ============
@@ -50,7 +50,6 @@ const ContendedoresSection = (() => {
 
     root.querySelector('#ci-refresh').addEventListener('click', () => cargar(true));
     root.querySelectorAll('.ci-tab').forEach(b => b.addEventListener('click', () => { tab = b.dataset.tab; render(); }));
-    root.addEventListener('change', onCheck);
     root.addEventListener('input', e => {
       if (e.target.id === 'ci-buscar') { filtro = e.target.value; renderTabla(); }
     });
@@ -78,26 +77,6 @@ const ContendedoresSection = (() => {
       console.error(err);
       if (metaEl) metaEl.innerHTML = `<span class="ci-err">No se pudieron cargar los datos: ${esc(err.message)}. Revisa API_URL y que el Web App esté implementado con acceso "Cualquier usuario".</span>`;
     }
-  }
-
-  async function onCheck(e) {
-    const cb = e.target;
-    if (!cb.classList.contains('ci-check')) return;
-    const r = rows.find(x => x.key === cb.dataset.key);
-    if (!r) return;
-    const valor = cb.checked;
-    r.recepWeb = valor; // optimista
-    cb.disabled = true;
-    try {
-      const url = `${API_URL}?action=marcar&key=${encodeURIComponent(r.key)}&valor=${valor ? 1 : 0}`;
-      const data = await (await fetch(url, { cache: 'no-store' })).json();
-      if (!data.ok) throw new Error(data.error);
-      toast(valor ? `${r.contenedor} marcado como recepcionado` : `${r.contenedor} desmarcado`);
-    } catch (err) {
-      r.recepWeb = !valor;
-      toast(`No se guardó ${r.contenedor}: ${err.message}`, true);
-    }
-    render();
   }
 
   // ============ CLASIFICACIÓN ============
@@ -169,7 +148,6 @@ const ContendedoresSection = (() => {
   function panel(titulo, lista) {
     const items = lista.length ? lista.map(r => `
       <li class="ci-item${r.tagCls === 'late' ? ' ci-late' : ''}">
-        <input type="checkbox" class="ci-check" data-key="${esc(r.key)}" aria-label="Marcar ${esc(r.contenedor)} como recepcionado">
         <div>
           <b>${esc(r.contenedor)}</b>${r.tag ? ` <em class="ci-tag ci-tag-${r.tagCls}">${r.tag}</em>` : ''}
           <small>${fCorta(fechaRef(r))}${r.hora ? ' ' + esc(r.hora) : ''}${r.llegada ? '' : ' (ETA)'} · ${esc(r.proveedor)}</small>
@@ -188,19 +166,16 @@ const ContendedoresSection = (() => {
       .sort((a, b) => ((fechaRef(b) || '') + b.hora).localeCompare((fechaRef(a) || '') + a.hora) || (Number(b.n) - Number(a.n)));
 
     wrap.innerHTML = `<table class="ci-table">
-      <thead><tr><th>Recep.</th><th>N°</th><th>Llegada</th><th>Hora</th><th>Proveedor</th><th>N° Orden</th><th>Contenedor</th><th>Material</th><th class="num">Peso</th><th>Bodega</th><th>Estado</th></tr></thead>
+      <thead><tr><th>N°</th><th>Llegada</th><th>Hora</th><th>Proveedor</th><th>N° Orden</th><th>Contenedor</th><th>Material</th><th class="num">Peso</th><th>Bodega</th><th>Estado</th></tr></thead>
       <tbody>${lista.map(r => {
-        const estado = r.recepExcel ? r.estado : (r.recepWeb ? 'RECEPCIONADO (web)' : (r.estado || 'PENDIENTE'));
-        const check = r.recepExcel
-          ? `<input type="checkbox" checked disabled title="Recepcionado en el Excel">`
-          : `<input type="checkbox" class="ci-check" data-key="${esc(r.key)}" ${r.recepWeb ? 'checked' : ''} title="${r.recepWebFecha ? 'Marcado ' + esc(r.recepWebFecha) : 'Marcar recepcionado'}">`;
+        const estado = r.estado || 'PENDIENTE';
         return `<tr class="${recep(r) ? '' : 'ci-pend'}">
-          <td>${check}</td><td>${esc(r.n)}</td>
+          <td>${esc(r.n)}</td>
           <td>${r.llegada ? fLarga(r.llegada) : fLarga(r.eta) + (r.eta ? ' (ETA)' : '')}</td>
           <td>${esc(r.hora) || '—'}</td><td>${esc(r.proveedor)}</td><td>${esc(r.orden)}</td>
           <td><b>${esc(r.contenedor)}</b></td><td>${esc(r.material)}</td>
           <td class="num">${kg(r.peso)}</td><td>${esc(r.bodega)}</td><td>${esc(estado)}</td></tr>`;
-      }).join('') || '<tr><td colspan="11" class="ci-empty">No hay importaciones que coincidan con la búsqueda</td></tr>'}
+      }).join('') || '<tr><td colspan="10" class="ci-empty">No hay importaciones que coincidan con la búsqueda</td></tr>'}
       </tbody></table>`;
   }
 
@@ -245,7 +220,6 @@ const ContendedoresSection = (() => {
       .ci-tag-pend{color:#92400e;background:#fef3c7}
       .ci-tag-next{color:#1e40af;background:#dbeafe}
       .ci-late{background:#fef2f2}
-      .ci-check{width:18px;height:18px;cursor:pointer;accent-color:#1e7b34;flex-shrink:0;margin-top:2px}
       .ci-empty{color:#9ca3af;text-align:center;padding:30px 0}
       .ci-search{width:100%;max-width:480px;padding:9px 12px;border:1px solid #d1d5db;border-radius:6px;margin-bottom:12px;font-size:14px}
       .ci-table-wrap{overflow-x:auto;background:#fff;border-radius:10px;box-shadow:0 1px 3px rgba(0,0,0,.08)}

@@ -5,7 +5,7 @@
 // =====================================================
 
 const ContendedoresSection = (() => {
-  const API_URL = 'https://walterlund-web-tools.vercel.app/#'; // termina en /exec
+  const API_URL = 'https://script.google.com/macros/s/AKfycbxT1l0nfxchryNr0KbFD5cqo1eVfRgt7GiSWmmxUI3B1iSx5fZXyUm5a8q-BViIQ3P-/exec'; // termina en /exec
   const HORA_LIMITE = '14:00';
   const REFRESH_MS = 60000;
 

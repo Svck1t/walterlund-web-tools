@@ -1,467 +1,250 @@
 // =====================================================
-// SECCIÓN: COLA DE CONTENEDORES (v4)
-// KPIs + Tabs + Checkbox + Hora Salida + Configurable
+// SECCIÓN: COLA DE CONTENEDORES (v5)
+// Fuente: pestaña "Importaciones" (espejo del Excel Control Contenedores 2026)
+// Checkbox web -> pestaña "RecepcionesWeb" vía Apps Script
 // =====================================================
 
 const ContendedoresSection = (() => {
-  const CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRDNIXS9XyYviXNTTkm2fR1wsLOl0y1Cyfm3udLOzAR4zh7KEQhvatuwSEat3L8Gz3QgFRYFk7DfJFz/pub?gid=0&single=true&output=csv';
-  const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbyk6eefZ4wvCL1NgroFAQ6f9cAKBWAA0DFQiCx_-jtHDzXxpet_DsrTnqVC74Ewi8bq/exec'; // ← Reemplazar con tu ID
-  
-  // ⚙️ CONFIGURACIÓN
-  const HORA_LIMITE = 14; // Cambiar aquí si el límite no es 2 PM (14:00)
-  
-  let allContainers = [];
-  let currentTab = 'proximos';
-  let autoRefreshInterval = null;
+  const API_URL = 'PEGAR_AQUI_URL_DEL_WEB_APP'; // termina en /exec
+  const HORA_LIMITE = '14:00';
+  const REFRESH_MS = 60000;
 
-  // ============ INICIALIZAR ============
-  async function init(container) {
-    console.log('ContendedoresSection.init() iniciando...');
-    
-    if (!container) {
-      console.error('No se pasó container a ContendedoresSection.init()');
-      return;
-    }
+  let rows = [];
+  let meta = { hoy: '', ahora: '', sync: '' };
+  let tab = 'proximos';
+  let filtro = '';
+  let timer = null;
+  let root = null;
 
-    container.innerHTML = `
-      <div class="section-header">
-        <div>
-          <h1>📦 Cola de Contenedores</h1>
-          <p>Seguimiento de importaciones y recepciones (Límite: ${HORA_LIMITE}:00 PM)</p>
-        </div>
-        <div style="display: flex; gap: 10px;">
-          <button class="btn-primary" id="btn-refresh-contenedores">🔄 Actualizar Ahora</button>
-        </div>
-      </div>
+  const MESES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+  const fCorta = iso => { if (!iso) return '—'; const [, m, d] = iso.split('-'); return `${+d}-${MESES[+m - 1]}`; };
+  const fLarga = iso => { if (!iso) return '—'; const [y, m, d] = iso.split('-'); return `${d}/${m}/${y}`; };
+  const kg = n => n ? n.toLocaleString('es-CL', { maximumFractionDigits: 0 }) + ' kg' : '—';
+  const isoToDay = iso => { const [y, m, d] = iso.split('-').map(Number); return Date.UTC(y, m - 1, d) / 86400000; };
+  const recep = r => r.recepExcel || r.recepWeb;
+  const fechaRef = r => r.llegada || r.eta;
 
-      <!-- KPIs DASHBOARD -->
-      <div class="contenedores-kpis">
-        <div class="kpi-card">
-          <div class="kpi-label">Hoy (antes ${HORA_LIMITE}:00)</div>
-          <div class="kpi-value" id="kpi-hoy">0</div>
-        </div>
-        <div class="kpi-card">
-          <div class="kpi-label">Próximos Días</div>
-          <div class="kpi-value" id="kpi-proximos">0</div>
-        </div>
-        <div class="kpi-card">
-          <div class="kpi-label">Próxima Semana</div>
-          <div class="kpi-value" id="kpi-semana">0</div>
-        </div>
-        <div class="kpi-card">
-          <div class="kpi-label">✅ Recepcionados</div>
-          <div class="kpi-value" id="kpi-recepcionados">0</div>
-        </div>
-        <div class="kpi-card">
-          <div class="kpi-label">⏳ Pendientes</div>
-          <div class="kpi-value" id="kpi-pendientes">0</div>
-        </div>
-      </div>
-
-      <div class="contenedores-refresh-info">
-        <span id="last-refresh">Cargando...</span>
-      </div>
-
-      <!-- TABS -->
-      <div class="contenedores-tabs">
-        <button class="tab-btn active" data-tab="proximos">📅 Próximos</button>
-        <button class="tab-btn" data-tab="recepcionados">✅ Recepcionados</button>
-      </div>
-
-      <!-- CONTENIDO TABS -->
-      <div id="tab-proximos" class="tab-content active">
-        <div class="contenedores-dashboard" id="dashboard-proximos"></div>
-      </div>
-
-      <div id="tab-recepcionados" class="tab-content">
-        <div class="recepcionados-list" id="recepcionados-list"></div>
-      </div>
-
-      <div id="error-message" class="error-message" style="display: none;"></div>
-      <div id="success-message" class="success-message" style="display: none;"></div>
-    `;
-
-    document.getElementById('btn-refresh-contenedores')?.addEventListener('click', loadData);
-    
-    document.querySelectorAll('.tab-btn').forEach(btn => {
-      btn.addEventListener('click', () => switchTab(btn.dataset.tab));
-    });
-
-    await loadData();
-    autoRefreshInterval = setInterval(loadData, 30000);
-  }
-
-  // ============ CARGAR DATOS ============
-  async function loadData() {
-    try {
-      const response = await fetch(CSV_URL);
-      const csv = await response.text();
-      
-      const lines = csv.trim().split('\n');
-      const headers = lines[0].split(',').map(h => h.trim());
-      
-      allContainers = [];
-      for (let i = 1; i < lines.length; i++) {
-        if (!lines[i].trim()) continue;
-        
-        const cells = lines[i].split(',').map(c => c.trim());
-        const container = {
-          fechaLectura: cells[0],
-          numero: cells[1],
-          importNum: cells[2],
-          cantidad: cells[3],
-          peso: cells[4],
-          ref: cells[5],
-          devolucion: cells[6],
-          remitente: cells[7],
-          idCorreo: cells[8],
-          estado: cells[9] || 'Pendiente',
-          horaSalida: cells[11] || '', // ← Columna L (Hora Salida)
-          index: i
-        };
-        allContainers.push(container);
-      }
-
-      console.log(`Cargados ${allContainers.length} contenedores`);
-      
-      renderKPIs();
-      renderTabs();
-      updateLastRefresh();
-
-    } catch (err) {
-      showError(`Error al cargar datos: ${err.message}`);
-      console.error(err);
-    }
-  }
-
-  // ============ KPIs ============
-  function renderKPIs() {
-    const hoy = filterHoy();
-    const proximos = filterProximosDias();
-    const semana = filterProximaSemana();
-    const recepcionados = allContainers.filter(c => c.estado === 'Recepcionado');
-    const pendientes = allContainers.filter(c => c.estado === 'Pendiente');
-
-    document.getElementById('kpi-hoy').textContent = hoy.length;
-    document.getElementById('kpi-proximos').textContent = proximos.length;
-    document.getElementById('kpi-semana').textContent = semana.length;
-    document.getElementById('kpi-recepcionados').textContent = recepcionados.length;
-    document.getElementById('kpi-pendientes').textContent = pendientes.length;
-  }
-
-  // ============ TABS ============
-  function switchTab(tabName) {
-    currentTab = tabName;
-
-    document.querySelectorAll('.tab-btn').forEach(btn => {
-      btn.classList.toggle('active', btn.dataset.tab === tabName);
-    });
-
-    document.querySelectorAll('.tab-content').forEach(tab => {
-      tab.classList.toggle('active', tab.id === `tab-${tabName}`);
-    });
-
-    if (tabName === 'proximos') {
-      renderTabs();
-    } else if (tabName === 'recepcionados') {
-      renderRecepcionados();
-    }
-  }
-
-  // ============ RENDER PRÓXIMOS (3 ventanas) ============
-  function renderTabs() {
-    const dashboard = document.getElementById('dashboard-proximos');
-    if (!dashboard) return;
-
-    const hoy = filterHoy();
-    const proximos = filterProximosDias();
-    const semana = filterProximaSemana();
-
-    dashboard.innerHTML = `
-      ${renderPanel(`📍 HOY (Antes ${HORA_LIMITE}:00)`, 'hoy', hoy)}
-      ${renderPanel('⏰ PRÓXIMOS DÍAS (Semana)', 'proximos', proximos)}
-      ${renderPanel('📅 PRÓXIMA SEMANA', 'semana', semana)}
-    `;
-
-    // Agregar event listeners a los checkboxes
-    document.querySelectorAll('.checkbox-recibir').forEach(checkbox => {
-      checkbox.addEventListener('change', (e) => handleRecibir(e, checkbox.dataset.index));
-    });
-  }
-
-  function renderPanel(title, id, containers) {
-    if (containers.length === 0) {
-      return `
-        <div class="dashboard-panel">
-          <h3 class="panel-title">${title}</h3>
-          <div class="panel-count">0</div>
-          <div class="panel-empty">Sin contenedores</div>
-        </div>
-      `;
-    }
-
-    return `
-      <div class="dashboard-panel">
-        <h3 class="panel-title">${title}</h3>
-        <div class="panel-count">${containers.length}</div>
-        <div class="panel-content">
-          ${renderImportGroups(containers)}
-        </div>
-      </div>
-    `;
-  }
-
-  function renderImportGroups(containers) {
-    const groups = {};
-    
-    containers.forEach(c => {
-      const key = c.importNum;
-      if (!groups[key]) groups[key] = [];
-      groups[key].push(c);
-    });
-
-    return Object.entries(groups).map(([importNum, items]) => `
-      <div class="panel-import">
-        <div class="panel-import-header">
-          <strong>${importNum}</strong>
-          <span class="badge-count">${items.length}</span>
-        </div>
-        <div class="panel-items">
-          ${items.map(c => renderContainerItem(c)).join('')}
-        </div>
-      </div>
-    `).join('');
-  }
-
-  function renderContainerItem(c) {
-    const horaSalidaText = c.horaSalida ? `📤 ${c.horaSalida}` : '⏳ Sin hora';
-    
-    return `
-      <div class="panel-item">
-        <div class="item-header">
-          <div class="item-container">${c.numero}</div>
-          <label class="checkbox-container">
-            <input type="checkbox" class="checkbox-recibir" data-index="${c.index}" 
-              ${c.estado === 'Recepcionado' ? 'checked' : ''}>
-            <span class="checkmark"></span>
-          </label>
-        </div>
-        <div class="item-details">
-          <span class="item-peso">📦 ${c.cantidad}</span>
-          <span class="item-peso">${c.peso} kg</span>
-          <span class="item-hora">${horaSalidaText}</span>
-          <span style="font-size: 11px; color: #999;">Ref: ${c.ref || 'N/A'}</span>
-        </div>
-      </div>
-    `;
-  }
-
-  // ============ HANDLE CHECKBOX ============
-  async function handleRecibir(e, index) {
-    const checked = e.target.checked;
-    const container = allContainers.find(c => c.index == index);
-    
-    if (!container) return;
-
-    try {
-      const now = new Date();
-      const horaRecepcion = now.toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-      
-      const newEstado = checked ? 'Recepcionado' : 'Pendiente';
-      const newHora = checked ? horaRecepcion : '';
-
-      // Llamar a Apps Script
-      const response = await fetch(APPS_SCRIPT_URL, {
-        method: 'POST',
-        mode: 'no-cors',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: `index=${index}&estado=${newEstado}&horaRecepcion=${newHora}`
-      });
-
-      // Actualizar localmente
-      container.estado = newEstado;
-      container.horaRecepcion = newHora;
-
-      showSuccess(`Contenedor ${newEstado === 'Recepcionado' ? 'recepcionado' : 'marcado pendiente'} ✓`);
-      
-      // Rerender
-      setTimeout(() => {
-        renderKPIs();
-        renderTabs();
-      }, 500);
-
-    } catch (err) {
-      console.error('Error al guardar:', err);
-      showError(`Error al guardar cambios: ${err.message}`);
-      e.target.checked = !e.target.checked;
-    }
-  }
-
-  // ============ RECEPCIONADOS ============
-  function renderRecepcionados() {
-    const list = document.getElementById('recepcionados-list');
-    if (!list) return;
-
-    const hoy = new Date();
-    hoy.setHours(0, 0, 0, 0);
-    
-    const hace7 = new Date(hoy);
-    hace7.setDate(hace7.getDate() - 7);
-
-    const recientes = allContainers.filter(c => {
-      if (c.estado !== 'Recepcionado') return false;
-      
-      const parts = c.fechaLectura.split('/');
-      const fecha = new Date(parts[2], parts[1] - 1, parts[0]);
-      return fecha >= hace7;
-    });
-
-    if (recientes.length === 0) {
-      list.innerHTML = `
-        <div class="empty-state">
-          <div class="icon">📭</div>
-          <strong>Sin recepcionados</strong>
-          <span>No hay contenedores recepcionados en los últimos 7 días</span>
-        </div>
-      `;
-      return;
-    }
-
-    const byHora = {};
-    recientes.forEach(c => {
-      const key = c.horaRecepcion || 'Sin hora';
-      if (!byHora[key]) byHora[key] = [];
-      byHora[key].push(c);
-    });
-
-    list.innerHTML = `
-      <div style="padding: 20px;">
-        ${Object.entries(byHora).map(([hora, items]) => `
-          <div style="margin-bottom: 20px;">
-            <div style="font-weight: 700; color: #667eea; margin-bottom: 10px;">
-              🕐 Recepcionados a las ${hora}
-            </div>
-            <div style="display: flex; flex-direction: column; gap: 10px;">
-              ${items.map(c => `
-                <div style="padding: 10px; border-left: 3px solid #1e7d34; background: #f0f7f0; border-radius: 4px;">
-                  <div style="font-weight: 600; color: #1c2733;">${c.numero}</div>
-                  <div style="font-size: 12px; color: #5b6b7a; margin-top: 4px;">
-                    ${c.importNum} • ${c.cantidad} un. • ${c.peso} kg
-                  </div>
-                  ${c.horaSalida ? `<div style="font-size: 11px; color: #667eea; margin-top: 4px;">📤 Salida: ${c.horaSalida}</div>` : ''}
-                  <div style="font-size: 11px; color: #999; margin-top: 4px;">
-                    Remitente: ${c.remitente}
-                  </div>
-                </div>
-              `).join('')}
-            </div>
+  // ============ INIT ============
+  function init(container) {
+    if (!container) { console.error('ContendedoresSection.init(): falta container'); return; }
+    root = container;
+    injectStyles();
+    root.innerHTML = `
+      <div class="ci">
+        <div class="ci-head">
+          <div>
+            <h1>📦 Cola de Contenedores</h1>
+            <p>Importaciones desde el Excel Control Contenedores 2026 (límite ${HORA_LIMITE})</p>
           </div>
-        `).join('')}
-      </div>
+          <button class="ci-btn" id="ci-refresh">🔄 Actualizar ahora</button>
+        </div>
+        <div class="ci-kpis" id="ci-kpis"></div>
+        <p class="ci-meta" id="ci-meta">Cargando…</p>
+        <div class="ci-tabs" role="tablist">
+          <button class="ci-tab" data-tab="proximos" role="tab">📅 Próximos</button>
+          <button class="ci-tab" data-tab="todas" role="tab">📋 Todas las importaciones</button>
+        </div>
+        <div id="ci-body"></div>
+      </div>`;
+
+    root.querySelector('#ci-refresh').addEventListener('click', () => cargar(true));
+    root.querySelectorAll('.ci-tab').forEach(b => b.addEventListener('click', () => { tab = b.dataset.tab; render(); }));
+    root.addEventListener('change', onCheck);
+    root.addEventListener('input', e => {
+      if (e.target.id === 'ci-buscar') { filtro = e.target.value; renderTabla(); }
+    });
+
+    cargar(true);
+    clearInterval(timer);
+    timer = setInterval(() => {
+      if (!document.body.contains(root)) { clearInterval(timer); return; } // salió de la sección
+      cargar(false);
+    }, REFRESH_MS);
+  }
+
+  // ============ DATOS ============
+  async function cargar(mostrarCarga) {
+    const metaEl = root.querySelector('#ci-meta');
+    if (mostrarCarga && metaEl) metaEl.textContent = 'Cargando…';
+    try {
+      const res = await fetch(API_URL, { cache: 'no-store' });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || 'Respuesta inválida');
+      rows = data.rows;
+      meta = { hoy: data.hoy, ahora: data.ahora, sync: data.sync };
+      render();
+    } catch (err) {
+      console.error(err);
+      if (metaEl) metaEl.innerHTML = `<span class="ci-err">No se pudieron cargar los datos: ${esc(err.message)}. Revisa API_URL y que el Web App esté implementado con acceso "Cualquier usuario".</span>`;
+    }
+  }
+
+  async function onCheck(e) {
+    const cb = e.target;
+    if (!cb.classList.contains('ci-check')) return;
+    const r = rows.find(x => x.key === cb.dataset.key);
+    if (!r) return;
+    const valor = cb.checked;
+    r.recepWeb = valor; // optimista
+    cb.disabled = true;
+    try {
+      const url = `${API_URL}?action=marcar&key=${encodeURIComponent(r.key)}&valor=${valor ? 1 : 0}`;
+      const data = await (await fetch(url, { cache: 'no-store' })).json();
+      if (!data.ok) throw new Error(data.error);
+      toast(valor ? `${r.contenedor} marcado como recepcionado` : `${r.contenedor} desmarcado`);
+    } catch (err) {
+      r.recepWeb = !valor;
+      toast(`No se guardó ${r.contenedor}: ${err.message}`, true);
+    }
+    render();
+  }
+
+  // ============ CLASIFICACIÓN ============
+  function clasificar() {
+    const hoy = isoToDay(meta.hoy);
+    const dow = (new Date(hoy * 86400000).getUTCDay() + 6) % 7; // 0 = lunes
+    const finSemana = hoy + (6 - dow);
+    const finProx = finSemana + 7;
+    const out = { hoy: [], dias: [], semana: [] };
+
+    rows.filter(r => !recep(r) && fechaRef(r)).forEach(r => {
+      const d = isoToDay(fechaRef(r));
+      const atrasado = d < hoy;
+      if (atrasado || (d === hoy && (!r.hora || r.hora < HORA_LIMITE))) out.hoy.push({ ...r, atrasado });
+      else if (d <= finSemana) out.dias.push(r);
+      else if (d <= finProx) out.semana.push(r);
+    });
+    const orden = (a, b) => (fechaRef(a) + a.hora).localeCompare(fechaRef(b) + b.hora);
+    Object.values(out).forEach(l => l.sort(orden));
+    return out;
+  }
+
+  // ============ RENDER ============
+  function render() {
+    if (!root) return;
+    const g = clasificar();
+    const nRecep = rows.filter(recep).length;
+
+    root.querySelector('#ci-kpis').innerHTML = [
+      ['Hoy (antes ' + HORA_LIMITE + ')', g.hoy.length],
+      ['Próximos días', g.dias.length],
+      ['Próxima semana', g.semana.length],
+      ['✅ Recepcionados', nRecep],
+      ['⏳ Pendientes', rows.length - nRecep]
+    ].map(([l, v]) => `<div class="ci-kpi"><span>${l}</span><strong>${v}</strong></div>`).join('');
+
+    root.querySelector('#ci-meta').textContent =
+      `Última actualización: ${meta.ahora}` + (meta.sync ? ` · ${meta.sync.replace('Sync automático:', 'Excel sincronizado:')}` : '');
+
+    root.querySelectorAll('.ci-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+    const body = root.querySelector('#ci-body');
+
+    if (tab === 'proximos') {
+      body.innerHTML = `<div class="ci-cols">
+        ${panel('📍 Hoy (antes ' + HORA_LIMITE + ')', g.hoy)}
+        ${panel('⏰ Próximos días (esta semana)', g.dias)}
+        ${panel('🗓️ Próxima semana', g.semana)}
+      </div>`;
+    } else {
+      body.innerHTML = `
+        <input id="ci-buscar" class="ci-search" type="search" placeholder="Buscar contenedor, orden, proveedor, material o bodega" value="${esc(filtro)}">
+        <div class="ci-table-wrap" id="ci-tabla"></div>`;
+      renderTabla();
+    }
+  }
+
+  function panel(titulo, lista) {
+    const items = lista.length ? lista.map(r => `
+      <li class="ci-item${r.atrasado ? ' ci-late' : ''}">
+        <input type="checkbox" class="ci-check" data-key="${esc(r.key)}" aria-label="Marcar ${esc(r.contenedor)} como recepcionado">
+        <div>
+          <b>${esc(r.contenedor)}</b>${r.atrasado ? ' <em>atrasado</em>' : ''}
+          <small>${fCorta(fechaRef(r))}${r.hora ? ' ' + esc(r.hora) : ''}${r.llegada ? '' : ' (ETA)'} · ${esc(r.proveedor)}</small>
+          <small>${esc(r.material)} · ${kg(r.peso)}${r.bodega ? ' · ' + esc(r.bodega) : ''}</small>
+        </div>
+      </li>`).join('') : '<li class="ci-empty">Sin contenedores</li>';
+    return `<section class="ci-panel"><h3>${titulo}<span>${lista.length}</span></h3><ul>${items}</ul></section>`;
+  }
+
+  function renderTabla() {
+    const wrap = root && root.querySelector('#ci-tabla');
+    if (!wrap) return;
+    const q = filtro.trim().toUpperCase();
+    const lista = rows
+      .filter(r => !q || [r.contenedor, r.orden, r.proveedor, r.material, r.bodega, r.estado].join(' ').toUpperCase().includes(q))
+      .sort((a, b) => ((fechaRef(b) || '') + b.hora).localeCompare((fechaRef(a) || '') + a.hora) || (Number(b.n) - Number(a.n)));
+
+    wrap.innerHTML = `<table class="ci-table">
+      <thead><tr><th>Recep.</th><th>N°</th><th>Llegada</th><th>Hora</th><th>Proveedor</th><th>N° Orden</th><th>Contenedor</th><th>Material</th><th class="num">Peso</th><th>Bodega</th><th>Estado</th></tr></thead>
+      <tbody>${lista.map(r => {
+        const estado = r.recepExcel ? r.estado : (r.recepWeb ? 'RECEPCIONADO (web)' : (r.estado || 'PENDIENTE'));
+        const check = r.recepExcel
+          ? `<input type="checkbox" checked disabled title="Recepcionado en el Excel">`
+          : `<input type="checkbox" class="ci-check" data-key="${esc(r.key)}" ${r.recepWeb ? 'checked' : ''} title="${r.recepWebFecha ? 'Marcado ' + esc(r.recepWebFecha) : 'Marcar recepcionado'}">`;
+        return `<tr class="${recep(r) ? '' : 'ci-pend'}">
+          <td>${check}</td><td>${esc(r.n)}</td>
+          <td>${r.llegada ? fLarga(r.llegada) : fLarga(r.eta) + (r.eta ? ' (ETA)' : '')}</td>
+          <td>${esc(r.hora) || '—'}</td><td>${esc(r.proveedor)}</td><td>${esc(r.orden)}</td>
+          <td><b>${esc(r.contenedor)}</b></td><td>${esc(r.material)}</td>
+          <td class="num">${kg(r.peso)}</td><td>${esc(r.bodega)}</td><td>${esc(estado)}</td></tr>`;
+      }).join('') || '<tr><td colspan="11" class="ci-empty">No hay importaciones que coincidan con la búsqueda</td></tr>'}
+      </tbody></table>`;
+  }
+
+  // ============ UI ============
+  function toast(msg, error) {
+    const t = document.createElement('div');
+    t.className = 'ci-toast' + (error ? ' ci-toast-err' : '');
+    t.textContent = msg;
+    document.body.appendChild(t);
+    setTimeout(() => t.remove(), 3000);
+  }
+
+  function injectStyles() {
+    if (document.getElementById('ci-styles')) return;
+    const s = document.createElement('style');
+    s.id = 'ci-styles';
+    s.textContent = `
+      .ci{padding:24px;color:#1f2937}
+      .ci-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:20px}
+      .ci-head h1{margin:0;font-size:22px}
+      .ci-head p{margin:4px 0 0;color:#6b7280;font-size:13px}
+      .ci-btn{background:#1e7b34;color:#fff;border:0;border-radius:6px;padding:10px 18px;font-weight:600;cursor:pointer}
+      .ci-btn:hover{background:#17652a}
+      .ci-kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;background:#f5f7fa;padding:14px;border-radius:10px}
+      .ci-kpi{background:#fff;border-left:4px solid #667eea;border-radius:8px;padding:16px}
+      .ci-kpi span{display:block;font-size:12px;color:#6b7280}
+      .ci-kpi strong{display:block;font-size:26px;margin-top:6px}
+      .ci-meta{text-align:center;font-size:12px;color:#6b7280;margin:14px 0}
+      .ci-err{color:#b91c1c}
+      .ci-tabs{display:flex;gap:4px;border-bottom:1px solid #e5e7eb;margin-bottom:18px}
+      .ci-tab{background:none;border:0;border-bottom:3px solid transparent;padding:10px 18px;font-weight:600;color:#6b7280;cursor:pointer}
+      .ci-tab.active{color:#4f5bd5;border-bottom-color:#667eea}
+      .ci-cols{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
+      .ci-panel{background:#fff;border-radius:10px;padding:18px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+      .ci-panel h3{margin:0 0 12px;font-size:15px;display:flex;justify-content:space-between}
+      .ci-panel h3 span{color:#667eea}
+      .ci-panel ul{list-style:none;margin:0;padding:0;max-height:480px;overflow:auto}
+      .ci-item{display:flex;gap:10px;padding:10px 0;border-top:1px solid #f0f1f4}
+      .ci-item small{display:block;color:#6b7280;font-size:12px;margin-top:2px}
+      .ci-item em{color:#b91c1c;font-style:normal;font-size:11px;font-weight:700}
+      .ci-late{background:#fef2f2}
+      .ci-check{width:18px;height:18px;cursor:pointer;accent-color:#1e7b34;flex-shrink:0;margin-top:2px}
+      .ci-empty{color:#9ca3af;text-align:center;padding:30px 0}
+      .ci-search{width:100%;max-width:480px;padding:9px 12px;border:1px solid #d1d5db;border-radius:6px;margin-bottom:12px;font-size:14px}
+      .ci-table-wrap{overflow-x:auto;background:#fff;border-radius:10px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+      .ci-table{width:100%;border-collapse:collapse;font-size:13px}
+      .ci-table th{background:#f5f7fa;text-align:left;padding:10px;position:sticky;top:0;white-space:nowrap}
+      .ci-table td{padding:8px 10px;border-top:1px solid #f0f1f4;white-space:nowrap}
+      .ci-table .num{text-align:right}
+      .ci-pend td{background:#fffbeb}
+      .ci-toast{position:fixed;bottom:24px;right:24px;background:#1e7b34;color:#fff;padding:12px 18px;border-radius:8px;z-index:9999;font-size:14px}
+      .ci-toast-err{background:#b91c1c}
+      button:focus-visible,input:focus-visible{outline:2px solid #667eea;outline-offset:2px}
+      @media (max-width:900px){.ci-kpis{grid-template-columns:repeat(2,1fr)}.ci-cols{grid-template-columns:1fr}.ci-head{flex-direction:column}}
     `;
-  }
-
-  // ============ FILTROS ============
-  function filterHoy() {
-    const now = new Date();
-    const hoy = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const limiteHora = new Date(hoy);
-    limiteHora.setHours(HORA_LIMITE, 0, 0);
-
-    return allContainers.filter(c => {
-      if (c.estado === 'Recepcionado') return false;
-      if (!c.horaSalida) return false;
-      
-      const parts = c.horaSalida.split(' ');
-      if (!parts[1]) return false;
-      
-      const timeParts = parts[1].split(':');
-      const fechaParts = parts[0].split('/');
-      const fecha = new Date(fechaParts[2], fechaParts[1] - 1, fechaParts[0], 
-                             parseInt(timeParts[0]), parseInt(timeParts[1]));
-      
-      return fecha.getTime() === hoy.getTime() || 
-             (fecha >= hoy && fecha < limiteHora);
-    });
-  }
-
-  function filterProximosDias() {
-    const now = new Date();
-    const hoy = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const limiteHora = new Date(hoy);
-    limiteHora.setHours(HORA_LIMITE, 0, 0);
-
-    const finSemana = new Date(hoy);
-    finSemana.setDate(finSemana.getDate() + (7 - hoy.getDay()));
-    finSemana.setHours(23, 59, 59);
-
-    return allContainers.filter(c => {
-      if (c.estado === 'Recepcionado') return false;
-      if (!c.horaSalida) return false;
-      
-      const parts = c.horaSalida.split(' ');
-      if (!parts[1]) return false;
-      
-      const timeParts = parts[1].split(':');
-      const fechaParts = parts[0].split('/');
-      const fecha = new Date(fechaParts[2], fechaParts[1] - 1, fechaParts[0], 
-                             parseInt(timeParts[0]), parseInt(timeParts[1]));
-      
-      return fecha > limiteHora && fecha <= finSemana;
-    });
-  }
-
-  function filterProximaSemana() {
-    const now = new Date();
-    const hoy = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    
-    const inicioSemana = new Date(hoy);
-    inicioSemana.setDate(inicioSemana.getDate() + (8 - hoy.getDay()));
-    inicioSemana.setHours(0, 0, 0);
-
-    const finSemana = new Date(inicioSemana);
-    finSemana.setDate(finSemana.getDate() + 6);
-    finSemana.setHours(23, 59, 59);
-
-    return allContainers.filter(c => {
-      if (c.estado === 'Recepcionado') return false;
-      if (!c.horaSalida) return false;
-      
-      const parts = c.horaSalida.split(' ');
-      if (!parts[1]) return false;
-      
-      const timeParts = parts[1].split(':');
-      const fechaParts = parts[0].split('/');
-      const fecha = new Date(fechaParts[2], fechaParts[1] - 1, fechaParts[0], 
-                             parseInt(timeParts[0]), parseInt(timeParts[1]));
-      
-      return fecha >= inicioSemana && fecha <= finSemana;
-    });
-  }
-
-  // ============ UTILS ============
-  function updateLastRefresh() {
-    const now = new Date();
-    const time = now.toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' });
-    document.getElementById('last-refresh').textContent = `Última actualización: ${time}`;
-  }
-
-  function showError(msg) {
-    const errorDiv = document.getElementById('error-message');
-    if (errorDiv) {
-      errorDiv.textContent = msg;
-      errorDiv.style.display = 'block';
-      setTimeout(() => errorDiv.style.display = 'none', 4000);
-    }
-  }
-
-  function showSuccess(msg) {
-    const successDiv = document.getElementById('success-message');
-    if (successDiv) {
-      successDiv.textContent = msg;
-      successDiv.style.display = 'block';
-      setTimeout(() => successDiv.style.display = 'none', 3000);
-    }
+    document.head.appendChild(s);
   }
 
   return { init };

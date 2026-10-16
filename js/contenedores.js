@@ -15,6 +15,9 @@ const ContendedoresSection = (() => {
   let filtro = '';
   let timer = null;
   let root = null;
+  let lastSig = '';
+  let dashYear = null;
+  let charts = [];
 
   const MESES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
   const esc = s => String(s ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
@@ -44,6 +47,7 @@ const ContendedoresSection = (() => {
         <div class="ci-tabs" role="tablist">
           <button class="ci-tab" data-tab="proximos" role="tab">📅 Próximos</button>
           <button class="ci-tab" data-tab="todas" role="tab">📋 Todas las importaciones</button>
+          <button class="ci-tab" data-tab="dashboard" role="tab">📊 Dashboard</button>
         </div>
         <div id="ci-body"></div>
       </div>`;
@@ -70,8 +74,11 @@ const ContendedoresSection = (() => {
       const res = await fetch(API_URL, { cache: 'no-store' });
       const data = await res.json();
       if (!data.ok) throw new Error(data.error || 'Respuesta inválida');
-      rows = data.rows;
       meta = { hoy: data.hoy, ahora: data.ahora, sync: data.sync };
+      const sig = JSON.stringify(data.rows);
+      if (sig === lastSig && !mostrarCarga) { renderMeta(); return; } // sin cambios: no redibuja
+      lastSig = sig;
+      rows = data.rows;
       render();
     } catch (err) {
       console.error(err);
@@ -125,13 +132,15 @@ const ContendedoresSection = (() => {
       ['⏳ Pendientes', rows.length - nRecep]
     ].map(([l, v]) => `<div class="ci-kpi"><span>${l}</span><strong>${v}</strong></div>`).join('');
 
-    root.querySelector('#ci-meta').textContent =
-      `Última actualización: ${meta.ahora}` + (meta.sync ? ` · ${meta.sync.replace('Sync automático:', 'Excel sincronizado:')}` : '');
+    renderMeta();
 
     root.querySelectorAll('.ci-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
     const body = root.querySelector('#ci-body');
 
-    if (tab === 'proximos') {
+    charts.forEach(c => c.destroy()); charts = [];
+    if (tab === 'dashboard') {
+      renderDashboard(body);
+    } else if (tab === 'proximos') {
       body.innerHTML = `<div class="ci-cols">
         ${panel('📍 Hoy (antes ' + HORA_LIMITE + ')', g.hoy)}
         ${panel('⏰ Próximos días (esta semana)', g.dias)}
@@ -177,6 +186,297 @@ const ContendedoresSection = (() => {
           <td class="num">${kg(r.peso)}</td><td>${esc(r.bodega)}</td><td>${esc(estado)}</td></tr>`;
       }).join('') || '<tr><td colspan="10" class="ci-empty">No hay importaciones que coincidan con la búsqueda</td></tr>'}
       </tbody></table>`;
+  }
+
+  // ============ DASHBOARD ============
+  const MESES_L = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+  const DIAS_SEM = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+  const FERIADOS = new Set([
+    '2025-01-01', '2025-04-18', '2025-05-01', '2025-05-21', '2025-06-20', '2025-07-16', '2025-08-15', '2025-09-18', '2025-09-19', '2025-10-31', '2025-12-08', '2025-12-25',
+    '2026-01-01', '2026-04-03', '2026-05-01', '2026-05-21', '2026-06-29', '2026-07-16', '2026-09-18', '2026-10-12', '2026-12-08', '2026-12-25'
+  ]);
+  const BODEGAS = [
+    { k: 'VIEL', l: 'Viel', c: '#2563eb' },
+    { k: 'ALDUNATE', l: 'Aldunate', c: '#dc2626' },
+    { k: 'SAN FRANCISCO', l: 'San Francisco', c: '#16a34a' },
+    { k: 'CLIENTE', l: 'Cliente', c: '#9333ea' },
+    { k: 'OTRA', l: 'Otra / sin asignar', c: '#9ca3af' }
+  ];
+  const PALETA = ['#2563eb', '#dc2626', '#16a34a', '#9333ea', '#ea580c', '#0891b2', '#ca8a04', '#db2777', '#4f46e5', '#65a30d', '#0d9488', '#9ca3af'];
+  const nf = (n, d = 0) => Number(n || 0).toLocaleString('es-CL', { minimumFractionDigits: d, maximumFractionDigits: d });
+  const normBod = b => { const u = String(b || '').toUpperCase(); const f = BODEGAS.find(x => x.k !== 'OTRA' && u.includes(x.k)); return f ? f.k : 'OTRA'; };
+  const pad = n => String(n).padStart(2, '0');
+
+  function diasLaborales(y, m, hastaIso) {
+    let n = 0;
+    const dim = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+    for (let d = 1; d <= dim; d++) {
+      const iso = `${y}-${pad(m + 1)}-${pad(d)}`;
+      if (hastaIso && iso > hastaIso) break;
+      const w = new Date(Date.UTC(y, m, d)).getUTCDay();
+      if (w !== 0 && w !== 6 && !FERIADOS.has(iso)) n++;
+    }
+    return n;
+  }
+
+  let chartPromise = null;
+  function loadChart() {
+    if (window.Chart) return Promise.resolve();
+    if (!chartPromise) chartPromise = new Promise((res, rej) => {
+      const s = document.createElement('script');
+      s.src = 'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js';
+      s.onload = res;
+      s.onerror = () => { chartPromise = null; rej(new Error('No se pudo cargar la librería de gráficos')); };
+      document.head.appendChild(s);
+    });
+    return chartPromise;
+  }
+
+  function calcDashboard() {
+    const rec = rows.filter(recep).map(r => ({ ...r, f: r.llegada || r.eta, bod: normBod(r.bodega) })).filter(r => r.f);
+    const years = [...new Set(rec.map(r => r.f.slice(0, 4)))].sort().reverse();
+    const yHoy = meta.hoy.slice(0, 4);
+    if (!dashYear || !years.includes(dashYear)) dashYear = years.includes(yHoy) ? yHoy : years[0];
+    const Y = Number(dashYear);
+    const ry = rec.filter(r => r.f.startsWith(dashYear));
+    const esActual = dashYear === yHoy;
+    const mesHoy = Number(meta.hoy.slice(5, 7)) - 1;
+    const mesesTrans = esActual ? mesHoy + 1 : 12;
+
+    const porMes = Array(12).fill(0), kgMes = Array(12).fill(0);
+    const bodMes = {}; BODEGAS.forEach(b => bodMes[b.k] = Array(12).fill(0));
+    const antes = Array(12).fill(0), despues = Array(12).fill(0), sinHora = Array(12).fill(0);
+    const porHora = Array(24).fill(0), porDia = Array(7).fill(0);
+    const prov = {}, mat = {};
+    const puerto = [], puertoMes = Array.from({ length: 12 }, () => []);
+    let conPeso = 0, kgTotal = 0;
+
+    ry.forEach(r => {
+      const m = Number(r.f.slice(5, 7)) - 1;
+      porMes[m]++; kgMes[m] += r.peso; kgTotal += r.peso; if (r.peso > 0) conPeso++;
+      bodMes[r.bod][m]++;
+      const p = prov[r.proveedor || 'Sin proveedor'] = prov[r.proveedor || 'Sin proveedor'] || { n: 0, kg: 0, dias: [] };
+      p.n++; p.kg += r.peso;
+      const mt = mat[r.material || 'Sin material'] = mat[r.material || 'Sin material'] || { n: 0, kg: 0 };
+      mt.n++; mt.kg += r.peso;
+      if (/^\d{2}:\d{2}$/.test(r.hora)) {
+        (r.hora < HORA_LIMITE ? antes : despues)[m]++;
+        porHora[Number(r.hora.slice(0, 2))]++;
+      } else sinHora[m]++;
+      if (r.llegada) porDia[new Date(isoToDay(r.llegada) * 86400000).getUTCDay()]++;
+      if (r.llegada && r.eta) {
+        const d = isoToDay(r.llegada) - isoToDay(r.eta);
+        if (d >= 0 && d <= 90) { puerto.push({ d, r }); puertoMes[m].push(d); p.dias.push(d); }
+      }
+    });
+
+    const dl = Array.from({ length: 12 }, (_, m) => diasLaborales(Y, m));
+    const dlTrans = Array.from({ length: 12 }, (_, m) => diasLaborales(Y, m, esActual ? meta.hoy : null)).reduce((a, b) => a + b, 0);
+    const prom = a => a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0;
+    const mesesActivos = porMes.slice(0, mesesTrans);
+    const maxM = mesesActivos.indexOf(Math.max(...mesesActivos));
+    const minM = mesesActivos.indexOf(Math.min(...mesesActivos));
+    const top = o => Object.entries(o).sort((a, b) => b[1].n - a[1].n);
+    const totBod = BODEGAS.map(b => ({ ...b, n: bodMes[b.k].reduce((x, y) => x + y, 0) })).filter(b => b.n);
+    const conHora = antes.reduce((a, b) => a + b, 0) + despues.reduce((a, b) => a + b, 0);
+    const maxPuerto = puerto.sort((a, b) => b.d - a.d)[0];
+
+    // Pendientes actuales (todas, sin filtro de año)
+    const hoyD = isoToDay(meta.hoy);
+    const pend = { 'Por informar (en puerto)': 0, 'En tránsito (ETA futura)': 0, 'Llegada programada': 0, 'Atrasados': 0, 'Sin fechas': 0 };
+    rows.filter(r => !recep(r)).forEach(r => {
+      if (r.llegada) pend[isoToDay(r.llegada) < hoyD ? 'Atrasados' : 'Llegada programada']++;
+      else if (r.eta) pend[isoToDay(r.eta) <= hoyD ? 'Por informar (en puerto)' : 'En tránsito (ETA futura)']++;
+      else pend['Sin fechas']++;
+    });
+
+    return {
+      years, Y, total: ry.length, kgTotal, conPeso, porMes, kgMes, bodMes, dl, dlTrans, mesesTrans,
+      antes, despues, sinHora, porHora, porDia, prov: top(prov), mat: top(mat), totBod,
+      puertoProm: prom(puerto.map(x => x.d)), puertoN: puerto.length, puertoMes: puertoMes.map(prom), puertoArr: puerto.map(x => x.d),
+      maxPuerto, maxM, minM, conHora, pend
+    };
+  }
+
+  function renderDashboard(body) {
+    if (!rows.length) { body.innerHTML = '<p class="ci-empty">Sin datos todavía</p>'; return; }
+    const D = calcDashboard();
+    if (!D.total) { body.innerHTML = '<p class="ci-empty">No hay contenedores recepcionados para mostrar</p>'; return; }
+    const pctAntes = D.conHora ? D.antes.reduce((a, b) => a + b, 0) / D.conHora * 100 : 0;
+    const bodUsadas = BODEGAS.filter(b => D.bodMes[b.k].some(v => v));
+    const meses = MESES_L.map(m => m.slice(0, 3));
+    const pendTot = Object.values(D.pend).reduce((a, b) => a + b, 0);
+
+    const kpi = (l, v, sub) => `<div class="ci-kpi"><span>${l}</span><strong>${v}</strong>${sub ? `<small>${sub}</small>` : ''}</div>`;
+    const mtxRow = (label, arr, fmt, cls = '', sw = '') =>
+      `<tr class="${cls}"><td>${sw}${label}</td>${arr.map(v => `<td>${fmt(v)}</td>`).join('')}</tr>`;
+    const tot = a => a.reduce((x, y) => x + y, 0);
+
+    body.innerHTML = `
+      <div class="ci-dash-bar">
+        <label>Año <select id="ci-year">${D.years.map(y => `<option ${y === dashYear ? 'selected' : ''}>${y}</option>`).join('')}</select></label>
+        <small>Contenedores con Estado RECEPCIONADO, agrupados por mes de Fecha de Llegada (o ETA si no tiene)</small>
+      </div>
+
+      <div class="ci-kpis ci-kpis-auto">
+        ${kpi('Contenedores recepcionados', nf(D.total))}
+        ${kpi('Toneladas recepcionadas', nf(D.kgTotal / 1000, 1), D.conPeso < D.total ? `${D.total - D.conPeso} sin peso registrado` : '')}
+        ${kpi('Promedio diario', nf(D.total / (D.dlTrans || 1), 2), `${D.dlTrans} días laborales${D.mesesTrans < 12 ? ' a la fecha' : ''}`)}
+        ${kpi('Promedio mensual', nf(D.total / D.mesesTrans, 1), `${D.mesesTrans} meses`)}
+        ${kpi('Días en puerto (prom.)', nf(D.puertoProm, 1), `ETA → Llegada, ${D.puertoN} contenedores`)}
+        ${kpi('Llegadas antes de ' + HORA_LIMITE, nf(pctAntes, 0) + '%', `${D.conHora} con hora registrada`)}
+        ${kpi('Peso promedio', D.conPeso ? nf(D.kgTotal / D.conPeso) + ' kg' : '—', 'por contenedor')}
+        ${kpi('Pendientes hoy', nf(pendTot), 'todos los años')}
+      </div>
+
+      <div class="ci-card" style="margin-top:18px">
+        <h3>Contenedores recepcionados por bodega y mes — ${dashYear}</h3>
+        <div class="ci-table-wrap"><table class="ci-mtx">
+          <thead><tr><th>Bodega</th>${meses.map(m => `<th>${m}</th>`).join('')}<th>Total</th><th>%</th></tr></thead>
+          <tbody>
+            ${bodUsadas.map(b => `<tr><td><span class="ci-sw" style="background:${b.c}"></span>${b.l}</td>${D.bodMes[b.k].map(v => `<td>${v || ''}</td>`).join('')}<td class="tot">${tot(D.bodMes[b.k])}</td><td class="tot">${nf(tot(D.bodMes[b.k]) / D.total * 100, 1)}%</td></tr>`).join('')}
+            <tr class="sum"><td>Total contenedores</td>${D.porMes.map(v => `<td>${v}</td>`).join('')}<td>${D.total}</td><td>100%</td></tr>
+            <tr><td>Días laborales</td>${D.dl.map(v => `<td>${v}</td>`).join('')}<td class="tot">${tot(D.dl)}</td><td></td></tr>
+            <tr><td>Contenedores diarios</td>${D.porMes.map((v, m) => `<td>${nf(v / D.dl[m], 2)}</td>`).join('')}<td class="tot">${nf(D.total / (D.dlTrans || 1), 2)}</td><td></td></tr>
+            <tr><td>Toneladas</td>${D.kgMes.map(v => `<td>${v ? nf(v / 1000, 1) : ''}</td>`).join('')}<td class="tot">${nf(D.kgTotal / 1000, 1)}</td><td></td></tr>
+            <tr><td>Días en puerto (prom.)</td>${D.puertoMes.map(v => `<td>${v ? nf(v, 1) : ''}</td>`).join('')}<td class="tot">${nf(D.puertoProm, 1)}</td><td></td></tr>
+          </tbody>
+        </table></div>
+      </div>
+
+      <div class="ci-grid2">
+        <div class="ci-card"><h3>Contenedores y toneladas por mes</h3><div class="ci-chart"><canvas id="ch-mes"></canvas></div></div>
+        <div class="ci-card"><h3>Distribución por bodega</h3><div class="ci-chart"><canvas id="ch-bod"></canvas></div></div>
+
+        <div class="ci-card"><h3>Contenedores por bodega cada mes</h3><div class="ci-chart"><canvas id="ch-bodmes"></canvas></div></div>
+        <div class="ci-card"><h3>Datos destacados — ${dashYear}</h3>
+          <div class="ci-ins">
+            <div><span>Mes con más actividad</span><strong>${MESES_L[D.maxM]} (${D.porMes[D.maxM]})</strong></div>
+            <div><span>Mes con menos actividad</span><strong>${MESES_L[D.minM]} (${D.porMes[D.minM]})</strong></div>
+            <div><span>Proveedor principal</span><strong>${esc(D.prov[0][0])} (${D.prov[0][1].n})</strong></div>
+            <div><span>Material principal</span><strong>${esc(D.mat[0][0])} (${D.mat[0][1].n})</strong></div>
+            <div><span>Bodega principal</span><strong>${D.totBod.sort((a, b) => b.n - a.n)[0].l} (${nf(D.totBod[0].n / D.total * 100, 0)}%)</strong></div>
+            <div><span>Mayor tiempo en puerto</span><strong>${D.maxPuerto ? `${D.maxPuerto.d} días (${esc(D.maxPuerto.r.contenedor)})` : '—'}</strong></div>
+            <div><span>Proveedores distintos</span><strong>${D.prov.length}</strong></div>
+            <div><span>Materiales distintos</span><strong>${D.mat.length}</strong></div>
+          </div>
+        </div>
+
+        <div class="ci-card"><h3>Toneladas por proveedor</h3><div class="ci-chart"><canvas id="ch-prov"></canvas></div></div>
+        <div class="ci-card"><h3>Resumen por proveedor</h3>
+          <div class="ci-table-wrap"><table class="ci-mtx">
+            <thead><tr><th>Proveedor</th><th>Cont.</th><th>%</th><th>Toneladas</th><th>Días puerto</th></tr></thead>
+            <tbody>${D.prov.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${v.n}</td><td>${nf(v.n / D.total * 100, 1)}%</td><td>${nf(v.kg / 1000, 1)}</td><td>${v.dias.length ? nf(v.dias.reduce((a, b) => a + b, 0) / v.dias.length, 1) : '—'}</td></tr>`).join('')}</tbody>
+          </table></div>
+        </div>
+
+        <div class="ci-card"><h3>Materiales más recepcionados</h3><p class="ci-sub">Top 12 por cantidad de contenedores</p><div class="ci-chart"><canvas id="ch-mat"></canvas></div></div>
+        <div class="ci-card"><h3>Toneladas por material</h3><p class="ci-sub">Top 12 por peso</p><div class="ci-chart"><canvas id="ch-matkg"></canvas></div></div>
+
+        <div class="ci-card"><h3>Hora de llegada por mes</h3><p class="ci-sub">Antes y después de las ${HORA_LIMITE}</p><div class="ci-chart"><canvas id="ch-hora"></canvas></div></div>
+        <div class="ci-card"><h3>Llegadas por hora del día</h3><div class="ci-chart"><canvas id="ch-horadia"></canvas></div></div>
+
+        <div class="ci-card"><h3>Días en puerto promedio por mes</h3><p class="ci-sub">Desde la ETA hasta la Fecha de Llegada a bodega</p><div class="ci-chart"><canvas id="ch-puerto"></canvas></div></div>
+        <div class="ci-card"><h3>Distribución de días en puerto</h3><div class="ci-chart"><canvas id="ch-puertodist"></canvas></div></div>
+
+        <div class="ci-card"><h3>Llegadas por día de la semana</h3><div class="ci-chart"><canvas id="ch-dia"></canvas></div></div>
+        <div class="ci-card"><h3>Pendientes actuales</h3><p class="ci-sub">Todo lo que aún no figura como RECEPCIONADO en el Excel</p><div class="ci-chart"><canvas id="ch-pend"></canvas></div></div>
+      </div>`;
+
+    body.querySelector('#ci-year').addEventListener('change', e => { dashYear = e.target.value; render(); });
+
+    loadChart().then(() => {
+      if (tab !== 'dashboard' || !document.body.contains(body)) return;
+      dibujar(D, meses);
+    }).catch(err => {
+      body.insertAdjacentHTML('afterbegin', `<p class="ci-err">${esc(err.message)}</p>`);
+    });
+  }
+
+  function dibujar(D, meses) {
+    const mk = (id, cfg) => { const el = root.querySelector('#' + id); if (el) charts.push(new Chart(el, cfg)); };
+    const base = { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom', labels: { boxWidth: 12 } } } };
+    const sinLeyenda = { ...base, plugins: { legend: { display: false } } };
+    const pct = (v, t) => t ? ` (${nf(v / t * 100, 1)}%)` : '';
+    const dona = (labels, data, colors, unidad) => ({
+      type: 'doughnut',
+      data: { labels, datasets: [{ data, backgroundColor: colors, borderWidth: 1 }] },
+      options: {
+        ...base, cutout: '55%',
+        plugins: {
+          legend: { position: 'right', labels: { boxWidth: 12, generateLabels: ch => {
+            const t = data.reduce((a, b) => a + b, 0);
+            return labels.map((l, i) => ({ text: `${l}${pct(data[i], t)}`, fillStyle: colors[i], strokeStyle: colors[i], index: i }));
+          } } },
+          tooltip: { callbacks: { label: c => `${c.label}: ${nf(c.raw, unidad === 't' ? 1 : 0)}${unidad === 't' ? ' t' : ''}` } }
+        }
+      }
+    });
+
+    mk('ch-mes', {
+      data: {
+        labels: meses,
+        datasets: [
+          { type: 'bar', label: 'Contenedores', data: D.porMes, backgroundColor: '#2563eb', yAxisID: 'y' },
+          { type: 'line', label: 'Toneladas', data: D.kgMes.map(v => +(v / 1000).toFixed(1)), borderColor: '#ea580c', backgroundColor: '#ea580c', tension: .3, yAxisID: 'y1' }
+        ]
+      },
+      options: { ...base, scales: { y: { beginAtZero: true, title: { display: true, text: 'Contenedores' } }, y1: { beginAtZero: true, position: 'right', grid: { drawOnChartArea: false }, title: { display: true, text: 'Toneladas' } } } }
+    });
+
+    const tb = D.totBod;
+    mk('ch-bod', dona(tb.map(b => b.l), tb.map(b => b.n), tb.map(b => b.c)));
+
+    mk('ch-bodmes', {
+      type: 'bar',
+      data: { labels: meses, datasets: BODEGAS.filter(b => D.bodMes[b.k].some(v => v)).map(b => ({ label: b.l, data: D.bodMes[b.k], backgroundColor: b.c })) },
+      options: { ...base, scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true } } }
+    });
+
+    const pv = D.prov.filter(([, v]) => v.kg > 0);
+    mk('ch-prov', dona(pv.map(p => p[0]), pv.map(p => +(p[1].kg / 1000).toFixed(1)), pv.map((_, i) => PALETA[i % PALETA.length]), 't'));
+
+    const m12 = D.mat.slice(0, 12);
+    mk('ch-mat', { type: 'bar', data: { labels: m12.map(m => m[0]), datasets: [{ label: 'Contenedores', data: m12.map(m => m[1].n), backgroundColor: '#0891b2' }] }, options: { ...sinLeyenda, indexAxis: 'y' } });
+    const mkg = [...D.mat].sort((a, b) => b[1].kg - a[1].kg).filter(m => m[1].kg > 0).slice(0, 12);
+    mk('ch-matkg', { type: 'bar', data: { labels: mkg.map(m => m[0]), datasets: [{ label: 'Toneladas', data: mkg.map(m => +(m[1].kg / 1000).toFixed(1)), backgroundColor: '#ea580c' }] }, options: { ...sinLeyenda, indexAxis: 'y' } });
+
+    mk('ch-hora', {
+      type: 'bar',
+      data: {
+        labels: meses, datasets: [
+          { label: 'Antes de ' + HORA_LIMITE, data: D.antes, backgroundColor: '#16a34a' },
+          { label: 'Después de ' + HORA_LIMITE, data: D.despues, backgroundColor: '#ca8a04' },
+          { label: 'Sin hora', data: D.sinHora, backgroundColor: '#d1d5db' }
+        ]
+      },
+      options: { ...base, scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true } } }
+    });
+
+    const h0 = D.porHora.findIndex(v => v), h1 = 23 - [...D.porHora].reverse().findIndex(v => v);
+    const horas = h0 < 0 ? [] : Array.from({ length: h1 - h0 + 1 }, (_, i) => h0 + i);
+    mk('ch-horadia', {
+      type: 'bar',
+      data: { labels: horas.map(h => pad(h) + ':00'), datasets: [{ label: 'Contenedores', data: horas.map(h => D.porHora[h]), backgroundColor: horas.map(h => pad(h) + ':00' < HORA_LIMITE ? '#16a34a' : '#ca8a04') }] },
+      options: sinLeyenda
+    });
+
+    mk('ch-puerto', { type: 'bar', data: { labels: meses, datasets: [{ label: 'Días promedio', data: D.puertoMes.map(v => +v.toFixed(1)), backgroundColor: '#9333ea' }] }, options: { ...sinLeyenda, scales: { y: { beginAtZero: true, title: { display: true, text: 'Días' } } } } });
+
+    const tramos = [['0–2', 0, 2], ['3–5', 3, 5], ['6–10', 6, 10], ['11–15', 11, 15], ['16–30', 16, 30], ['+30', 31, 999]];
+    mk('ch-puertodist', { type: 'bar', data: { labels: tramos.map(t => t[0] + ' días'), datasets: [{ label: 'Contenedores', data: tramos.map(([, a, b]) => D.puertoArr.filter(d => d >= a && d <= b).length), backgroundColor: '#4f46e5' }] }, options: sinLeyenda });
+
+    const ordenDias = [1, 2, 3, 4, 5, 6, 0];
+    mk('ch-dia', { type: 'bar', data: { labels: ordenDias.map(d => DIAS_SEM[d]), datasets: [{ label: 'Contenedores', data: ordenDias.map(d => D.porDia[d]), backgroundColor: '#0d9488' }] }, options: sinLeyenda });
+
+    const pe = Object.entries(D.pend).filter(([, v]) => v);
+    mk('ch-pend', dona(pe.map(p => p[0]), pe.map(p => p[1]), pe.map(([k]) => ({ 'Por informar (en puerto)': '#ca8a04', 'En tránsito (ETA futura)': '#2563eb', 'Llegada programada': '#16a34a', 'Atrasados': '#dc2626', 'Sin fechas': '#9ca3af' }[k]))));
+  }
+
+  function renderMeta() {
+    const el = root && root.querySelector('#ci-meta');
+    if (el) el.textContent = `Última actualización: ${meta.ahora}` +
+      (meta.sync ? ` · ${meta.sync.replace('Sync automático:', 'Excel sincronizado:')}` : '');
   }
 
   // ============ UI ============
@@ -231,7 +531,29 @@ const ContendedoresSection = (() => {
       .ci-toast{position:fixed;bottom:24px;right:24px;background:#1e7b34;color:#fff;padding:12px 18px;border-radius:8px;z-index:9999;font-size:14px}
       .ci-toast-err{background:#b91c1c}
       button:focus-visible,input:focus-visible{outline:2px solid #667eea;outline-offset:2px}
-      @media (max-width:900px){.ci-kpis{grid-template-columns:repeat(2,1fr)}.ci-cols{grid-template-columns:1fr}.ci-head{flex-direction:column}}
+      .ci-kpis-auto{grid-template-columns:repeat(auto-fit,minmax(170px,1fr))}
+      .ci-kpi small{display:block;font-size:11px;color:#9ca3af;margin-top:4px}
+      .ci-dash-bar{display:flex;align-items:center;gap:14px;margin-bottom:14px;font-size:14px;flex-wrap:wrap}
+      .ci-dash-bar select{padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;margin-left:6px}
+      .ci-dash-bar small{color:#6b7280}
+      .ci-mtx{width:100%;border-collapse:collapse;font-size:13px}
+      .ci-mtx th,.ci-mtx td{padding:7px 8px;border:1px solid #eef0f3;text-align:center;white-space:nowrap}
+      .ci-mtx th{background:#f5f7fa}
+      .ci-mtx td:first-child,.ci-mtx th:first-child{text-align:left;font-weight:600}
+      .ci-mtx .tot{font-weight:700;background:#f5f7fa}
+      .ci-mtx tr.sum td{font-weight:700;background:#eef2ff}
+      .ci-sw{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px}
+      .ci-grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:18px}
+      .ci-card{background:#fff;border-radius:10px;padding:18px;box-shadow:0 1px 3px rgba(0,0,0,.08);min-width:0}
+      .ci-card h3{margin:0 0 12px;font-size:15px}
+      .ci-card .ci-sub{margin:-8px 0 12px;font-size:12px;color:#6b7280}
+      .ci-card .ci-table-wrap{box-shadow:none;max-height:300px;overflow:auto}
+      .ci-chart{position:relative;height:290px}
+      .ci-ins{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+      .ci-ins div{background:#f5f7fa;border-radius:8px;padding:12px}
+      .ci-ins span{display:block;font-size:12px;color:#6b7280}
+      .ci-ins strong{display:block;font-size:15px;margin-top:4px}
+      @media (max-width:900px){.ci-kpis{grid-template-columns:repeat(2,1fr)}.ci-cols{grid-template-columns:1fr}.ci-head{flex-direction:column}.ci-grid2,.ci-ins{grid-template-columns:1fr}}
     `;
     document.head.appendChild(s);
   }

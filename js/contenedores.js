@@ -109,11 +109,23 @@ const ContendedoresSection = (() => {
     const out = { hoy: [], dias: [], semana: [] };
 
     rows.filter(r => !recep(r) && fechaRef(r)).forEach(r => {
-      const d = isoToDay(fechaRef(r));
-      const atrasado = d < hoy;
-      if (atrasado || (d === hoy && (!r.hora || r.hora < HORA_LIMITE))) out.hoy.push({ ...r, atrasado });
-      else if (d <= finSemana) out.dias.push(r);
-      else if (d <= finProx) out.semana.push(r);
+      if (r.llegada) {
+        const dl = isoToDay(r.llegada);
+        // HOY: llega hoy antes del límite, o llegada pasada sin recepcionar
+        if (dl < hoy) return out.hoy.push({ ...r, tag: 'atrasado', tagCls: 'late' });
+        if (dl === hoy && (!r.hora || r.hora < HORA_LIMITE)) return out.hoy.push(r);
+        // Llega hoy después del límite o mañana -> "Mañana"
+        const tag = (dl === hoy || dl === hoy + 1) ? { tag: 'mañana', tagCls: 'next' } : {};
+        if (dl === hoy || dl <= finSemana) return out.dias.push({ ...r, ...tag });
+        if (dl <= finProx) return out.semana.push({ ...r, ...tag });
+        return;
+      }
+      // Sin Fecha de Llegada: se usa la ETA
+      const d = isoToDay(r.eta);
+      // ETA hoy o pasada = ya está en puerto, falta que informen la salida
+      if (d <= hoy) return out.dias.push({ ...r, tag: 'por informar', tagCls: 'pend' });
+      if (d <= finSemana) return out.dias.push(r);
+      if (d <= finProx) return out.semana.push(r);
     });
     const orden = (a, b) => (fechaRef(a) + a.hora).localeCompare(fechaRef(b) + b.hora);
     Object.values(out).forEach(l => l.sort(orden));
@@ -156,10 +168,10 @@ const ContendedoresSection = (() => {
 
   function panel(titulo, lista) {
     const items = lista.length ? lista.map(r => `
-      <li class="ci-item${r.atrasado ? ' ci-late' : ''}">
+      <li class="ci-item${r.tagCls === 'late' ? ' ci-late' : ''}">
         <input type="checkbox" class="ci-check" data-key="${esc(r.key)}" aria-label="Marcar ${esc(r.contenedor)} como recepcionado">
         <div>
-          <b>${esc(r.contenedor)}</b>${r.atrasado ? ' <em>atrasado</em>' : ''}
+          <b>${esc(r.contenedor)}</b>${r.tag ? ` <em class="ci-tag ci-tag-${r.tagCls}">${r.tag}</em>` : ''}
           <small>${fCorta(fechaRef(r))}${r.hora ? ' ' + esc(r.hora) : ''}${r.llegada ? '' : ' (ETA)'} · ${esc(r.proveedor)}</small>
           <small>${esc(r.material)} · ${kg(r.peso)}${r.bodega ? ' · ' + esc(r.bodega) : ''}</small>
         </div>
@@ -228,7 +240,10 @@ const ContendedoresSection = (() => {
       .ci-panel ul{list-style:none;margin:0;padding:0;max-height:480px;overflow:auto}
       .ci-item{display:flex;gap:10px;padding:10px 0;border-top:1px solid #f0f1f4}
       .ci-item small{display:block;color:#6b7280;font-size:12px;margin-top:2px}
-      .ci-item em{color:#b91c1c;font-style:normal;font-size:11px;font-weight:700}
+      .ci-tag{font-style:normal;font-size:11px;font-weight:700;padding:1px 7px;border-radius:10px;margin-left:4px}
+      .ci-tag-late{color:#b91c1c;background:#fee2e2}
+      .ci-tag-pend{color:#92400e;background:#fef3c7}
+      .ci-tag-next{color:#1e40af;background:#dbeafe}
       .ci-late{background:#fef2f2}
       .ci-check{width:18px;height:18px;cursor:pointer;accent-color:#1e7b34;flex-shrink:0;margin-top:2px}
       .ci-empty{color:#9ca3af;text-align:center;padding:30px 0}

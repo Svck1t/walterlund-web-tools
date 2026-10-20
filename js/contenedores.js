@@ -72,7 +72,7 @@ const ContendedoresSection = (() => {
     cargar(true);
     clearInterval(timer);
     timer = setInterval(() => {
-      if (!document.body.contains(root)) { clearInterval(timer); return; } // salió de la sección
+      if (!root.querySelector('.ci')) { clearInterval(timer); return; } // salió de la sección
       cargar(false);
     }, REFRESH_MS);
   }
@@ -463,14 +463,15 @@ const ContendedoresSection = (() => {
 
   function dibujar(D, meses) {
     const mk = (id, cfg) => { const el = root.querySelector('#' + id); if (el) charts.push(new Chart(el, cfg)); };
-    const base = { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom', labels: { boxWidth: 12 } } } };
-    const sinLeyenda = { ...base, plugins: { legend: { display: false } } };
+    // Funciones (no objetos compartidos): Chart.js escribe "scales" dentro del objeto de opciones que recibe
+    const baseF = () => ({ responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom', labels: { boxWidth: 12 } } } });
+    const sinLeyendaF = () => ({ ...baseF(), plugins: { legend: { display: false } } });
     const pct = (v, t) => t ? ` (${nf(v / t * 100, 1)}%)` : '';
     const dona = (labels, data, colors, unidad) => ({
       type: 'doughnut',
       data: { labels, datasets: [{ data, backgroundColor: colors, borderWidth: 1 }] },
       options: {
-        ...base, cutout: '55%',
+        ...baseF(), cutout: '55%',
         plugins: {
           legend: { position: esMovil() ? 'bottom' : 'right', labels: { boxWidth: 12, generateLabels: ch => {
             const t = data.reduce((a, b) => a + b, 0);
@@ -489,7 +490,7 @@ const ContendedoresSection = (() => {
           { type: 'line', label: 'Toneladas', data: D.kgMes.map(v => v ? +(v / 1000).toFixed(1) : null), spanGaps: false, borderColor: '#ea580c', backgroundColor: '#ea580c', tension: .3, yAxisID: 'y1' }
         ]
       },
-      options: { ...base, scales: { y: { beginAtZero: true, title: { display: true, text: 'Contenedores' } }, y1: { beginAtZero: true, position: 'right', grid: { drawOnChartArea: false }, title: { display: true, text: 'Toneladas' } } } }
+      options: { ...baseF(), scales: { y: { beginAtZero: true, title: { display: true, text: 'Contenedores' } }, y1: { beginAtZero: true, position: 'right', grid: { drawOnChartArea: false }, title: { display: true, text: 'Toneladas' } } } }
     });
 
     const tb = D.totBod;
@@ -498,16 +499,16 @@ const ContendedoresSection = (() => {
     mk('ch-bodmes', {
       type: 'bar',
       data: { labels: meses, datasets: BODEGAS.filter(b => D.bodMes[b.k].some(v => v)).map(b => ({ label: b.l, data: D.bodMes[b.k], backgroundColor: b.c })) },
-      options: { ...base, scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true } } }
+      options: { ...baseF(), scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true } } }
     });
 
     const pv = D.prov.filter(([, v]) => v.kg > 0);
     mk('ch-prov', dona(pv.map(p => p[0]), pv.map(p => +(p[1].kg / 1000).toFixed(1)), pv.map((_, i) => PALETA[i % PALETA.length]), 't'));
 
     const m12 = D.mat.slice(0, 12);
-    mk('ch-mat', { type: 'bar', data: { labels: m12.map(m => corto(m[0])), datasets: [{ label: 'Contenedores', data: m12.map(m => m[1].n), backgroundColor: '#0891b2' }] }, options: { ...sinLeyenda, indexAxis: 'y' } });
+    mk('ch-mat', { type: 'bar', data: { labels: m12.map(m => corto(m[0])), datasets: [{ label: 'Contenedores', data: m12.map(m => m[1].n), backgroundColor: '#0891b2' }] }, options: { ...sinLeyendaF(), indexAxis: 'y' } });
     const mkg = [...D.mat].sort((a, b) => b[1].kg - a[1].kg).filter(m => m[1].kg > 0).slice(0, 12);
-    mk('ch-matkg', { type: 'bar', data: { labels: mkg.map(m => corto(m[0])), datasets: [{ label: 'Toneladas', data: mkg.map(m => +(m[1].kg / 1000).toFixed(1)), backgroundColor: '#ea580c' }] }, options: { ...sinLeyenda, indexAxis: 'y' } });
+    mk('ch-matkg', { type: 'bar', data: { labels: mkg.map(m => corto(m[0])), datasets: [{ label: 'Toneladas', data: mkg.map(m => +(m[1].kg / 1000).toFixed(1)), backgroundColor: '#ea580c' }] }, options: { ...sinLeyendaF(), indexAxis: 'y' } });
 
     mk('ch-hora', {
       type: 'bar',
@@ -518,7 +519,7 @@ const ContendedoresSection = (() => {
           { label: 'Sin hora', data: D.sinHora, backgroundColor: '#d1d5db' }
         ]
       },
-      options: { ...base, scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true } } }
+      options: { ...baseF(), scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true } } }
     });
 
     const h0 = D.porHora.findIndex(v => v), h1 = 23 - [...D.porHora].reverse().findIndex(v => v);
@@ -526,16 +527,16 @@ const ContendedoresSection = (() => {
     mk('ch-horadia', {
       type: 'bar',
       data: { labels: horas.map(h => pad(h) + ':00'), datasets: [{ label: 'Contenedores', data: horas.map(h => D.porHora[h]), backgroundColor: horas.map(h => pad(h) + ':00' < HORA_LIMITE ? '#16a34a' : '#ca8a04') }] },
-      options: sinLeyenda
+      options: sinLeyendaF()
     });
 
-    mk('ch-puerto', { type: 'bar', data: { labels: meses, datasets: [{ label: 'Días promedio', data: D.puertoMes.map(v => +v.toFixed(1)), backgroundColor: '#9333ea' }] }, options: { ...sinLeyenda, scales: { y: { beginAtZero: true, title: { display: true, text: 'Días' } } } } });
+    mk('ch-puerto', { type: 'bar', data: { labels: meses, datasets: [{ label: 'Días promedio', data: D.puertoMes.map(v => +v.toFixed(1)), backgroundColor: '#9333ea' }] }, options: { ...sinLeyendaF(), scales: { y: { beginAtZero: true, title: { display: true, text: 'Días' } } } } });
 
     const tramos = [['0–2', 0, 2], ['3–5', 3, 5], ['6–10', 6, 10], ['11–15', 11, 15], ['16–30', 16, 30], ['+30', 31, 999]];
-    mk('ch-puertodist', { type: 'bar', data: { labels: tramos.map(t => t[0] + ' días'), datasets: [{ label: 'Contenedores', data: tramos.map(([, a, b]) => D.puertoArr.filter(d => d >= a && d <= b).length), backgroundColor: '#4f46e5' }] }, options: sinLeyenda });
+    mk('ch-puertodist', { type: 'bar', data: { labels: tramos.map(t => t[0] + ' días'), datasets: [{ label: 'Contenedores', data: tramos.map(([, a, b]) => D.puertoArr.filter(d => d >= a && d <= b).length), backgroundColor: '#4f46e5' }] }, options: sinLeyendaF() });
 
     const ordenDias = [1, 2, 3, 4, 5, 6, 0];
-    mk('ch-dia', { type: 'bar', data: { labels: ordenDias.map(d => DIAS_SEM[d]), datasets: [{ label: 'Contenedores', data: ordenDias.map(d => D.porDia[d]), backgroundColor: '#0d9488' }] }, options: sinLeyenda });
+    mk('ch-dia', { type: 'bar', data: { labels: ordenDias.map(d => DIAS_SEM[d]), datasets: [{ label: 'Contenedores', data: ordenDias.map(d => D.porDia[d]), backgroundColor: '#0d9488' }] }, options: sinLeyendaF() });
 
     const pe = Object.entries(D.pend).filter(([, v]) => v);
     mk('ch-pend', dona(pe.map(p => p[0]), pe.map(p => p[1]), pe.map(([k]) => ({ 'Por informar (en puerto)': '#ca8a04', 'En tránsito (ETA futura)': '#2563eb', 'Llegada programada': '#16a34a', 'Atrasados': '#dc2626', 'Sin fechas': '#9ca3af' }[k]))));

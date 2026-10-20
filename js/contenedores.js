@@ -203,7 +203,7 @@ const ContendedoresSection = (() => {
     if (!wrap) return;
     const q = filtro.trim().toUpperCase();
     const lista = rows
-      .filter(r => !q || [r.contenedor, r.orden, r.proveedor, r.material, r.bodega, estadoDe(r)].join(' ').toUpperCase().includes(q))
+      .filter(r => !q || [r.contenedor, r.orden, r.proveedor, r.material, r.detalle, r.bodega, estadoDe(r)].join(' ').toUpperCase().includes(q))
       .sort((a, b) =>
         ordenEstado(estadoDe(a)) - ordenEstado(estadoDe(b)) ||
         ((fechaRef(b) || '') + b.hora).localeCompare((fechaRef(a) || '') + a.hora) ||
@@ -228,7 +228,7 @@ const ContendedoresSection = (() => {
           <td class="c-prov">${esc(r.proveedor) || '—'}</td>
           <td class="c-orden">${esc(r.orden)}</td>
           <td class="c-cont"><b>${esc(r.contenedor)}</b></td>
-          <td class="c-mat" title="${esc(r.material)}">${esc(r.material)}</td>
+          <td class="c-mat" title="${esc(r.detalle || r.material)}">${esc(r.material)}</td>
           <td class="c-peso num">${kg(r.peso)}</td>
           <td class="c-bod">${r.bodega ? `<span class="ci-bod${bc ? ' ci-bod-' + bc : ''}">${esc(r.bodega)}</span>` : '—'}</td>
           <td class="c-est"><span class="ci-est ci-est-${ordenEstado(estado)}">${esc(estado)}</span></td></tr>`;

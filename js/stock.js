@@ -12,6 +12,17 @@ const StockSection = (() => {
   let searchMode = 'contains';
   let soloConStock = true;
 
+  // Peso unitario y nombre de familia: el export en vivo no los trae, salen del
+  // informe Softland "Stock Acumulado Valorizado" (data/productos-pesos.json)
+  const PESOS_URL = 'data/productos-pesos.json';
+  let maestro = null;          // { grupos: {cod: nombre}, productos: {cod: kg} }
+
+  // Bodegas visibles (se recuerda en este navegador). Por defecto se ocultan las de poco movimiento.
+  const KEY_BODEGAS = 'wl_stock_bodegas_ocultas';
+  let ocultas = new Set(['SAN IGNACIO', 'SANTIAGO CONCHA']);
+  try { const g = JSON.parse(localStorage.getItem(KEY_BODEGAS)); if (Array.isArray(g)) ocultas = new Set(g); } catch (_) {}
+  const guardarOcultas = () => { try { localStorage.setItem(KEY_BODEGAS, JSON.stringify([...ocultas])); } catch (_) {} };
+
   // Nombres cortos para las columnas de bodega del export web
   const NOMBRE_BODEGA = {
     'SAN IGNACIO': 'San Ignacio', 'SAN FRANCISCO 918': 'SF 918', 'VIEL': 'Viel',
@@ -81,7 +92,9 @@ const StockSection = (() => {
         </div>`;
     }
 
-    const bodegas = records[0].bodegas ? Object.keys(records[0].bodegas) : null;
+    const todas = records[0].bodegas ? Object.keys(records[0].bodegas) : null;
+    const bodegas = todas ? todas.filter(b => !ocultas.has(b.toUpperCase())) : null;
+    const kg = r => r.pesoUnitario == null ? '<td class="num cero">—</td>' : `<td class="num kg">${num(r.pesoUnitario)}</td>`;
     const conteo = `<div class="results-count">${records.length.toLocaleString('es-CL')} producto(s) encontrado(s)</div>`;
 
     // Formato export web: stock por bodega + reservas + disponible
@@ -90,18 +103,22 @@ const StockSection = (() => {
         <tr>
           <td class="cod">${r.codProducto}</td>
           <td class="desc">${r.producto} <span class="um">${r.unidadMedida}</span></td>
+          ${kg(r)}
           ${bodegas.map(b => celda(r.bodegas[b] ?? 0)).join('')}
           ${celda(r.stockTotal, 'total')}
           ${r.reservas == null ? '' : celda(r.reservas, 'reserva')}
           ${r.disponible == null ? '' : celda(r.disponible, 'disp')}
         </tr>`).join('');
-      return `${conteo}
+      const chips = todas.map(b => `<label class="bod-chip${ocultas.has(b.toUpperCase()) ? '' : ' on'}">
+          <input type="checkbox" data-bodega="${b}" ${ocultas.has(b.toUpperCase()) ? '' : 'checked'}> ${corto(b)}</label>`).join('');
+      return `<div class="results-head">${conteo}<div class="bod-chips"><span>Bodegas:</span>${chips}</div></div>
         <div class="table-scroll">
           <table class="data-table stock-bodegas">
             <thead>
               <tr>
                 <th>Código</th>
                 <th>Descripción</th>
+                <th class="num" title="Peso unitario según informe Softland">Kg unit.</th>
                 ${bodegas.map(b => `<th class="num">${corto(b)}</th>`).join('')}
                 <th class="num">General</th>
                 ${records[0].reservas == null ? '' : '<th class="num">Reservas</th>'}
@@ -146,8 +163,10 @@ const StockSection = (() => {
     const select = document.getElementById('familiaSelect');
     if (!select) return;
     const familias = [...new Set(allRecords.map(r => r.grupo).filter(Boolean))].sort();
+    const nombre = f => (maestro && maestro.grupos[f]) ? `${f} — ${maestro.grupos[f]}` : f;
+    const actual = select.value;
     select.innerHTML = '<option value="">Todas</option>' +
-      familias.map(f => `<option value="${f}">${f}</option>`).join('');
+      familias.map(f => `<option value="${f}"${f === actual ? ' selected' : ''}>${nombre(f)}</option>`).join('');
   }
 
   function runSearch() {
@@ -159,7 +178,10 @@ const StockSection = (() => {
       results = results.filter(r => r.grupo === familia);
     }
     if (soloConStock) {
-      results = results.filter(r => r.stockTotal !== 0 || (r.bodegas && Object.values(r.bodegas).some(v => v !== 0)));
+      // Con detalle por bodega, cuenta solo las bodegas visibles
+      results = results.filter(r => r.bodegas
+        ? Object.entries(r.bodegas).some(([b, v]) => v !== 0 && !ocultas.has(b.toUpperCase()))
+        : r.stockTotal !== 0);
     }
 
     document.getElementById('resultsPanel').innerHTML = renderResults(results, allRecords.length === 0);
@@ -173,6 +195,14 @@ const StockSection = (() => {
     });
 
     document.getElementById('familiaSelect').addEventListener('change', runSearch);
+
+    document.getElementById('resultsPanel').addEventListener('change', (e) => {
+      const b = e.target.dataset && e.target.dataset.bodega;
+      if (!b) return;
+      if (e.target.checked) ocultas.delete(b.toUpperCase()); else ocultas.add(b.toUpperCase());
+      guardarOcultas();
+      runSearch();
+    });
 
     document.getElementById('soloConStock').addEventListener('change', (e) => {
       soloConStock = e.target.checked;
@@ -215,7 +245,7 @@ const StockSection = (() => {
     if (setModalStatus) setModalStatus(`Leyendo "${file.name}"...`);
 
     try {
-      allRecords = await ExcelReader.readFile(file);
+      allRecords = await completarPesos(await ExcelReader.readFile(file));
       cargadoEn = 0;
       origen = `${allRecords.length.toLocaleString('es-CL')} productos cargados desde "${file.name}".`;
       statusEl.textContent = origen;
@@ -226,6 +256,28 @@ const StockSection = (() => {
       statusEl.textContent = `Error: ${err.message}`;
       if (setModalStatus) setModalStatus(`Error: ${err.message}`);
     }
+  }
+
+  async function cargarMaestro() {
+    if (maestro) return maestro;
+    try {
+      const r = await fetch(PESOS_URL);
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      maestro = await r.json();
+    } catch (err) {
+      console.error('Pesos de productos:', err);
+      maestro = { grupos: {}, productos: {} };
+    }
+    return maestro;
+  }
+
+  // Completa el peso unitario cuando el archivo no lo trae (export en vivo)
+  async function completarPesos(records) {
+    const m = await cargarMaestro();
+    records.forEach(r => {
+      if (r.pesoUnitario == null && m.productos[r.codProducto] != null) r.pesoUnitario = m.productos[r.codProducto];
+    });
+    return records;
   }
 
   // Stock en tiempo real: /api/stock-live inicia sesión en la web interna y
@@ -245,7 +297,7 @@ const StockSection = (() => {
       }
       const generado = res.headers.get('X-Stock-Generado');
       const file = new File([await res.blob()], 'stock-en-vivo.xls', { type: 'application/vnd.ms-excel' });
-      allRecords = await ExcelReader.readFile(file);
+      allRecords = await completarPesos(await ExcelReader.readFile(file));
       cargadoEn = Date.now();
       const hora = (generado ? new Date(generado) : new Date()).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
       origen = `⚡ Stock en vivo · ${allRecords.length.toLocaleString('es-CL')} productos · actualizado a las ${hora}`;

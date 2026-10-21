@@ -22,7 +22,15 @@
 
 const ReposicionSection = (() => {
 
-  let allRecords = null; // registros crudos del último Excel importado
+  let allRecords = null; // registros crudos del último stock cargado (en vivo o Excel)
+
+  // Stock en vivo: mismo endpoint que la sección Stock (/api/stock-live entrega el export web,
+  // que ReposicionParser ya sabe leer)
+  const LIVE_URL = '/api/stock-live';
+  const VIGENCIA_MS = 60 * 1000;
+  let origen = '';           // texto de estado: de dónde viene el stock
+  let cargadoEn = 0;         // Date.now() de la última carga en vivo (0 = vino de un Excel)
+  let nuevosRegistrados = false; // productos nuevos -> Niveles Mínimos, una vez por sesión
 
   let vista = 'analisis'; // 'analisis' | 'niveles'
 
@@ -73,15 +81,18 @@ const ReposicionSection = (() => {
       <div class="section-header">
         <div>
           <h1>Reposición de Productos</h1>
-          <p>Importa el stock consolidado y el sistema sugiere automáticamente qué traslados hacer entre bodegas para cubrir los productos con stock bajo.</p>
+          <p>Con el stock en vivo de las bodegas, el sistema sugiere automáticamente qué traslados hacer para cubrir los productos con stock bajo.</p>
         </div>
       </div>
 
       <div class="panel">
-        <div class="filter-bar">▽ Importar stock consolidado</div>
+        <div class="filter-bar">▽ Stock consolidado</div>
         <div class="import-row">
-          <span id="reposicionStatus">${allRecords ? `${allRecords.length.toLocaleString('es-CL')} productos importados.` : 'Aún no se ha importado ningún Excel.'}</span>
-          <button class="btn-outline" id="openReposicionImport" type="button">Importar Excel</button>
+          <span id="reposicionStatus">${origen || (allRecords ? `${allRecords.length.toLocaleString('es-CL')} productos cargados.` : 'Cargando stock en vivo…')}</span>
+          <span class="import-btns">
+            <button class="btn-outline" id="reposicionLive" type="button">⚡ Actualizar stock</button>
+            <button class="btn-outline" id="openReposicionImport" type="button">Importar Excel</button>
+          </span>
         </div>
       </div>
 
@@ -139,8 +150,8 @@ const ReposicionSection = (() => {
       return `
         <div class="empty-state">
           <div class="icon">🔄</div>
-          <strong>Importa el Excel de stock consolidado</strong>
-          <span>Debe incluir las columnas Código Producto, Nombre Producto, Unidad de Medida, SAN FRANCISCO 918, VIEL y ALDUNATE.</span>
+          <strong>Cargando stock en vivo…</strong>
+          <span>Si no carga, usa "Importar Excel" con el export de stock (columnas Código Producto, SAN FRANCISCO 918, VIEL y ALDUNATE).</span>
         </div>`;
     }
 
@@ -624,6 +635,34 @@ const ReposicionSection = (() => {
 
   // ---------- Importación ----------
 
+  // Aplica un stock recién leído. Desde un Excel nuevo se reinician filtros y selecciones;
+  // al refrescar el stock en vivo se conservan (las filas se identifican por código + destino).
+  function aplicarStock(records, reiniciar) {
+    allRecords = records;
+    if (reiniciar) {
+      filtroRuta = '';
+      filtroEstado = '';
+      excluidosPdf.clear();
+      palletsPorFila.clear();
+      modoPorFila.clear();
+    }
+    rerenderResults();
+  }
+
+  // Registra en la base de Niveles Mínimos los productos que sean nuevos (en segundo
+  // plano, sin bloquear la UI). Nunca pisa productos ya configurados.
+  function registrarNuevos(records, statusEl) {
+    NivelesMinimosStore
+      .registrarNuevos(records.map(r => ({ codigo: r.codigo, nombre: r.nombre, unidad: r.unidad })))
+      .then(res => {
+        if (res.ok && res.agregados > 0) {
+          if (statusEl) statusEl.textContent += ` ${res.agregados} producto(s) nuevo(s) agregado(s) a Niveles Mínimos.`;
+          if (vista === 'niveles') refreshNivelesResults();
+        }
+      })
+      .catch(err => console.error('No se pudieron registrar productos nuevos en Niveles Mínimos:', err));
+  }
+
   async function importFile(file, setModalStatus, closeModal) {
     const statusEl = document.getElementById('reposicionStatus');
 
@@ -634,30 +673,12 @@ const ReposicionSection = (() => {
       const records = await ReposicionParser.readFile(file);
       if (records.length === 0) throw new Error('No se encontraron productos en el archivo.');
 
-      allRecords = records;
-      filtroRuta = '';
-      filtroEstado = '';
-      excluidosPdf.clear();
-      palletsPorFila.clear();
-      modoPorFila.clear();
-
-      statusEl.textContent = `${records.length.toLocaleString('es-CL')} productos importados desde "${file.name}".`;
-
-      rerenderResults();
-
+      cargadoEn = 0;
+      origen = `${records.length.toLocaleString('es-CL')} productos importados desde "${file.name}".`;
+      statusEl.textContent = origen;
+      aplicarStock(records, true);
       if (closeModal) closeModal();
-
-      // Registra en la base de Niveles Mínimos los productos que sean nuevos (en segundo
-      // plano, sin bloquear la UI). Nunca pisa productos ya configurados.
-      NivelesMinimosStore
-        .registrarNuevos(records.map(r => ({ codigo: r.codigo, nombre: r.nombre, unidad: r.unidad })))
-        .then(res => {
-          if (res.ok && res.agregados > 0) {
-            statusEl.textContent += ` ${res.agregados} producto(s) nuevo(s) agregado(s) a Niveles Mínimos.`;
-            if (vista === 'niveles') refreshNivelesResults();
-          }
-        })
-        .catch(err => console.error('No se pudieron registrar productos nuevos en Niveles Mínimos:', err));
+      registrarNuevos(records, statusEl);
     } catch (err) {
       const msg = describeError(err);
       console.error('Reposición:', err);
@@ -666,7 +687,46 @@ const ReposicionSection = (() => {
     }
   }
 
+  async function cargarEnVivo(forzar = false) {
+    const statusEl = document.getElementById('reposicionStatus');
+    const btn = document.getElementById('reposicionLive');
+    if (!statusEl) return;
+    statusEl.textContent = 'Cargando stock en vivo…';
+    if (btn) btn.disabled = true;
+    try {
+      const res = await fetch(LIVE_URL + (forzar ? '?fresh=1' : ''), { cache: 'no-store' });
+      if (!res.ok) {
+        let msg = `HTTP ${res.status}`;
+        try { msg = (await res.json()).error || msg; } catch (_) {}
+        throw new Error(msg);
+      }
+      const generado = res.headers.get('X-Stock-Generado');
+      const file = new File([await res.blob()], 'stock-en-vivo.xls', { type: 'application/vnd.ms-excel' });
+      const records = await ReposicionParser.readFile(file);
+      if (records.length === 0) throw new Error('El stock en vivo vino vacío');
+
+      const primera = !allRecords;
+      cargadoEn = Date.now();
+      const hora = (generado ? new Date(generado) : new Date()).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+      origen = `⚡ Stock en vivo · ${records.length.toLocaleString('es-CL')} productos · actualizado a las ${hora}`;
+      if (!document.body.contains(statusEl)) return; // el usuario se cambió de sección
+      statusEl.textContent = origen;
+      aplicarStock(records, primera);
+      if (!nuevosRegistrados) { nuevosRegistrados = true; registrarNuevos(records, statusEl); }
+    } catch (err) {
+      console.error('Reposición en vivo:', err);
+      if (document.body.contains(statusEl)) {
+        statusEl.textContent = `No se pudo cargar el stock en vivo (${describeError(err)}).` +
+          (allRecords ? ' Se mantiene la última carga.' : ' Puedes usar "Importar Excel".');
+      }
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
   function attachEvents() {
+    document.getElementById('reposicionLive').addEventListener('click', () => cargarEnVivo(true));
+
     document.getElementById('openReposicionImport').addEventListener('click', () => {
       ImportModal.open({
         title: 'Importar stock consolidado',
@@ -705,6 +765,8 @@ const ReposicionSection = (() => {
 
     container.innerHTML = template();
     attachEvents();
+    // Al entrar: carga en vivo si no hay stock o si la carga en vivo tiene más de 1 minuto
+    if (!allRecords || (cargadoEn && Date.now() - cargadoEn > VIGENCIA_MS)) cargarEnVivo();
   }
 
   return { render };

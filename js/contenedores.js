@@ -116,14 +116,14 @@ const ContendedoresSection = (() => {
   }
 
   // ============ CLASIFICACIÓN ============
-  function clasificar() {
-    const hoy = isoToDay(meta.hoy);
+  function clasificar(lista = rows, hoyIso = meta.hoy) {
+    const hoy = isoToDay(hoyIso);
     const dow = (new Date(hoy * 86400000).getUTCDay() + 6) % 7; // 0 = lunes
     const finSemana = hoy + (6 - dow);
     const finProx = finSemana + 7;
     const out = { hoy: [], dias: [], semana: [] };
 
-    rows.filter(r => !recep(r) && fechaRef(r)).forEach(r => {
+    lista.filter(r => !recep(r) && fechaRef(r)).forEach(r => {
       if (r.llegada) {
         const dl = isoToDay(r.llegada);
         // HOY: llega hoy antes del límite, o llegada pasada sin recepcionar
@@ -693,5 +693,13 @@ const ContendedoresSection = (() => {
     document.head.appendChild(s);
   }
 
-  return { init };
+  // Para Inicio: trae los datos y los clasifica con las mismas reglas de esta sección
+  async function obtenerResumen() {
+    const res = await fetch(API_URL, { cache: 'no-store' });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'Respuesta inválida');
+    return { ...clasificar(data.rows, data.hoy), fechaHoy: data.hoy, sync: data.sync, horaLimite: HORA_LIMITE };
+  }
+
+  return { init, obtenerResumen };
 })();

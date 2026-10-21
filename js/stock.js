@@ -8,8 +8,12 @@
 
 const StockSection = (() => {
 
-  let allRecords = [];   // todo lo importado del Excel
+  let allRecords = [];   // todo lo importado del Excel o del stock en vivo
   let searchMode = 'contains';
+  let origen = '';       // texto del estado: de dónde vienen los datos
+  let cargadoEn = 0;     // Date.now() de la última carga en vivo
+  const LIVE_URL = '/api/stock-live';
+  const VIGENCIA_MS = 60 * 1000;
 
   function template() {
     return `
@@ -42,8 +46,11 @@ const StockSection = (() => {
           <button class="btn-clear" id="clearBtn">Limpiar</button>
         </div>
         <div class="import-row">
-          <span id="importStatus">${allRecords.length ? `${allRecords.length} productos cargados.` : 'Aún no se ha importado ningún Excel.'}</span>
-          <button class="btn-outline" id="openImportModal" type="button">Importar Excel</button>
+          <span id="importStatus">${origen || (allRecords.length ? `${allRecords.length} productos cargados.` : 'Cargando stock en vivo…')}</span>
+          <span class="import-btns">
+            <button class="btn-outline" id="liveBtn" type="button">⚡ Actualizar stock</button>
+            <button class="btn-outline" id="openImportModal" type="button">Importar Excel</button>
+          </span>
         </div>
       </div>
 
@@ -138,6 +145,8 @@ const StockSection = (() => {
       alert('Exportar: pendiente de definir formato de salida.');
     });
 
+    document.getElementById('liveBtn').addEventListener('click', () => cargarEnVivo(true));
+
     document.getElementById('openImportModal').addEventListener('click', () => {
       ImportModal.open({
         title: 'Importar Excel',
@@ -156,7 +165,9 @@ const StockSection = (() => {
 
     try {
       allRecords = await ExcelReader.readFile(file);
-      statusEl.textContent = `${allRecords.length.toLocaleString('es-CL')} productos cargados desde "${file.name}".`;
+      cargadoEn = 0;
+      origen = `${allRecords.length.toLocaleString('es-CL')} productos cargados desde "${file.name}".`;
+      statusEl.textContent = origen;
       populateFamilias();
       runSearch();
       if (closeModal) closeModal();
@@ -166,10 +177,45 @@ const StockSection = (() => {
     }
   }
 
+  // Stock en tiempo real: /api/stock-live inicia sesión en la web interna y
+  // entrega el mismo export que se descarga a mano, así que lo lee ExcelReader.
+  async function cargarEnVivo(forzar = false) {
+    const statusEl = document.getElementById('importStatus');
+    const btn = document.getElementById('liveBtn');
+    if (!statusEl) return;
+    statusEl.textContent = 'Cargando stock en vivo…';
+    if (btn) btn.disabled = true;
+    try {
+      const res = await fetch(LIVE_URL + (forzar ? '?fresh=1' : ''), { cache: 'no-store' });
+      if (!res.ok) {
+        let msg = `HTTP ${res.status}`;
+        try { msg = (await res.json()).error || msg; } catch (_) {}
+        throw new Error(msg);
+      }
+      const generado = res.headers.get('X-Stock-Generado');
+      const file = new File([await res.blob()], 'stock-en-vivo.xls', { type: 'application/vnd.ms-excel' });
+      allRecords = await ExcelReader.readFile(file);
+      cargadoEn = Date.now();
+      const hora = (generado ? new Date(generado) : new Date()).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+      origen = `⚡ Stock en vivo · ${allRecords.length.toLocaleString('es-CL')} productos · actualizado a las ${hora}`;
+      statusEl.textContent = origen;
+      populateFamilias();
+      runSearch();
+    } catch (err) {
+      console.error('Stock en vivo:', err);
+      statusEl.textContent = `No se pudo cargar el stock en vivo (${err.message}).` +
+        (allRecords.length ? ' Se mantiene la última carga.' : ' Puedes usar "Importar Excel".');
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
   function render(container) {
     container.innerHTML = template();
     populateFamilias();
     attachEvents();
+    // Al entrar a la sección: refresca si no hay datos o si la carga en vivo tiene más de 1 minuto
+    if (!allRecords.length || (cargadoEn && Date.now() - cargadoEn > VIGENCIA_MS)) cargarEnVivo();
   }
 
   return { render };

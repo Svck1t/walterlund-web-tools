@@ -409,6 +409,10 @@ button { font-family: inherit; cursor: pointer; }
   color: var(--text-secondary);
 }
 
+.import-row { flex-wrap: wrap; }
+.import-btns { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; }
+.btn-outline:disabled { opacity: .5; cursor: default; }
+
 .btn-outline {
   background: #fff;
   border: 1px solid var(--accent-blue);

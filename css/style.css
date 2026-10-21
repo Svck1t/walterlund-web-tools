@@ -1119,3 +1119,6 @@ table.stock-bodegas th { letter-spacing: 0; position: sticky; top: 0; z-index: 2
 .bod-chip input { margin: 0; accent-color: #1e3a5f; }
 .bod-chip.on { background: #eef4ff; border-color: #93b4e6; color: #1e3a5f; }
 .stock-bodegas td.kg { color: #4a6080; }
+/* La barra lateral nunca se achica por contenido ancho; el contenido se adapta */
+.sidebar { flex-shrink: 0; }
+.main { min-width: 0; }

@@ -687,6 +687,31 @@ const ReposicionSection = (() => {
     }
   }
 
+  // Descarga y lee el stock en vivo (sin tocar la pantalla)
+  async function traerStockEnVivo(forzar) {
+    const res = await fetch(LIVE_URL + (forzar ? '?fresh=1' : ''), { cache: 'no-store' });
+    if (!res.ok) {
+      let msg = `HTTP ${res.status}`;
+      try { msg = (await res.json()).error || msg; } catch (_) {}
+      throw new Error(msg);
+    }
+    const generado = res.headers.get('X-Stock-Generado');
+    const file = new File([await res.blob()], 'stock-en-vivo.xls', { type: 'application/vnd.ms-excel' });
+    const records = await ReposicionParser.readFile(file);
+    if (records.length === 0) throw new Error('El stock en vivo vino vacío');
+    const hora = (generado ? new Date(generado) : new Date()).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+    return { records, hora };
+  }
+
+  function registrarCargaEnVivo(records, hora) {
+    const primera = !allRecords;
+    allRecords = records;
+    cargadoEn = Date.now();
+    origen = `⚡ Stock en vivo · ${records.length.toLocaleString('es-CL')} productos · actualizado a las ${hora}`;
+    if (primera) { filtroRuta = ''; filtroEstado = ''; }
+    if (!nuevosRegistrados) { nuevosRegistrados = true; registrarNuevos(records, null); }
+  }
+
   async function cargarEnVivo(forzar = false) {
     const statusEl = document.getElementById('reposicionStatus');
     const btn = document.getElementById('reposicionLive');
@@ -694,25 +719,11 @@ const ReposicionSection = (() => {
     statusEl.textContent = 'Cargando stock en vivo…';
     if (btn) btn.disabled = true;
     try {
-      const res = await fetch(LIVE_URL + (forzar ? '?fresh=1' : ''), { cache: 'no-store' });
-      if (!res.ok) {
-        let msg = `HTTP ${res.status}`;
-        try { msg = (await res.json()).error || msg; } catch (_) {}
-        throw new Error(msg);
-      }
-      const generado = res.headers.get('X-Stock-Generado');
-      const file = new File([await res.blob()], 'stock-en-vivo.xls', { type: 'application/vnd.ms-excel' });
-      const records = await ReposicionParser.readFile(file);
-      if (records.length === 0) throw new Error('El stock en vivo vino vacío');
-
-      const primera = !allRecords;
-      cargadoEn = Date.now();
-      const hora = (generado ? new Date(generado) : new Date()).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
-      origen = `⚡ Stock en vivo · ${records.length.toLocaleString('es-CL')} productos · actualizado a las ${hora}`;
+      const { records, hora } = await traerStockEnVivo(forzar);
+      registrarCargaEnVivo(records, hora);
       if (!document.body.contains(statusEl)) return; // el usuario se cambió de sección
       statusEl.textContent = origen;
-      aplicarStock(records, primera);
-      if (!nuevosRegistrados) { nuevosRegistrados = true; registrarNuevos(records, statusEl); }
+      rerenderResults();
     } catch (err) {
       console.error('Reposición en vivo:', err);
       if (document.body.contains(statusEl)) {
@@ -722,6 +733,17 @@ const ReposicionSection = (() => {
     } finally {
       if (btn) btn.disabled = false;
     }
+  }
+
+  // Para Inicio: análisis con stock en vivo. Deja el stock cargado, así al abrir
+  // Reposición después no vuelve a descargarlo (si tiene menos de 1 minuto).
+  async function analisisParaInicio() {
+    if (!NivelesMinimosStore.estaCargado()) await NivelesMinimosStore.cargar();
+    if (!allRecords || !cargadoEn || Date.now() - cargadoEn > VIGENCIA_MS) {
+      const { records, hora } = await traerStockEnVivo(false);
+      registrarCargaEnVivo(records, hora);
+    }
+    return { filas: filasAnalisis(), origen, productos: allRecords.length };
   }
 
   function attachEvents() {
@@ -769,5 +791,5 @@ const ReposicionSection = (() => {
     if (!allRecords || (cargadoEn && Date.now() - cargadoEn > VIGENCIA_MS)) cargarEnVivo();
   }
 
-  return { render };
+  return { render, analisisParaInicio };
 })();

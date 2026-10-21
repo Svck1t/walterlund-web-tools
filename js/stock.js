@@ -10,6 +10,16 @@ const StockSection = (() => {
 
   let allRecords = [];   // todo lo importado del Excel o del stock en vivo
   let searchMode = 'contains';
+  let soloConStock = true;
+
+  // Nombres cortos para las columnas de bodega del export web
+  const NOMBRE_BODEGA = {
+    'SAN IGNACIO': 'San Ignacio', 'SAN FRANCISCO 918': 'SF 918', 'VIEL': 'Viel',
+    'SANTIAGO CONCHA': 'Stgo Concha', 'ALDUNATE': 'Aldunate'
+  };
+  const corto = b => NOMBRE_BODEGA[b.toUpperCase()] || b;
+  const num = n => n.toLocaleString('es-CL', { maximumFractionDigits: 2 });
+  const celda = (n, cls = '') => `<td class="num ${cls}${n === 0 ? ' cero' : ''}${n < 0 ? ' neg' : ''}">${n === 0 ? '0' : num(n)}</td>`;
   let origen = '';       // texto del estado: de dónde vienen los datos
   let cargadoEn = 0;     // Date.now() de la última carga en vivo
   const LIVE_URL = '/api/stock-live';
@@ -34,6 +44,7 @@ const StockSection = (() => {
             <div class="search-mode">
               <label><input type="radio" name="mode" value="contains" checked> Contiene</label>
               <label><input type="radio" name="mode" value="starts"> Comienza con</label>
+              <label><input type="checkbox" id="soloConStock" ${soloConStock ? 'checked' : ''}> Solo con stock</label>
             </div>
           </div>
           <div class="field">
@@ -70,6 +81,39 @@ const StockSection = (() => {
         </div>`;
     }
 
+    const bodegas = records[0].bodegas ? Object.keys(records[0].bodegas) : null;
+    const conteo = `<div class="results-count">${records.length.toLocaleString('es-CL')} producto(s) encontrado(s)</div>`;
+
+    // Formato export web: stock por bodega + reservas + disponible
+    if (bodegas) {
+      const rows = records.map(r => `
+        <tr>
+          <td class="cod">${r.codProducto}</td>
+          <td class="desc">${r.producto} <span class="um">${r.unidadMedida}</span></td>
+          ${bodegas.map(b => celda(r.bodegas[b] ?? 0)).join('')}
+          ${celda(r.stockTotal, 'total')}
+          ${r.reservas == null ? '' : celda(r.reservas, 'reserva')}
+          ${r.disponible == null ? '' : celda(r.disponible, 'disp')}
+        </tr>`).join('');
+      return `${conteo}
+        <div class="table-scroll">
+          <table class="data-table stock-bodegas">
+            <thead>
+              <tr>
+                <th>Código</th>
+                <th>Descripción</th>
+                ${bodegas.map(b => `<th class="num">${corto(b)}</th>`).join('')}
+                <th class="num">General</th>
+                ${records[0].reservas == null ? '' : '<th class="num">Reservas</th>'}
+                ${records[0].disponible == null ? '' : '<th class="num">Disponible</th>'}
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>`;
+    }
+
+    // Formato informe Softland: sin detalle por bodega
     const rows = records.map(r => `
       <tr>
         <td>${r.codGrupo}</td>
@@ -80,8 +124,7 @@ const StockSection = (() => {
         <td>${r.stockTotal.toLocaleString('es-CL')}</td>
       </tr>`).join('');
 
-    return `
-      <div class="results-count">${records.length.toLocaleString('es-CL')} producto(s) encontrado(s)</div>
+    return `${conteo}
       <div class="table-scroll">
         <table class="data-table">
           <thead>
@@ -115,6 +158,9 @@ const StockSection = (() => {
     if (familia) {
       results = results.filter(r => r.grupo === familia);
     }
+    if (soloConStock) {
+      results = results.filter(r => r.stockTotal !== 0 || (r.bodegas && Object.values(r.bodegas).some(v => v !== 0)));
+    }
 
     document.getElementById('resultsPanel').innerHTML = renderResults(results, allRecords.length === 0);
   }
@@ -127,6 +173,11 @@ const StockSection = (() => {
     });
 
     document.getElementById('familiaSelect').addEventListener('change', runSearch);
+
+    document.getElementById('soloConStock').addEventListener('change', (e) => {
+      soloConStock = e.target.checked;
+      runSearch();
+    });
 
     document.querySelectorAll('input[name="mode"]').forEach(radio => {
       radio.addEventListener('change', (e) => {

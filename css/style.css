@@ -1111,3 +1111,11 @@ table.stock-bodegas th, table.stock-bodegas td { padding-left: 9px; padding-righ
 .stock-bodegas td.desc { min-width: 220px; }
 table.stock-bodegas th { letter-spacing: 0; position: sticky; top: 0; z-index: 2; }
 .table-scroll { overflow-x: auto; }
+/* Filtro de bodegas visibles */
+.results-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; padding-right: 16px; }
+.results-head .results-count { padding-right: 0; }
+.bod-chips { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; color: var(--text-secondary); padding: 8px 0; }
+.bod-chip { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 999px; border: 1px solid #d0dcea; background: #fff; cursor: pointer; font-weight: 600; color: #6b7f96; user-select: none; }
+.bod-chip input { margin: 0; accent-color: #1e3a5f; }
+.bod-chip.on { background: #eef4ff; border-color: #93b4e6; color: #1e3a5f; }
+.stock-bodegas td.kg { color: #4a6080; }

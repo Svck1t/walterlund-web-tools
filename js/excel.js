@@ -17,7 +17,9 @@ const ExcelReader = (() => {
     pesoUnitario: ['Peso Kgs.', 'Peso Unitario', 'Peso Kgs', 'Peso Kilos'],
     // 'General' = stock total del export web (formato 2, columnas por bodega)
     stockTotal: ['Stock Total', 'General'],
-    unidadMedida: ['Cod. U. Medida', 'Cod.U.Medida', 'Unidad de Medida', 'U. Medida', 'Unidad Medida']
+    unidadMedida: ['Cod. U. Medida', 'Cod.U.Medida', 'Unidad de Medida', 'U. Medida', 'Unidad Medida'],
+    reservas: ['Reservas'],
+    disponible: ['Disponible (Stock - Reservas)', 'Disponible']
   };
 
   /**
@@ -119,6 +121,15 @@ const ExcelReader = (() => {
             return;
           }
 
+          // Formato 2 (export web): las columnas entre "Unidad de Medida" y "General" son las bodegas
+          const header = rows[headerRowIdx].map(c => (c ?? '').toString().trim());
+          const colsBodega = [];
+          if (columnIndex.unidadMedida !== undefined && columnIndex.stockTotal > columnIndex.unidadMedida + 1) {
+            for (let c = columnIndex.unidadMedida + 1; c < columnIndex.stockTotal; c++) {
+              if (header[c]) colsBodega.push({ c, nombre: header[c] });
+            }
+          }
+
           const records = [];
           for (let i = headerRowIdx + 1; i < rows.length; i++) {
             const row = rows[i];
@@ -139,7 +150,11 @@ const ExcelReader = (() => {
               producto: (row[columnIndex.producto] ?? '').toString().trim(),
               pesoUnitario: columnIndex.pesoUnitario === undefined ? null : toNumber(row[columnIndex.pesoUnitario]),
               stockTotal: toNumber(row[columnIndex.stockTotal]),
-              unidadMedida: (row[columnIndex.unidadMedida] ?? '').toString().trim()
+              unidadMedida: (row[columnIndex.unidadMedida] ?? '').toString().trim(),
+              // Solo en el export web; en el informe Softland quedan vacíos/null
+              bodegas: colsBodega.length ? Object.fromEntries(colsBodega.map(b => [b.nombre, toNumber(row[b.c])])) : null,
+              reservas: columnIndex.reservas === undefined ? null : toNumber(row[columnIndex.reservas]),
+              disponible: columnIndex.disponible === undefined ? null : toNumber(row[columnIndex.disponible])
             });
           }
 

@@ -72,6 +72,9 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'cola-contenedores':
         ContendedoresSection.init(content);
         break;
+      case 'inicio':
+        InicioSection.render(content);
+        break;
       case 'traslados':
         TrasladosSection.render(content);
         break;
@@ -129,6 +132,6 @@ document.addEventListener('DOMContentLoaded', () => {
     alert('Cerrar sesión: pendiente de conectar con el sistema de autenticación.');
   });
 
-  // Carga inicial: Stock (igual que en la captura de referencia)
-  loadSection('stock');
+  // Carga inicial: Inicio (resumen del día)
+  loadSection('inicio');
 });

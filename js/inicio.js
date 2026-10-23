@@ -73,10 +73,10 @@ const InicioSection = (() => {
           <button class="btn-outline" id="in-actualizar" type="button">🔄 Actualizar</button>
         </div>
         <div class="in-grid">
-          ${tarjeta('in-cont', '📦', 'Contenedores', 'cola-contenedores')}
+          ${tarjeta('in-cont', '📦', 'Importaciones', 'cola-contenedores')}
           ${tarjeta('in-repo', '🔄', 'Reposición sugerida', 'reposicion')}
           ${tarjeta('in-tras', '🚚', 'Traslados', 'traslados')}
-          ${tarjeta('in-fact', '🧾', 'Facturas', 'control-facturas')}
+          ${tarjeta('in-fact', '🧾', 'Despachos', 'control-facturas')}
         </div>
       </div>`;
 

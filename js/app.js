@@ -43,8 +43,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const SECTION_TITLES = {
     inicio: 'Inicio',
     despachos: 'Despachos',
-    'cola-contenedores': 'Cola de Contenedores',
-    'control-facturas': 'Control de Facturas',
+    'cola-contenedores': 'Control Importaciones',
+    'control-facturas': 'Control de Despachos',
     traslados: 'Control de Traslados',
     stock: 'Stock',
     reposicion: 'Reposición de Productos',

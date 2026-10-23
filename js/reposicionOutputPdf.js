@@ -42,7 +42,7 @@ const ReposicionOutputPdf = (() => {
 
   function build(filas, fecha) {
     const { jsPDF } = window.jspdf;
-    const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'letter' });
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'letter', compress: true });
     const pageHeight = doc.internal.pageSize.getHeight();
 
     const resueltos = filas.filter(f => f.resuelto);
@@ -117,7 +117,8 @@ const ReposicionOutputPdf = (() => {
 
     const filename = `Orden de Traslado ${fecha}.pdf`;
     doc.save(filename);
-    return filename;
+    // También se devuelve el PDF en base64 para guardarlo en Descargas
+    return { filename, base64: doc.output('datauristring').split(',')[1] };
   }
 
   return { build };

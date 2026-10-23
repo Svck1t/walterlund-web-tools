@@ -1,102 +1,70 @@
-<!DOCTYPE html>
-<html lang="es">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<meta name="theme-color" content="#1c2733">
-<title>WalterLund | Plataforma Interna</title>
-<link rel="stylesheet" href="css/style.css">
-</head>
-<body>
-
-  <div class="app">
-
-    <!-- SIDEBAR -->
-    <aside class="sidebar" id="sidebar">
-      <div class="sidebar-header">
-        <div class="logo-badge">W</div>
-        <span class="logo-text">WalterLund</span>
-        <button class="icon-btn sidebar-close" id="sidebarClose" title="Cerrar menú" aria-label="Cerrar menú"><span data-icon="x"></span></button>
-      </div>
-
-      <nav class="sidebar-nav">
-        <div class="nav-group">
-          <span class="nav-group-title"><span class="nav-label">Accesos rápidos</span></span>
-          <a href="#" class="nav-item active" data-section="inicio" title="Inicio"><span class="nav-ico" data-icon="home"></span><span class="nav-label">Inicio</span></a>
-          <a href="#" class="nav-item" data-section="descargas" title="Descargas"><span class="nav-ico" data-icon="download"></span><span class="nav-label">Descargas</span></a>
-        </div>
-
-        <div class="nav-group collapsible">
-          <button class="nav-group-title toggle" data-toggle="despachos">
-            <span class="nav-label">Despachos</span>
-            <span class="chevron" data-icon="chevron"></span>
-          </button>
-          <div class="nav-subitems" id="despachos">
-            <a href="#" class="nav-item" data-section="control-facturas" title="Control de Despachos"><span class="nav-ico" data-icon="receipt"></span><span class="nav-label">Control de Despachos</span></a>
-          </div>
-        </div>
-
-        <div class="nav-group collapsible">
-          <button class="nav-group-title toggle" data-toggle="inventario">
-            <span class="nav-label">Inventario</span>
-            <span class="chevron" data-icon="chevron"></span>
-          </button>
-          <div class="nav-subitems" id="inventario">
-            <a href="#" class="nav-item" data-section="stock" title="Stock"><span class="nav-ico" data-icon="boxes"></span><span class="nav-label">Stock</span></a>
-            <a href="#" class="nav-item" data-section="reposicion" title="Reposición de Productos"><span class="nav-ico" data-icon="refresh"></span><span class="nav-label">Reposición de Productos</span></a>
-            <a href="#" class="nav-item" data-section="cola-contenedores" title="Control Importaciones"><span class="nav-ico" data-icon="container"></span><span class="nav-label">Control Importaciones</span></a>
-            <a href="#" class="nav-item" data-section="traslados" title="Control de Traslados"><span class="nav-ico" data-icon="transfer"></span><span class="nav-label">Control de Traslados</span></a>
-          </div>
-        </div>
-      </nav>
-
-      <div class="sidebar-footer">
-        <a href="#" class="nav-item" id="logout" title="Cerrar Sesión"><span class="nav-ico" data-icon="logout"></span><span class="nav-label">Cerrar Sesión</span></a>
-      </div>
-    </aside>
-    <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
-
-    <!-- MAIN -->
-    <div class="main">
-      <header class="topbar">
-        <button class="icon-btn" id="menuToggle" title="Menú" aria-label="Menú"><span data-icon="menu"></span></button>
-        <div class="topbar-right">
-          <button class="icon-btn hide-sm" title="Configuración" aria-label="Configuración"><span data-icon="settings"></span></button>
-          <button class="btn-help hide-sm">Ayuda TI</button>
-          <button class="icon-btn" title="Notificaciones" aria-label="Notificaciones"><span data-icon="bell"></span></button>
-          <div class="user-chip">
-            <div class="avatar">W</div>
-            <span class="user-name">Sebastian Flores</span>
-          </div>
-        </div>
-      </header>
-
-      <main class="content" id="content">
-        <!-- El contenido de cada sección se inyecta aquí vía JS -->
-      </main>
-    </div>
-
-  </div>
-
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
-  <script src="js/errorUtils.js"></script>
-  <script src="js/importModal.js"></script>
-  <script src="js/excel.js"></script>
-  <script src="js/search.js"></script>
-  <script src="js/stock.js"></script>
-  <script src="js/reposicionParser.js"></script>
-  <script src="js/reposicionAnalysis.js"></script>
-  <script src="js/reposicionOutputPdf.js"></script>
-  <script src="js/nivelesMinimosStore.js"></script>
-  <script src="js/reposicion.js"></script>
-  <script src="js/controlFacturas.js"></script>
-  <script src="js/contenedores.js"></script>
-  <script src="js/traslados.js"></script>
-  <script src="js/descargas.js"></script>
-  <script src="js/inicio.js"></script>
-  <script src="js/app.js"></script>
-</body>
-</html>
+{
+ "anios": [
+  {
+   "anio": "2015",
+   "guias": 550,
+   "lineas": 3180,
+   "kb": 146
+  },
+  {
+   "anio": "2016",
+   "guias": 559,
+   "lineas": 3049,
+   "kb": 147
+  },
+  {
+   "anio": "2017",
+   "guias": 559,
+   "lineas": 3087,
+   "kb": 149
+  },
+  {
+   "anio": "2018",
+   "guias": 759,
+   "lineas": 3910,
+   "kb": 184
+  },
+  {
+   "anio": "2019",
+   "guias": 823,
+   "lineas": 3448,
+   "kb": 173
+  },
+  {
+   "anio": "2020",
+   "guias": 671,
+   "lineas": 2625,
+   "kb": 145
+  },
+  {
+   "anio": "2021",
+   "guias": 623,
+   "lineas": 2046,
+   "kb": 110
+  },
+  {
+   "anio": "2022",
+   "guias": 723,
+   "lineas": 2530,
+   "kb": 133
+  },
+  {
+   "anio": "2023",
+   "guias": 1068,
+   "lineas": 3279,
+   "kb": 177
+  },
+  {
+   "anio": "2024",
+   "guias": 1765,
+   "lineas": 5344,
+   "kb": 291
+  },
+  {
+   "anio": "2025",
+   "guias": 2504,
+   "lineas": 8428,
+   "kb": 431
+  }
+ ]
+}

@@ -48,7 +48,7 @@ const ContendedoresSection = (() => {
       <div class="ci">
         <div class="ci-head">
           <div>
-            <h1>📦 Cola de Contenedores</h1>
+            <h1>📦 Control Importaciones</h1>
             <p>Importaciones desde el Excel Control Contenedores 2026 (límite ${HORA_LIMITE})</p>
           </div>
           <button class="ci-btn" id="ci-refresh">🔄 Actualizar ahora</button>

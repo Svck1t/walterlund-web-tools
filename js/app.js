@@ -72,6 +72,9 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'cola-contenedores':
         ContendedoresSection.init(content);
         break;
+      case 'descargas':
+        DescargasSection.render(content);
+        break;
       case 'inicio':
         InicioSection.render(content);
         break;

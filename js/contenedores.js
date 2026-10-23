@@ -142,8 +142,8 @@ const ContendedoresSection = (() => {
       if (d <= finSemana) return out.dias.push(r);
       if (d <= finProx) return out.semana.push(r);
     });
-    // Primero lo que tiene fecha/hora de llegada confirmada (mañana arriba), después solo ETA y al final "por informar"
-    const rango = r => r.tagCls === 'late' ? 0 : r.tagCls === 'next' ? 1 : r.llegada ? 2 : r.tagCls === 'pend' ? 4 : 3;
+    // Orden: mañana, atrasados, llegada confirmada, "por informar" y al final los que solo tienen ETA
+    const rango = r => r.tagCls === 'next' ? 0 : r.tagCls === 'late' ? 1 : r.llegada ? 2 : r.tagCls === 'pend' ? 3 : 4;
     const orden = (a, b) => rango(a) - rango(b) || (fechaRef(a) + a.hora).localeCompare(fechaRef(b) + b.hora);
     Object.values(out).forEach(l => l.sort(orden));
     return out;

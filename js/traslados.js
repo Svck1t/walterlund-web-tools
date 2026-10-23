@@ -3,12 +3,13 @@
 // Fuente: "Informe de Guías de Salida" de Softland (GS.xls), concepto
 // "Transferencia hacia otra Bodega", todas las bodegas.
 // Se guarda en Google Sheets vía /api/traslados (Apps Script TrasladosAPI.gs).
-// Histórico 2025: solo Viel, sin detalle (data/traslados-2025.json).
+// Histórico 2015–2025: un JSON por año en data/traslados-hist/ (todas las
+// bodegas, con productos), se carga solo cuando se elige ese año.
 // =====================================================
 
 const TrasladosSection = (() => {
   const API_URL = '/api/traslados';
-  const HIST_URL = 'data/traslados-2025.json';
+  const HIST_DIR = 'data/traslados-hist/';
   const LOTE = 250;          // guías por envío al guardar
   const PAGINA = 150;        // filas visibles en el listado antes de "Mostrar más"
 
@@ -17,9 +18,21 @@ const TrasladosSection = (() => {
     '19': { n: 'Aldunate', c: '#ec4899' },
     '08': { n: 'SF 918', c: '#16a34a' },
     '17': { n: 'Stgo Concha', c: '#ea580c' },
-    '02': { n: 'San Ignacio', c: '#2563eb' }
+    '02': { n: 'San Ignacio', c: '#2563eb' },
+    // Bodegas que ya no operan o con poco movimiento (aparecen en el histórico)
+    '01': { n: 'SF 218', c: '#0d9488' },
+    '03': { n: 'Valparaíso', c: '#7c3aed' },
+    '13': { n: 'Coquimbo', c: '#a16207' },
+    '16': { n: 'Repuestos Coquimbo', c: '#78716c' },
+    '06': { n: 'Pantone Offset', c: '#db2777' },
+    '07': { n: 'Producción', c: '#0891b2' },
+    '05': { n: 'LM', c: '#65a30d' },
+    '04': { n: 'LM', c: '#65a30d' },
+    '15': { n: 'Vitrina SF 918', c: '#4ade80' },
+    '10': { n: 'Consignación SGQ', c: '#9ca3af' },
+    '18': { n: 'Directo a cliente', c: '#9ca3af' }
   };
-  const ORDEN_BOD = ['Viel', 'Aldunate', 'SF 918', 'Stgo Concha', 'San Ignacio'];
+  const ORDEN_BOD = ['Viel', 'Aldunate', 'SF 918', 'Stgo Concha', 'San Ignacio', 'SF 218', 'Valparaíso', 'Coquimbo', 'Producción'];
   const colorBod = n => (Object.values(BODEGAS).find(b => b.n === n) || { c: '#9ca3af' }).c;
 
   const MESES = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
@@ -31,7 +44,10 @@ const TrasladosSection = (() => {
   ]);
 
   let root = null;
-  let guias = [];            // guardadas (Sheets) + histórico
+  let guias = [];            // guardadas (Sheets) + años históricos cargados
+  let guardadas = [];        // solo las de Sheets
+  let histIndex = [];        // años disponibles en data/traslados-hist
+  const histCache = {};      // año -> guías del histórico ya leídas
   let claves = new Set();    // claves guardadas en Sheets
   let tab = 'dashboard';
   let anio = null;
@@ -54,7 +70,17 @@ const TrasladosSection = (() => {
   const esMovil = () => window.matchMedia('(max-width: 700px)').matches;
 
   function nombreDestino(raw) {
-    const u = String(raw || '').toUpperCase();
+    const u = String(raw || '').toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    if (u.includes('VITRINA')) return 'Vitrina SF 918';
+    if (u.includes('218')) return 'SF 218';
+    if (u.includes('VALPARAISO')) return 'Valparaíso';
+    if (u.includes('REPUESTOS COQUIMBO')) return 'Repuestos Coquimbo';
+    if (u.includes('COQUIMBO')) return 'Coquimbo';
+    if (u.includes('PANTONE')) return 'Pantone Offset';
+    if (u.includes('PRODUCCION')) return 'Producción';
+    if (u.includes('CONSIGNACION')) return 'Consignación SGQ';
+    if (u.includes('DIRECTO A CLIENTE')) return 'Directo a cliente';
+    if (/\bLM\b/.test(u)) return 'LM';
     if (u.includes('VIEL')) return 'Viel';
     if (u.includes('ALDUNATE')) return 'Aldunate';
     if (u.includes('918')) return 'SF 918';
@@ -69,6 +95,24 @@ const TrasladosSection = (() => {
     return m ? nombreDestino(m[1]) : cod;
   }
 
+  // Feriados: lista exacta para 2025–2026; para años anteriores, los fijos más Viernes Santo (aproximado)
+  const FIJOS = ['01-01', '05-01', '05-21', '06-29', '07-16', '08-15', '09-18', '09-19', '10-12', '10-31', '11-01', '12-08', '12-25'];
+  const viernesSanto = {};
+  function esFeriado(iso) {
+    const y = Number(iso.slice(0, 4));
+    if (y >= 2025) return FERIADOS.has(iso);
+    if (FIJOS.includes(iso.slice(5))) return true;
+    if (!(y in viernesSanto)) { // cálculo de Pascua (Meeus/Jones/Butcher)
+      const a = y % 19, b = Math.floor(y / 100), c = y % 100, d = Math.floor(b / 4), e = b % 4, f = Math.floor((b + 8) / 25),
+        g = Math.floor((b - f + 1) / 3), h = (19 * a + b - d - g + 15) % 30, i = Math.floor(c / 4), k = c % 4,
+        l = (32 + 2 * e + 2 * i - h - k) % 7, m = Math.floor((a + 11 * h + 22 * l) / 451),
+        mes = Math.floor((h + l - 7 * m + 114) / 31), dia = ((h + l - 7 * m + 114) % 31) + 1;
+      const vs = new Date(Date.UTC(y, mes - 1, dia - 2));
+      viernesSanto[y] = vs.toISOString().slice(0, 10);
+    }
+    return viernesSanto[y] === iso;
+  }
+
   function diasLaborales(y, m, hastaIso) {
     let n = 0;
     const dim = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
@@ -76,7 +120,7 @@ const TrasladosSection = (() => {
       const iso = `${y}-${pad(m + 1)}-${pad(d)}`;
       if (hastaIso && iso > hastaIso) break;
       const w = new Date(Date.UTC(y, m, d)).getUTCDay();
-      if (w !== 0 && w !== 6 && !FERIADOS.has(iso)) n++;
+      if (w !== 0 && w !== 6 && !esFeriado(iso)) n++;
     }
     return n;
   }
@@ -182,7 +226,7 @@ const TrasladosSection = (() => {
 
     root.querySelector('#tr-file').addEventListener('change', e => { const f = e.target.files[0]; e.target.value = ''; if (f) leerArchivo(f); });
     root.querySelector('#tr-recargar').addEventListener('click', () => cargar());
-    root.querySelector('#tr-anio').addEventListener('change', e => { anio = e.target.value; visibles = PAGINA; dibujar(); });
+    root.querySelector('#tr-anio').addEventListener('change', e => { visibles = PAGINA; cambiarAnio(e.target.value); });
     root.querySelector('#tr-origen').addEventListener('change', e => { filtroOrigen = e.target.value; visibles = PAGINA; dibujar(); });
     root.querySelectorAll('.tr-tab').forEach(b => b.addEventListener('click', () => { tab = b.dataset.tab; dibujar(); }));
     root.addEventListener('input', e => { if (e.target.id === 'tr-buscar') { busqueda = e.target.value; visibles = PAGINA; renderListado(false); } });
@@ -191,36 +235,68 @@ const TrasladosSection = (() => {
     cargar();
   }
 
-  let hist = null;
-  async function cargarHist() {
-    if (hist) return hist;
+  async function cargarIndice() {
+    if (histIndex.length) return;
     try {
-      const r = await fetch(HIST_URL);
+      const r = await fetch(HIST_DIR + 'index.json');
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      histIndex = (await r.json()).anios.map(a => a.anio);
+    } catch (err) {
+      console.error('Índice histórico traslados:', err);
+    }
+  }
+
+  // Lee un año del histórico (una sola vez) y lo deja con el mismo formato que las guías de Sheets
+  async function cargarAnioHist(y) {
+    if (histCache[y] || !histIndex.includes(y)) return;
+    try {
+      const r = await fetch(HIST_DIR + y + '.json');
       if (!r.ok) throw new Error('HTTP ' + r.status);
       const d = await r.json();
-      hist = d.guias.map(([fecha, folio, destinoRaw]) => ({
-        k: `${d.origen}|${folio}`, fecha, folio, oc: d.origen, origen: nombreOrigen(d.origen),
-        destino: nombreDestino(destinoRaw), destinoRaw, estado: 'Vigente', tipo: '', lineas: null, valor: null, hist: true
-      }));
+      histCache[y] = d.guias.map(([fecha, folio, oc, destinoRaw, tipo, lineas]) => {
+        const ls = lineas.map(([cod, um, cant, total]) => [cod, d.productos[cod] || '', um, cant, cant ? total / cant : 0, total]);
+        return {
+          k: `${oc}|${folio}`, fecha, folio, oc, origen: nombreOrigen(oc, ''), destino: nombreDestino(destinoRaw), destinoRaw,
+          estado: 'Vigente', tipo: tipo === 'E' ? 'ELECTRONICO' : tipo === 'M' ? 'MANUAL' : '', lineas: ls,
+          valor: ls.reduce((s, l) => s + l[5], 0), hist: true
+        };
+      });
     } catch (err) {
-      console.error('Histórico traslados 2025:', err);
-      hist = [];
+      console.error('Histórico traslados ' + y + ':', err);
+      histCache[y] = [];
     }
-    return hist;
+  }
+
+  // Une lo de Sheets con los años históricos cargados (Sheets manda en los años que tenga)
+  function componer() {
+    const aniosSheets = new Set(guardadas.map(g => g.fecha.slice(0, 4)));
+    guias = guardadas.concat(...Object.entries(histCache).filter(([y]) => !aniosSheets.has(y)).map(([, l]) => l));
+    guias.sort((a, b) => b.fecha.localeCompare(a.fecha) || Number(b.folio) - Number(a.folio));
+  }
+
+  async function cambiarAnio(y) {
+    anio = y;
+    const meta = root.querySelector('#tr-meta');
+    if (!histCache[y] || !histCache[Number(y) - 1 + '']) meta.textContent = `Cargando ${y}…`;
+    await Promise.all([cargarAnioHist(y), cargarAnioHist(String(Number(y) - 1))]);
+    componer();
+    llenarFiltros();
+    dibujar();
   }
 
   async function cargar() {
     const meta = root.querySelector('#tr-meta');
     meta.textContent = 'Cargando…';
     errorCarga = '';
-    const [h, guardadas] = await Promise.all([cargarHist(), leerApi()]);
-    claves = new Set(guardadas.map(g => g.k));
-    const anios = new Set(guardadas.map(g => g.fecha.slice(0, 4)));
-    // El histórico solo completa años que no vienen desde Softland
-    guias = guardadas.concat(h.filter(g => !anios.has(g.fecha.slice(0, 4)) && !claves.has(g.k)));
-    guias.sort((a, b) => b.fecha.localeCompare(a.fecha) || Number(b.folio) - Number(a.folio));
-    llenarFiltros();
-    dibujar();
+    const [, g] = await Promise.all([cargarIndice(), leerApi()]);
+    guardadas = g;
+    claves = new Set(g.map(x => x.k));
+    const anios = aniosDisponibles();
+    await cambiarAnio(anio && anios.includes(anio) ? anio : anios[0]);
+  }
+
+  function aniosDisponibles() {
+    return [...new Set([...guardadas.map(g => g.fecha.slice(0, 4)), ...histIndex])].sort().reverse();
   }
 
   async function leerApi() {
@@ -237,10 +313,11 @@ const TrasladosSection = (() => {
   }
 
   function llenarFiltros() {
-    const anios = [...new Set(guias.map(g => g.fecha.slice(0, 4)))].sort().reverse();
+    const anios = aniosDisponibles();
     if (!anio || !anios.includes(anio)) anio = anios[0]; // el más reciente
     root.querySelector('#tr-anio').innerHTML = anios.map(y => `<option ${y === anio ? 'selected' : ''}>${y}</option>`).join('') || '<option>—</option>';
-    const origenes = ordenar([...new Set(guias.map(g => g.origen))]);
+    const origenes = ordenar([...new Set(guias.filter(g => g.fecha.startsWith(anio)).map(g => g.origen))]);
+    if (filtroOrigen && !origenes.includes(filtroOrigen)) filtroOrigen = '';
     root.querySelector('#tr-origen').innerHTML = '<option value="">Todas las bodegas</option>' +
       origenes.map(o => `<option ${o === filtroOrigen ? 'selected' : ''}>${esc(o)}</option>`).join('');
   }
@@ -346,7 +423,7 @@ const TrasladosSection = (() => {
     const n = guias.filter(g => !g.hist).length;
     root.querySelector('#tr-meta').innerHTML = errorCarga
       ? `<span class="tr-err">No se pudieron leer las guías guardadas: ${esc(errorCarga)}</span>`
-      : `${nf(n)} guías guardadas${guias.length > n ? ` · ${nf(guias.length - n)} del histórico 2025 (Viel)` : ''}`;
+      : `${nf(n)} guías cargadas desde Softland · histórico 2015–${histIndex[histIndex.length - 1] || '—'} disponible`;
     root.querySelectorAll('.tr-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
     charts.forEach(c => c.destroy()); charts = [];
     const body = root.querySelector('#tr-body');
@@ -391,7 +468,7 @@ const TrasladosSection = (() => {
   const pill = b => `<span class="tr-pill" style="--c:${colorBod(b)}">${esc(b)}</span>`;
 
   function detalle(g) {
-    if (!g.lineas) return '<p class="tr-sub">Guía del histórico 2025: sin detalle de productos.</p>';
+    if (!g.lineas || !g.lineas.length) return '<p class="tr-sub">Guía sin detalle de productos.</p>';
     return `<table class="tr-lin"><thead><tr><th>Código</th><th>Producto</th><th class="num">Cantidad</th><th>U/M</th><th class="num">Total</th></tr></thead>
       <tbody>${g.lineas.map(l => `<tr><td>${esc(l[0])}</td><td>${esc(l[1])}</td><td class="num">${nf(l[3], l[3] % 1 ? 2 : 0)}</td><td>${esc(l[2])}</td><td class="num">$${nf(l[5])}</td></tr>`).join('')}</tbody></table>
       <p class="tr-sub">${esc(g.tipo || '')} · Destino en Softland: ${esc(g.destinoRaw)}</p>`;
@@ -435,9 +512,7 @@ const TrasladosSection = (() => {
     const corte = hasta ? prevY + hasta.slice(4) : null;
     const prevMismo = corte ? prev.filter(g => g.fecha <= corte).length : prev.length;
     const prevMes = Array(12).fill(0); prev.forEach(g => prevMes[Number(g.fecha.slice(5, 7)) - 1]++);
-    // Si el año anterior solo tiene histórico de Viel, la comparación vale solo para Viel
-    const prevSoloViel = prev.length && prev.every(g => g.hist);
-    const comparable = prev.length && (!prevSoloViel || filtroOrigen === 'Viel');
+    const comparable = prev.length > 0;
 
     return {
       L, total: L.length, nDet: conDetalle.length, valor: conDetalle.reduce((s, g) => s + g.valor, 0),
@@ -457,7 +532,7 @@ const TrasladosSection = (() => {
     const sinDetalle = D.total - D.nDet;
 
     body.innerHTML = `
-      ${sinDetalle ? `<p class="tr-note">ℹ️ ${nf(sinDetalle)} guías de ${anio} vienen del histórico (solo Viel, sin productos ni valor).</p>` : ''}
+      ${sinDetalle ? `<p class="tr-note">ℹ️ ${nf(sinDetalle)} guías de ${anio} no traen detalle de productos.</p>` : ''}
       <div class="tr-kpis">
         ${kpi('Guías', nf(D.total), filtroOrigen ? 'emitidas por ' + esc(filtroOrigen) : 'todas las bodegas')}
         ${kpi('Promedio diario', nf(D.total / (D.dlTrans || 1), 2), `${D.dlTrans} días laborales${D.hasta ? ' a la fecha' : ''}`)}
@@ -465,7 +540,7 @@ const TrasladosSection = (() => {
         ${kpi('Valor trasladado', D.nDet ? millones(D.valor) : '—', D.nDet ? `${nf(D.lineas)} líneas de producto` : 'sin detalle')}
         ${kpi('Líneas por guía', D.nDet ? nf(D.lineas / D.nDet, 1) : '—', 'promedio')}
         ${kpi('vs ' + D.prevY, variacion == null ? '—' : (variacion > 0 ? '+' : '') + nf(variacion, 0) + '%',
-          variacion == null ? (!D.prevExiste ? 'sin datos de ' + D.prevY : filtroOrigen ? 'sin datos comparables' : 'elige origen Viel para comparar') : `${nf(D.prevMismo)} guías mismo período`)}
+          variacion == null ? 'sin datos de ' + D.prevY : `${nf(D.prevMismo)} guías mismo período`)}
       </div>
 
       <div class="tr-card tr-mt">

@@ -600,7 +600,8 @@ const ReposicionSection = (() => {
               pallets: palletsPorFila.get(claveFila(f)) || null,
               palletsModo: modoPorFila.get(claveFila(f)) || 'pallet',
             }));
-          ReposicionOutputPdf.build(paraPdf, ReposicionParser.todayLabel());
+          const pdf = ReposicionOutputPdf.build(paraPdf, ReposicionParser.todayLabel());
+          guardarEnDescargas(pdf);
         });
       }
     } else {
@@ -744,6 +745,27 @@ const ReposicionSection = (() => {
       registrarCargaEnVivo(records, hora);
     }
     return { filas: filasAnalisis(), origen, productos: allRecords.length };
+  }
+
+  // Copia de la Orden de Traslado en Descargas (para abrirla desde cualquier dispositivo).
+  // La descarga local ya ocurrió; si esto falla solo se avisa.
+  async function guardarEnDescargas(pdf) {
+    if (!pdf || !pdf.base64 || typeof DescargasSection === 'undefined') return;
+    const statusEl = document.getElementById('reposicionStatus');
+    // Vercel acepta hasta 4,5 MB por envío (el base64 pesa ~33% más que el PDF)
+    if (pdf.base64.length > 4000000) {
+      if (statusEl) statusEl.textContent = `${origen} · ⚠️ La orden se descargó, pero es muy grande para Descargas (filtra por ruta para achicarla)`;
+      return;
+    }
+    const hora = new Date().toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).replace(':', '.');
+    const nombre = pdf.filename.replace(/\.pdf$/i, '') + ` ${hora}.pdf`;
+    try {
+      await DescargasSection.guardar(nombre, 'Orden de traslado', pdf.base64);
+      if (statusEl) statusEl.textContent = `${origen} · 📄 Orden guardada en Descargas`;
+    } catch (err) {
+      console.error('No se pudo guardar en Descargas:', err);
+      if (statusEl) statusEl.textContent = `${origen} · ⚠️ La orden se descargó, pero no se pudo guardar en Descargas (${describeError(err)})`;
+    }
   }
 
   function attachEvents() {

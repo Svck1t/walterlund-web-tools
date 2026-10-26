@@ -49,7 +49,6 @@ document.addEventListener('DOMContentLoaded', () => {
     'control-facturas': 'Control de Despachos',
     traslados: 'Control de Traslados',
     compras: 'Compras Nacionales',
-    'packing-lists': 'Packing Lists',
     stock: 'Stock',
     reposicion: 'Reposición de Productos',
     descargas: 'Descargas',
@@ -90,9 +89,6 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'reposicion':
         ReposicionSection.render(content);
-        break;
-      case 'packing-lists':
-        PackingLists.init(content);
         break;
       case 'compras':
         ComprasSection.render(content);

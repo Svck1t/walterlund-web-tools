@@ -109,6 +109,19 @@ const PackingLists = (() => {
   const firma = () => items.map(x => x.id + ':' + (x.c || '') + ':' + x.l.length).join('|');
   function abrir(c) { accion = { tipo: 'ver', c: norm(c) }; irSeccion(); }
   function nuevo(c) { accion = { tipo: 'nuevo', c: norm(c) }; irSeccion(); }
+  // Usados desde la pestaña Packing lists de Control Importaciones
+  function seleccionar(cont) {
+    const pl = porCont.get(norm(cont));
+    if (!pl) return;
+    st.sel = pl.id; st.q = ''; st.bod = 'Todas';
+    setTimeout(() => {
+      const w = body && body.querySelector('.pl-wrap');
+      if (w) w.classList.add('pl-show');
+      scrollAlSel();
+    }, 0);
+  }
+  function formNuevo(cont) { abrirForm(null, norm(cont)); }
+
   function pdfContenedores(conts) {
     const lista = conts.map(c => porCont.get(norm(c))).filter(Boolean);
     if (!lista.length) { toast('Ninguno de esos contenedores tiene packing list', true); return; }
@@ -571,5 +584,5 @@ const PackingLists = (() => {
     document.head.appendChild(s);
   }
 
-  return { init, render, cargar, tiene, firma, abrir, nuevo, pdfContenedores };
+  return { init, render, cargar, tiene, firma, abrir, nuevo, seleccionar, formNuevo, pdfContenedores };
 })();

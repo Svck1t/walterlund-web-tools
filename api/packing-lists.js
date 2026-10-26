@@ -4,7 +4,7 @@
 // el navegador llama a esta función (mismo dominio, sin CORS) y ella llama
 // al Apps Script de servidor a servidor.
 
-const APPS_SCRIPT_URL = 'PEGAR_URL_DEL_WEB_APP_AQUI'; // termina en /exec
+const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwidbVD0AHfZxIa90u-X8P8Bf_yXwsLwUsx3WvOM9xLkQSy7cT0DSVQr2NpTnrTGKr9/exec'; // termina en /exec
 
 module.exports = async (req, res) => {
   try {

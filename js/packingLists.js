@@ -5,7 +5,7 @@
 // =====================================================
 
 const PackingLists = (() => {
-  const API = '/api/packing-lists';
+  const API = 'https://script.google.com/macros/s/AKfycbwidbVD0AHfZxIa90u-X8P8Bf_yXwsLwUsx3WvOM9xLkQSy7cT0DSVQr2NpTnrTGKr9/exec';
   const LBL = { pallet: ['PALLETS', 'Res x Pal', 'Resmas'], bulto: ['Cajas', 'Un x Caja', 'Unidades'], simple: [null, null, 'Cantidad'] };
   const BODEGAS = ['POR ASIGNAR', 'VIEL', 'ALDUNATE', 'SAN FRANCISCO', 'STGO CONCHA', 'CLIENTE'];
 

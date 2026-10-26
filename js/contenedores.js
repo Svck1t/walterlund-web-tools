@@ -1,5 +1,5 @@
 // =====================================================
-// SECCIÓN: COLA DE CONTENEDORES (v7 — pestaña Packing lists en js/packingLists.js)
+// SECCIÓN: COLA DE CONTENEDORES (v8 — conectada con la sección Packing Lists, js/packingLists.js)
 // Fuente: pestaña "Importaciones" (espejo del Excel Control Contenedores 2026)
 // Solo lectura: el estado se marca en el Excel
 // =====================================================
@@ -21,8 +21,10 @@ const ContendedoresSection = (() => {
   let timer = null;
   let root = null;
   let lastSig = '';
+  let lastSigPL = '';
   let dashYear = null;
   let charts = [];
+  let pendiente = null;   // contenedor a mostrar al entrar desde Packing Lists
 
   const MESES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
   const esc = s => String(s ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
@@ -59,17 +61,25 @@ const ContendedoresSection = (() => {
           <button class="ci-tab" data-tab="proximos" role="tab">📅 Próximos</button>
           <button class="ci-tab" data-tab="todas" role="tab">📋 Todas<span class="ci-hide-sm"> las importaciones</span></button>
           <button class="ci-tab" data-tab="dashboard" role="tab">📊 Dashboard</button>
-          <button class="ci-tab" data-tab="packing" role="tab">📦 Packing<span class="ci-hide-sm"> lists</span></button>
         </div>
         <div id="ci-body"></div>
       </div>`;
 
     root.querySelector('#ci-refresh').addEventListener('click', () => cargar(true));
     root.querySelectorAll('.ci-tab').forEach(b => b.addEventListener('click', () => { if (tab === b.dataset.tab) return; tab = b.dataset.tab; root.querySelector('#ci-body').innerHTML = ''; render(); }));
+    root.addEventListener('click', e => {
+      const ver = e.target.closest('[data-pl]');
+      if (ver) { PackingLists.abrir(ver.dataset.pl); return; }
+      const nuevo = e.target.closest('[data-plnew]');
+      if (nuevo) { PackingLists.nuevo(nuevo.dataset.plnew); return; }
+      const pdf = e.target.closest('[data-plpdf]');
+      if (pdf) { PackingLists.pdfContenedores(pdf.dataset.plpdf.split(',')); return; }
+    });
     root.addEventListener('input', e => {
       if (e.target.id === 'ci-buscar') { filtro = e.target.value; renderTabla(); }
     });
 
+    if (pendiente) { tab = 'todas'; filtro = pendiente; pendiente = null; }
     cargar(true);
     clearInterval(timer);
     timer = setInterval(() => {
@@ -83,12 +93,14 @@ const ContendedoresSection = (() => {
     const metaEl = root.querySelector('#ci-meta');
     if (mostrarCarga && metaEl) metaEl.textContent = 'Cargando…';
     try {
-      const [res] = await Promise.all([fetch(API_URL, { cache: 'no-store' }), cargarHist()]);
+      const [res] = await Promise.all([fetch(API_URL, { cache: 'no-store' }), cargarHist(), PackingLists.cargar(false)]);
       const data = await res.json();
       if (!data.ok) throw new Error(data.error || 'Respuesta inválida');
       meta = { hoy: data.hoy, ahora: data.ahora, sync: data.sync };
       const sig = JSON.stringify(data.rows);
-      if (sig === lastSig && !mostrarCarga) { renderMeta(); return; } // sin cambios: no redibuja
+      const sigPL = PackingLists.firma();
+      if (sig === lastSig && sigPL === lastSigPL && !mostrarCarga) { renderMeta(); return; } // sin cambios: no redibuja
+      lastSigPL = sigPL;
       lastSig = sig;
       rows = unir(data.rows, hist ? hist.rows : []);
       render();
@@ -172,9 +184,7 @@ const ContendedoresSection = (() => {
     const body = root.querySelector('#ci-body');
 
     charts.forEach(c => c.destroy()); charts = [];
-    if (tab === 'packing') {
-      PackingLists.render(body, rows);
-    } else if (tab === 'dashboard') {
+    if (tab === 'dashboard') {
       renderDashboard(body);
     } else if (tab === 'proximos') {
       body.innerHTML = `<div class="ci-legend"><span class="ci-sw-ald"></span>Aldunate <span class="ci-sw-viel"></span>Viel</div>
@@ -191,16 +201,27 @@ const ContendedoresSection = (() => {
     }
   }
 
+  // Indicador de packing list: 📦 abre el detalle, ＋ crea uno (solo pendientes)
+  function badgePL(r) {
+    const c = normCont(r.contenedor);
+    if (!c) return '';
+    if (PackingLists.tiene(c)) return `<button class="ci-pl" data-pl="${esc(c)}" title="Ver packing list">📦 PL</button>`;
+    if (!recep(r) && /^[A-Z]{4}\d{7}$/.test(c)) return `<button class="ci-pl ci-pl-no" data-plnew="${esc(c)}" title="Crear packing list">＋ PL</button>`;
+    return '';
+  }
+
   function panel(titulo, lista) {
     const items = lista.length ? lista.map(r => `
       <li class="ci-item${bodCls(r.bodega) ? ' ci-b-' + bodCls(r.bodega) : ''}${r.tagCls === 'late' ? ' ci-late' : ''}">
         <div>
-          <b>${esc(r.contenedor)}</b>${r.tag ? ` <em class="ci-tag ci-tag-${r.tagCls}">${r.tag}</em>` : ''}
+          <b>${esc(r.contenedor)}</b>${r.tag ? ` <em class="ci-tag ci-tag-${r.tagCls}">${r.tag}</em>` : ''} ${badgePL(r)}
           <small>${fCorta(fechaRef(r))}${r.hora ? ' ' + esc(r.hora) : ''}${r.llegada ? '' : ' (ETA)'} · ${esc(r.proveedor)}</small>
           <small>${esc(r.material)} · ${kg(r.peso)}${r.bodega ? ' · ' + esc(r.bodega) : ''}</small>
         </div>
       </li>`).join('') : '<li class="ci-empty">Sin contenedores</li>';
-    return `<section class="ci-panel"><h3>${titulo}<span>${lista.length}</span></h3><ul>${items}</ul></section>`;
+    const conPL = lista.map(r => normCont(r.contenedor)).filter(c => PackingLists.tiene(c));
+    const btnPdf = conPL.length ? `<button class="ci-pl ci-pl-pdf" data-plpdf="${esc(conPL.join(','))}" title="Descargar los packing lists de esta lista">📄 PDF (${conPL.length})</button>` : '';
+    return `<section class="ci-panel"><h3>${titulo}<span>${btnPdf}${lista.length}</span></h3><ul>${items}</ul></section>`;
   }
 
   function renderTabla() {
@@ -232,7 +253,7 @@ const ContendedoresSection = (() => {
           <td class="c-hora">${esc(r.hora) || '—'}</td>
           <td class="c-prov">${esc(r.proveedor) || '—'}</td>
           <td class="c-orden">${esc(r.orden)}</td>
-          <td class="c-cont"><b>${esc(r.contenedor)}</b></td>
+          <td class="c-cont"><b>${esc(r.contenedor)}</b> ${badgePL(r)}</td>
           <td class="c-mat" title="${esc(r.detalle || r.material)}">${esc(r.material)}</td>
           <td class="c-peso num">${kg(r.peso)}</td>
           <td class="c-bod">${r.bodega ? `<span class="ci-bod${bc ? ' ci-bod-' + bc : ''}">${esc(r.bodega)}</span>` : '—'}</td>
@@ -598,6 +619,10 @@ const ContendedoresSection = (() => {
       .ci-sw-ald{background:#fce7f3;border:2px solid #ec4899}
       .ci-sw-viel{background:#fef9c3;border:2px solid #eab308}
       .ci-item small{display:block;color:#6b7280;font-size:12px;margin-top:2px}
+      .ci-pl{border:1px solid #c7d2fe;background:#eef2ff;color:#3730a3;border-radius:10px;font-size:11px;font-weight:700;padding:1px 8px;cursor:pointer;margin-left:4px;white-space:nowrap;font-family:inherit}
+      .ci-pl:hover{background:#e0e7ff}
+      .ci-pl-no{background:#fff;border-style:dashed;color:#6b7280;border-color:#d1d5db}
+      .ci-pl-pdf{margin:0 8px 0 0;font-size:11px}
       .ci-tag{font-style:normal;font-size:11px;font-weight:700;padding:1px 7px;border-radius:10px;margin-left:4px}
       .ci-tag-late{color:#b91c1c;background:#fee2e2}
       .ci-tag-pend{color:#92400e;background:#fef3c7}
@@ -704,5 +729,23 @@ const ContendedoresSection = (() => {
     return { ...clasificar(data.rows, data.hoy), fechaHoy: data.hoy, sync: data.sync, horaLimite: HORA_LIMITE };
   }
 
-  return { init, obtenerResumen };
+  // Para Packing Lists: filas de Importaciones (2026 + histórico) sin depender de que esta sección esté abierta
+  async function obtenerFilas() {
+    if (rows.length) return rows;
+    const [res] = await Promise.all([fetch(API_URL, { cache: 'no-store' }), cargarHist()]);
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'Respuesta inválida');
+    if (!meta.hoy) meta = { hoy: data.hoy, ahora: data.ahora, sync: data.sync };
+    rows = unir(data.rows, hist ? hist.rows : []);
+    return rows;
+  }
+
+  // Navega a esta sección mostrando un contenedor en "Todas las importaciones"
+  function abrir(contenedor) {
+    pendiente = normCont(contenedor);
+    const nav = document.querySelector('.nav-item[data-section="cola-contenedores"]');
+    if (nav) nav.click();
+  }
+
+  return { init, obtenerResumen, obtenerFilas, abrir, estilos: injectStyles };
 })();

@@ -1,5 +1,5 @@
 // =====================================================
-// SECCIÓN: COLA DE CONTENEDORES (v8 — conectada con la sección Packing Lists, js/packingLists.js)
+// SECCIÓN: COLA DE CONTENEDORES (v9 — pestaña Packing lists + sección Packing Lists, js/packingLists.js)
 // Fuente: pestaña "Importaciones" (espejo del Excel Control Contenedores 2026)
 // Solo lectura: el estado se marca en el Excel
 // =====================================================
@@ -60,18 +60,19 @@ const ContendedoresSection = (() => {
         <div class="ci-tabs" role="tablist">
           <button class="ci-tab" data-tab="proximos" role="tab">📅 Próximos</button>
           <button class="ci-tab" data-tab="todas" role="tab">📋 Todas<span class="ci-hide-sm"> las importaciones</span></button>
+          <button class="ci-tab" data-tab="packing" role="tab">📦 Packing<span class="ci-hide-sm"> lists</span></button>
           <button class="ci-tab" data-tab="dashboard" role="tab">📊 Dashboard</button>
         </div>
         <div id="ci-body"></div>
       </div>`;
 
     root.querySelector('#ci-refresh').addEventListener('click', () => cargar(true));
-    root.querySelectorAll('.ci-tab').forEach(b => b.addEventListener('click', () => { if (tab === b.dataset.tab) return; tab = b.dataset.tab; root.querySelector('#ci-body').innerHTML = ''; render(); }));
+    root.querySelectorAll('.ci-tab').forEach(b => b.addEventListener('click', () => irTab(b.dataset.tab)));
     root.addEventListener('click', e => {
       const ver = e.target.closest('[data-pl]');
-      if (ver) { PackingLists.abrir(ver.dataset.pl); return; }
+      if (ver) { PackingLists.seleccionar(ver.dataset.pl); irTab('packing', true); return; }
       const nuevo = e.target.closest('[data-plnew]');
-      if (nuevo) { PackingLists.nuevo(nuevo.dataset.plnew); return; }
+      if (nuevo) { irTab('packing'); PackingLists.formNuevo(nuevo.dataset.plnew); return; }
       const pdf = e.target.closest('[data-plpdf]');
       if (pdf) { PackingLists.pdfContenedores(pdf.dataset.plpdf.split(',')); return; }
     });
@@ -184,7 +185,9 @@ const ContendedoresSection = (() => {
     const body = root.querySelector('#ci-body');
 
     charts.forEach(c => c.destroy()); charts = [];
-    if (tab === 'dashboard') {
+    if (tab === 'packing') {
+      PackingLists.render(body, rows);
+    } else if (tab === 'dashboard') {
       renderDashboard(body);
     } else if (tab === 'proximos') {
       body.innerHTML = `<div class="ci-legend"><span class="ci-sw-ald"></span>Aldunate <span class="ci-sw-viel"></span>Viel</div>
@@ -208,6 +211,14 @@ const ContendedoresSection = (() => {
     if (PackingLists.tiene(c)) return `<button class="ci-pl" data-pl="${esc(c)}" title="Ver packing list">📦 PL</button>`;
     if (!recep(r) && /^[A-Z]{4}\d{7}$/.test(c)) return `<button class="ci-pl ci-pl-no" data-plnew="${esc(c)}" title="Crear packing list">＋ PL</button>`;
     return '';
+  }
+
+  // Cambia de pestaña (force: redibuja aunque ya esté en ella, ej. para mostrar otro packing list)
+  function irTab(t, force) {
+    if (tab === t && !force) return;
+    tab = t;
+    root.querySelector('#ci-body').innerHTML = '';
+    render();
   }
 
   function panel(titulo, lista) {
@@ -742,6 +753,12 @@ const ContendedoresSection = (() => {
 
   // Navega a esta sección mostrando un contenedor en "Todas las importaciones"
   function abrir(contenedor) {
+    if (root && root.isConnected && root.querySelector('.ci')) {
+      filtro = normCont(contenedor);
+      irTab('todas', true);
+      window.scrollTo(0, 0);
+      return;
+    }
     pendiente = normCont(contenedor);
     const nav = document.querySelector('.nav-item[data-section="cola-contenedores"]');
     if (nav) nav.click();

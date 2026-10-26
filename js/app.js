@@ -25,6 +25,7 @@ document.addEventListener('DOMContentLoaded', () => {
     settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
     bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.9 1.9 0 0 0 3.4 0"/>',
     transfer: '<path d="M4 8h13"/><path d="m14 4 4 4-4 4"/><path d="M20 16H7"/><path d="m10 12-4 4 4 4"/>',
+    cart: '<circle cx="9" cy="20" r="1.5"/><circle cx="18" cy="20" r="1.5"/><path d="M2 3h3l2.7 12.4a1 1 0 0 0 1 .8h9.6a1 1 0 0 0 1-.8L21 7H6"/>',
     chevron: '<path d="m6 9 6 6 6-6"/>'
   };
   document.querySelectorAll('[data-icon]').forEach(el => {
@@ -46,6 +47,7 @@ document.addEventListener('DOMContentLoaded', () => {
     'cola-contenedores': 'Control Importaciones',
     'control-facturas': 'Control de Despachos',
     traslados: 'Control de Traslados',
+    compras: 'Compras Nacionales',
     stock: 'Stock',
     reposicion: 'Reposición de Productos',
     descargas: 'Descargas',
@@ -86,6 +88,9 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'reposicion':
         ReposicionSection.render(content);
+        break;
+      case 'compras':
+        ComprasSection.render(content);
         break;
       case 'control-facturas':
         ControlFacturasSection.render(content);

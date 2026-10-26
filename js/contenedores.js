@@ -1,5 +1,5 @@
 // =====================================================
-// SECCIÓN: COLA DE CONTENEDORES (v6)
+// SECCIÓN: COLA DE CONTENEDORES (v7 — pestaña Packing lists en js/packingLists.js)
 // Fuente: pestaña "Importaciones" (espejo del Excel Control Contenedores 2026)
 // Solo lectura: el estado se marca en el Excel
 // =====================================================
@@ -59,12 +59,13 @@ const ContendedoresSection = (() => {
           <button class="ci-tab" data-tab="proximos" role="tab">📅 Próximos</button>
           <button class="ci-tab" data-tab="todas" role="tab">📋 Todas<span class="ci-hide-sm"> las importaciones</span></button>
           <button class="ci-tab" data-tab="dashboard" role="tab">📊 Dashboard</button>
+          <button class="ci-tab" data-tab="packing" role="tab">📦 Packing<span class="ci-hide-sm"> lists</span></button>
         </div>
         <div id="ci-body"></div>
       </div>`;
 
     root.querySelector('#ci-refresh').addEventListener('click', () => cargar(true));
-    root.querySelectorAll('.ci-tab').forEach(b => b.addEventListener('click', () => { tab = b.dataset.tab; render(); }));
+    root.querySelectorAll('.ci-tab').forEach(b => b.addEventListener('click', () => { if (tab === b.dataset.tab) return; tab = b.dataset.tab; root.querySelector('#ci-body').innerHTML = ''; render(); }));
     root.addEventListener('input', e => {
       if (e.target.id === 'ci-buscar') { filtro = e.target.value; renderTabla(); }
     });
@@ -171,7 +172,9 @@ const ContendedoresSection = (() => {
     const body = root.querySelector('#ci-body');
 
     charts.forEach(c => c.destroy()); charts = [];
-    if (tab === 'dashboard') {
+    if (tab === 'packing') {
+      PackingLists.render(body, rows);
+    } else if (tab === 'dashboard') {
       renderDashboard(body);
     } else if (tab === 'proximos') {
       body.innerHTML = `<div class="ci-legend"><span class="ci-sw-ald"></span>Aldunate <span class="ci-sw-viel"></span>Viel</div>

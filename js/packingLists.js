@@ -1,11 +1,11 @@
 // =====================================================
-// PESTAÑA: PACKING LISTS (dentro de Control Importaciones) — v1
+// SECCIÓN: PACKING LISTS — v2 (sección propia, conectada con Control Importaciones)
 // Fuente: planilla "Packing Lists" (PL_Cabecera + PL_Detalle) vía /api/packing-lists
 // Cruza con Importaciones para proveedor, orden, llegada, estado, GE y bodega
 // =====================================================
 
 const PackingLists = (() => {
-  const API = 'https://script.google.com/macros/s/AKfycbwidbVD0AHfZxIa90u-X8P8Bf_yXwsLwUsx3WvOM9xLkQSy7cT0DSVQr2NpTnrTGKr9/exec';
+  const API = '/api/packing-lists'; // proxy de Vercel (el POST directo a Apps Script falla por CORS)
   const LBL = { pallet: ['PALLETS', 'Res x Pal', 'Resmas'], bulto: ['Cajas', 'Un x Caja', 'Unidades'], simple: [null, null, 'Cantidad'] };
   const BODEGAS = ['POR ASIGNAR', 'VIEL', 'ALDUNATE', 'SAN FRANCISCO', 'STGO CONCHA', 'CLIENTE'];
 
@@ -16,6 +16,8 @@ const PackingLists = (() => {
   const st = { q: '', bod: 'Todas', sel: null, marked: new Set() };
   let cat = {};          // catálogo código -> {p, u}
   let dlg = null, editId = null;
+  let porCont = new Map(); // contenedor -> packing list
+  let accion = null;       // acción pedida desde Control Importaciones: { tipo: 'ver'|'nuevo', c }
 
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const nf = (v, d = 0) => (v === null || v === '' || v === undefined || isNaN(v)) ? '' : Number(v).toLocaleString('es-CL', { minimumFractionDigits: d, maximumFractionDigits: d });
@@ -52,6 +54,7 @@ const PackingLists = (() => {
         const d = await r.json();
         if (!d.ok) throw new Error(d.error || 'Respuesta inválida');
         items = d.items.map(x => ({ ...x, g: x.g || [], l: x.l || [] }));
+        porCont = new Map(items.filter(x => x.c).map(x => [norm(x.c), x]));
         cat = {};
         items.forEach(pl => pl.l.forEach(l => { if (l[0] && l[0].toUpperCase() !== 'SIN CÓDIGO') cat[l[0]] = { p: l[1], u: l[5] }; }));
         cargado = true; errorCarga = '';
@@ -61,6 +64,55 @@ const PackingLists = (() => {
       } finally { cargando = null; }
     })();
     return cargando;
+  }
+
+  // ============ SECCIÓN ============
+  async function init(container) {
+    if (window.ContendedoresSection) ContendedoresSection.estilos(); // reutiliza estilos ci-* (tabla, buscador, toasts)
+    container.innerHTML = `<div class="ci">
+      <div class="ci-head">
+        <div><h1>📋 Packing Lists</h1><p>Detalle por contenedor · conectado con Control Importaciones</p></div>
+        <button class="ci-btn" id="pl-refresh">🔄 Actualizar</button>
+      </div>
+      <div id="pl-body"><p class="ci-empty">Cargando…</p></div>
+    </div>`;
+    const b = container.querySelector('#pl-body');
+    container.querySelector('#pl-refresh').addEventListener('click', async () => {
+      const [filas] = await Promise.all([ContendedoresSection.obtenerFilas().catch(() => []), cargar(true)]);
+      render(b, filas);
+    });
+    let filas = [];
+    try { filas = await ContendedoresSection.obtenerFilas(); }
+    catch (err) { console.error('Importaciones:', err); }
+    await cargar(false);
+    if (!b.isConnected) return; // el usuario ya se fue a otra sección
+    render(b, filas);
+    const a = accion; accion = null;
+    if (a && a.tipo === 'ver') {
+      const pl = porCont.get(a.c);
+      if (pl) { st.sel = pl.id; st.q = ''; st.bod = 'Todas'; const q = body.querySelector('#pl-q'); if (q) q.value = ''; body.querySelector('.pl-wrap').classList.add('pl-show'); renderFilters(); renderList(); renderDetail(); scrollAlSel(); }
+    } else if (a && a.tipo === 'nuevo') {
+      abrirForm(null, a.c);
+    }
+  }
+  function irSeccion() {
+    const nav = document.querySelector('.nav-item[data-section="packing-lists"]');
+    if (nav) nav.click();
+  }
+  function scrollAlSel() {
+    const el = body && body.querySelector('.pl-row.cur');
+    if (el) el.scrollIntoView({ block: 'center' });
+  }
+
+  // ============ API PARA CONTROL IMPORTACIONES ============
+  const tiene = c => porCont.has(norm(c));
+  const firma = () => items.map(x => x.id + ':' + (x.c || '') + ':' + x.l.length).join('|');
+  function abrir(c) { accion = { tipo: 'ver', c: norm(c) }; irSeccion(); }
+  function nuevo(c) { accion = { tipo: 'nuevo', c: norm(c) }; irSeccion(); }
+  function pdfContenedores(conts) {
+    const lista = conts.map(c => porCont.get(norm(c))).filter(Boolean);
+    if (!lista.length) { toast('Ninguno de esos contenedores tiene packing list', true); return; }
+    pdf(lista);
   }
 
   // ============ RENDER ============
@@ -118,6 +170,7 @@ const PackingLists = (() => {
       if (e.target.closest('[data-new]')) abrirForm(null);
       if (e.target.closest('[data-edit]')) abrirForm(items.find(x => x.id === st.sel));
       if (e.target.closest('[data-pdf1]')) pdf(items.filter(x => x.id === st.sel));
+      if (e.target.closest('[data-imp]')) { const pl = items.find(x => x.id === st.sel); if (pl && pl.c) ContendedoresSection.abrir(pl.c); }
       if (e.target.closest('[data-retry]')) { errorCarga = ''; cargar(true).then(() => { renderList(); renderDetail(); }); }
     });
   }
@@ -192,7 +245,7 @@ const PackingLists = (() => {
     const i = info(pl), C = cols(pl), sum = k => pl.l.reduce((s, l) => s + (Number(l[k]) || 0), 0);
     const bc = bodCls(i.bodega), al = alertas(pl);
     const c = pl.c || '';
-    el.innerHTML = bar(`<button class="pl-b" data-edit>✏️ Editar</button><button class="pl-b" data-pdf1>📄 PDF</button>`) + `
+    el.innerHTML = bar(`${c && imp.has(norm(c)) ? '<button class="pl-b" data-imp>🚢 Ver en Importaciones</button>' : ''}<button class="pl-b" data-edit>✏️ Editar</button><button class="pl-b" data-pdf1>📄 PDF</button>`) + `
       <div class="pl-headline">
         ${c ? `<div class="pl-plate"><span>${esc(c.slice(0, 4))}</span><span>${esc(c.slice(4, 10))}</span><span class="pl-chk">${esc(c.slice(10))}</span></div>` : '<div class="pl-plate pl-plate-none">Sin N° contenedor</div>'}
         <div><strong>${esc(i.r.proveedor || 'No aparece en Importaciones')}</strong><small>${esc(i.r.material || '')}${i.r.orden ? ' · Orden ' + esc(i.r.orden) : ''}</small></div>
@@ -377,12 +430,12 @@ const PackingLists = (() => {
       const b = BODEGAS.find(x => String(r.bodega).toUpperCase().includes(x)); if (b) dlg.querySelector('#pl-fb').value = b;
     }
   }
-  function abrirForm(pl) {
+  function abrirForm(pl, contSugerido) {
     crearDialog();
     editId = pl ? pl.id : null;
     dlg.querySelector('#pl-codes').innerHTML = Object.keys(cat).sort().map(c => `<option value="${esc(c)}">${esc(cat[c].p)}</option>`).join('');
     dlg.querySelector('#pl-ftitle').textContent = pl ? `Editar ${pl.c || pl.id}` : 'Nuevo packing list';
-    dlg.querySelector('#pl-fc').value = pl ? (pl.c || '') : '';
+    dlg.querySelector('#pl-fc').value = pl ? (pl.c || '') : (contSugerido || '');
     dlg.querySelector('#pl-fg').value = pl ? pl.g.join(', ') : '';
     const b = pl ? (BODEGAS.find(x => String(pl.b).toUpperCase().includes(x)) || 'POR ASIGNAR') : 'POR ASIGNAR';
     dlg.querySelector('#pl-fb').value = b;
@@ -393,6 +446,7 @@ const PackingLists = (() => {
     dlg.querySelector('#pl-lb').innerHTML = '';
     (pl ? pl.l : [[], []]).forEach(l => linea(l));
     recalc();
+    if (!pl && contSugerido) infoImp();
     dlg.showModal();
     dlg.querySelector('#pl-fc').focus();
   }
@@ -517,5 +571,5 @@ const PackingLists = (() => {
     document.head.appendChild(s);
   }
 
-  return { render, cargar };
+  return { init, render, cargar, tiene, firma, abrir, nuevo, pdfContenedores };
 })();

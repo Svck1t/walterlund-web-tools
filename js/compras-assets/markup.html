@@ -108,6 +108,7 @@
         <input type="text" class="input" id="f-proveedor" placeholder="Ej: Papelera del Pacífico" list="proveedores-list">
         <datalist id="proveedores-list"></datalist>
       </div>
+      <div class="item-extra-head hidden" id="item1-label"><span class="item-num">Ítem 1</span></div>
       <div class="field">
         <label>Producto / Descripción <span class="required">*</span></label>
         <input type="text" class="input" id="f-producto" placeholder="Ej: Papel bond carta 75gr">
@@ -122,6 +123,11 @@
         </div>
         <div class="field"><label>Costo unitario CLP <span class="required">*</span></label><input type="number" step="any" class="input font-mono" id="f-costo" placeholder="0"></div>
       </div>
+      <div id="items-extra"></div>
+      <button type="button" class="btn btn-secondary btn-add-item" id="btn-add-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        Agregar otro ítem de la misma boleta
+      </button>
       <div class="subtotal-preview hidden" id="subtotal-preview">
         <span class="label">Subtotal calculado</span>
         <span class="value" id="subtotal-value">$0</span>

@@ -31,6 +31,7 @@ let fotoPendienteMime = null;
 function today() { return new Date().toISOString().slice(0,10); }
 function monthOf(d) { return (d||'').slice(0,7); }
 function fmtCLP(n) { return new Intl.NumberFormat('es-CL',{style:'currency',currency:'CLP',maximumFractionDigits:0}).format(Number(n)||0); }
+function fmtCorto(n) { n = Number(n) || 0; if (n >= 1e6) return '$' + (n / 1e6).toLocaleString('es-CL', { maximumFractionDigits: 1 }) + 'M'; if (n >= 1e3) return '$' + Math.round(n / 1e3) + 'k'; return '$' + Math.round(n); }
 function fmtNum(n) { return new Intl.NumberFormat('es-CL',{maximumFractionDigits:2}).format(Number(n)||0); }
 function escapeHtml(s) { return String(s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]); }
 function uid() { return 'e_' + Date.now() + '_' + Math.random().toString(36).slice(2,7); }
@@ -99,6 +100,7 @@ function normalize(e) {
     notas: String(e.notas || ''),
     fotoUrl: String(e.fotoUrl || ''),
     sucursal: String(e.sucursal || ''),
+    grupo: String(e.grupo || ''),
     creadoEn: Number(e.creadoEn) || Date.now(),
     actualizadoEn: Number(e.actualizadoEn) || Date.now(),
   };
@@ -116,7 +118,7 @@ function getFiltered(opt = {}) {
     .sort((a,b) => b.fecha.localeCompare(a.fecha) || b.creadoEn - a.creadoEn);
 }
 function getTotales(list) {
-  const t = { total:0, pendiente:0, recibido:0, facturado:0, count:list.length };
+  const t = { total:0, pendiente:0, recibido:0, facturado:0, count:new Set(list.map(grupoDe)).size };
   list.forEach(e => {
     const sub = e.cantidad * e.costoUnitario;
     t.total += sub;
@@ -138,7 +140,7 @@ function render() {
   root.getElementById('summary-grid').classList.toggle('hidden', vista === 'dashboard');
   if (vista === 'dashboard') renderDashboard();
   else { renderSummary(); vista === 'lista' ? renderLista() : renderResumen(); }
-  root.getElementById('total-registros').textContent = entries.length === 1 ? '1 registro total' : entries.length + ' registros totales';
+  root.getElementById('total-registros').textContent = (n => n === 1 ? '1 registro total' : n + ' registros totales')(new Set(entries.map(grupoDe)).size);
 }
 
 function renderSummary() {
@@ -187,34 +189,45 @@ function renderLista() {
     root.getElementById('empty-add')?.addEventListener('click', () => openModal());
     return;
   }
-  const t = getTotales(list);
-  const rows = list.map(e => `
-    <tr data-id="${e.id}">
+  // Un registro = un documento (boleta/factura/vale) con uno o más ítems
+  const gs = new Set(list.map(grupoDe));
+  const docs = agruparDocs(entries.filter(e => gs.has(grupoDe(e))));
+  const totalDocs = docs.reduce((s, d) => s + d.total, 0);
+  const rows = docs.map(d => {
+    const uno = d.items.length === 1 ? d.items[0] : null;
+    const detalle = uno
+      ? `<div class="text-muted">${escapeHtml(uno.producto)}</div>`
+      : `<div class="doc-items">${d.items.map(it => `
+          <div class="doc-item"><span class="doc-item-prod">${escapeHtml(it.producto)}</span><span class="doc-item-num">${fmtNum(it.cantidad)} ${escapeHtml(it.unidad)} × ${fmtCLP(it.costoUnitario)}</span></div>`).join('')}
+        </div>`;
+    return `
+    <tr data-id="${escapeHtml(d.grupo)}">
       <td class="mono text-muted" style="font-size:12px;">
-        ${e.fecha}${e.referencia ? `<div class="text-faint">${escapeHtml(e.referencia)}</div>` : ''}
-        <div class="suc-badge${e.sucursal ? '' : ' suc-vacia'}">${escapeHtml(e.sucursal || 'Sin sucursal')}</div>
+        ${d.fecha}${d.referencia ? `<div class="text-faint">${escapeHtml(d.referencia)}</div>` : ''}
+        <div class="suc-badge${d.sucursal ? '' : ' suc-vacia'}">${escapeHtml(d.sucursal || 'Sin sucursal')}</div>
       </td>
       <td>
-        <div class="product-name">${escapeHtml(e.proveedor)}</div>
-        <div class="text-muted">${escapeHtml(e.producto)}</div>
-        ${e.notas ? `<div class="note-text">${escapeHtml(e.notas)}</div>` : ''}
+        <div class="product-name">${escapeHtml(d.proveedor)}</div>
+        ${detalle}
+        ${d.notas ? `<div class="note-text">${escapeHtml(d.notas)}</div>` : ''}
       </td>
-      <td class="right mono">${fmtNum(e.cantidad)} <span class="text-faint">${escapeHtml(e.unidad)}</span></td>
-      <td class="right mono">${fmtCLP(e.costoUnitario)}</td>
-      <td class="right mono" style="font-weight:600;">${fmtCLP(e.cantidad * e.costoUnitario)}</td>
+      <td class="right mono">${uno ? `${fmtNum(uno.cantidad)} <span class="text-faint">${escapeHtml(uno.unidad)}</span>` : `<span class="text-faint">${d.items.length} ítems</span>`}</td>
+      <td class="right mono">${uno ? fmtCLP(uno.costoUnitario) : ''}</td>
+      <td class="right mono" style="font-weight:600;">${fmtCLP(d.total)}</td>
       <td>
-        <select class="estado-select ${ESTADOS[e.estado].cls}" data-id="${e.id}" data-action="estado">
-          ${Object.entries(ESTADOS).map(([k,v]) => `<option value="${k}" ${k===e.estado?'selected':''}>${v.label}</option>`).join('')}
+        <select class="estado-select ${ESTADOS[d.estado].cls}" data-id="${escapeHtml(d.grupo)}" data-action="estado">
+          ${Object.entries(ESTADOS).map(([k,v]) => `<option value="${k}" ${k===d.estado?'selected':''}>${v.label}</option>`).join('')}
         </select>
       </td>
       <td>
         <div class="row-actions">
-          ${e.fotoUrl ? `<button class="icon-btn" data-id="${e.id}" data-action="ver-foto" title="Ver foto"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg></button>` : ''}
-          <button class="icon-btn" data-id="${e.id}" data-action="edit" title="Editar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg></button>
-          <button class="icon-btn danger" data-id="${e.id}" data-action="delete" title="Eliminar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"/></svg></button>
+          ${d.fotoUrl ? `<button class="icon-btn" data-id="${escapeHtml(d.grupo)}" data-action="ver-foto" title="Ver foto"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg></button>` : ''}
+          <button class="icon-btn" data-id="${escapeHtml(d.grupo)}" data-action="edit" title="Editar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg></button>
+          <button class="icon-btn danger" data-id="${escapeHtml(d.grupo)}" data-action="delete" title="Eliminar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"/></svg></button>
         </div>
       </td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
 
   cont.innerHTML = `
     <div class="table-wrap">
@@ -225,8 +238,8 @@ function renderLista() {
         </tr></thead>
         <tbody>${rows}</tbody>
         <tfoot><tr>
-          <td colspan="4">Total · ${t.count} ${t.count===1?'registro':'registros'}</td>
-          <td class="total">${fmtCLP(t.total)}</td>
+          <td colspan="4">Total · ${docs.length} ${docs.length===1?'registro':'registros'}</td>
+          <td class="total">${fmtCLP(totalDocs)}</td>
           <td colspan="2"></td>
         </tr></tfoot>
       </table>
@@ -239,6 +252,34 @@ function renderLista() {
     confirmDeleteId = b.dataset.id;
     root.getElementById('modal-delete').classList.remove('hidden');
   }));
+}
+
+// ----------- Documentos: varios ítems = un solo registro -----------
+// En la hoja cada ítem es una fila (así el reporte y el dashboard por producto siguen funcionando),
+// y las filas de un mismo documento comparten la columna "grupo". Filas antiguas sin grupo = documento de 1 ítem.
+function grupoDe(e) { return e.grupo || e.id; }
+function itemsDe(g) { return entries.filter(e => grupoDe(e) === g).sort((a, b) => a.creadoEn - b.creadoEn); }
+function agruparDocs(list) {
+  const m = new Map();
+  list.forEach(e => { const g = grupoDe(e); if (!m.has(g)) m.set(g, []); m.get(g).push(e); });
+  return [...m.entries()].map(([g, items]) => {
+    items.sort((a, b) => a.creadoEn - b.creadoEn);
+    const p = items[0];
+    return { grupo: g, items, fecha: p.fecha, sucursal: p.sucursal, proveedor: p.proveedor, estado: p.estado,
+      referencia: p.referencia, notas: p.notas, creadoEn: p.creadoEn,
+      fotoUrl: items.map(x => x.fotoUrl).find(Boolean) || '',
+      total: items.reduce((s, x) => s + x.cantidad * x.costoUnitario, 0) };
+  }).sort((a, b) => b.fecha.localeCompare(a.fecha) || b.creadoEn - a.creadoEn);
+}
+// Reemplaza todas las filas del documento por las nuevas (en una sola llamada y con la foto subida una vez)
+async function guardarGrupo(grupo, nuevas, image, mimeType) {
+  nuevas.forEach(n => { n.grupo = grupo; });
+  const body = { action: 'save_group', grupo, entries: nuevas };
+  if (image) { body.image = image; body.mimeType = mimeType; }
+  const res = await apiPost(body);
+  if (!res.ok) throw new Error(res.error || 'Error al guardar');
+  if (res.fotoUrl) nuevas.forEach(n => { n.fotoUrl = res.fotoUrl; });
+  entries = entries.filter(e => grupoDe(e) !== grupo).concat(nuevas);
 }
 
 function renderResumen() {
@@ -311,7 +352,9 @@ function renderDashboard() {
   const total = sum(delMes), totalPrev = sum(previo);
   const variacion = totalPrev > 0 ? (total - totalPrev) / totalPrev * 100 : null;
   const porFacturar = delMes.filter(e => e.estado !== 'facturado');
-  const conFoto = delMes.filter(e => e.fotoUrl).length;
+  const docsMes = agruparDocs(delMes);
+  const conFoto = docsMes.filter(d => d.fotoUrl).length;
+  const nPorFacturar = new Set(porFacturar.map(grupoDe)).size;
 
   // Por sucursal: mismo mes y filtros, pero siempre todas las sucursales
   const mesTodas = getFiltered({ sinMes: true, sinSucursal: true }).filter(e => monthOf(e.fecha) === mes);
@@ -335,18 +378,18 @@ function renderDashboard() {
       </div>
       <div class="summary-card">
         <div class="label-row"><span class="label">Registros</span></div>
-        <div class="value">${delMes.length}</div>
-        <div class="sub">${new Set(delMes.map(e => e.proveedor)).size} proveedores</div>
+        <div class="value">${docsMes.length}</div>
+        <div class="sub">${(n => n + (n === 1 ? ' proveedor' : ' proveedores'))(new Set(delMes.map(e => e.proveedor)).size)}</div>
       </div>
       <div class="summary-card">
         <div class="label-row"><span class="dot" style="background:var(--amber-dot)"></span><span class="label">Por facturar</span></div>
         <div class="value">${fmtCLP(sum(porFacturar))}</div>
-        <div class="sub">${porFacturar.length} ${porFacturar.length === 1 ? 'registro' : 'registros'} pendiente o recibido</div>
+        <div class="sub">${nPorFacturar} ${nPorFacturar === 1 ? 'registro' : 'registros'} pendiente o recibido</div>
       </div>
       <div class="summary-card">
         <div class="label-row"><span class="label">Con foto</span></div>
-        <div class="value">${conFoto} / ${delMes.length}</div>
-        <div class="sub">${delMes.length ? Math.round(conFoto / delMes.length * 100) : 0}% respaldado</div>
+        <div class="value">${conFoto} / ${docsMes.length}</div>
+        <div class="sub">${docsMes.length ? Math.round(conFoto / docsMes.length * 100) : 0}% respaldado</div>
       </div>
     </div>
     <div class="dash-grid">
@@ -359,7 +402,7 @@ function renderDashboard() {
         <div class="dash-cols">
           ${tend.map(t => `
             <div class="dash-col${t.m === mes ? ' actual' : ''}">
-              <div class="dash-col-val">${t.v ? fmtCLP(t.v).replace('$', '$ ') : ''}</div>
+              <div class="dash-col-val">${t.v ? fmtCorto(t.v) : ''}</div>
               <div class="dash-col-track"><div class="dash-col-bar" style="height:${(t.v / maxT * 100).toFixed(1)}%"></div></div>
               <div class="dash-col-label">${mesTxt(t.m)}</div>
             </div>`).join('')}
@@ -391,19 +434,16 @@ function emptyStateHtml() {
 
 // ----------- Acciones sobre datos -----------
 async function onEstadoChange(ev) {
-  const id = ev.target.dataset.id;
+  const g = ev.target.dataset.id;
   const nuevoEstado = ev.target.value;
-  const entry = entries.find(e => e.id === id);
-  if (!entry) return;
-  const updated = { ...entry, estado: nuevoEstado, actualizadoEn: Date.now() };
-  // Optimistic update
-  Object.assign(entry, updated);
-  render();
+  const items = itemsDe(g);
+  if (!items.length) return;
+  const nuevas = items.map(e => ({ ...e, estado: nuevoEstado, actualizadoEn: Date.now() }));
   setSyncStatus('loading','Guardando…');
   try {
-    const res = await apiPost({ action: 'update', entry: updated });
-    if (!res.ok) throw new Error(res.error);
+    await guardarGrupo(g, nuevas);
     setSyncStatus('ok','Sincronizado');
+    render();
   } catch (err) {
     setSyncStatus('error','Error al guardar · recargando…');
     setTimeout(loadEntries, 800);
@@ -454,7 +494,7 @@ async function handleFotoSeleccionada(e) {
 
   root.getElementById('foto-preview').src = dataUrl;
   const status = root.getElementById('foto-status');
-  status.textContent = 'Analizando boleta…';
+  status.textContent = 'Extrayendo datos…';
   root.getElementById('modal-foto').classList.remove('hidden');
   // Gemini a veces tarda porque el servidor reintenta con otro modelo: se avisa para que no parezca pegado
   const aviso = setTimeout(() => { status.textContent = 'Gemini está lento, probando de nuevo…'; }, 12000);
@@ -462,7 +502,7 @@ async function handleFotoSeleccionada(e) {
   let data = {}, errorLectura = null;
   try {
     const res = await apiPost({ action: 'extract', image: base64, mimeType }, 100000);
-    if (!res.ok) throw new Error(res.error || 'No se pudo leer la boleta');
+    if (!res.ok) throw new Error(res.error || 'No se pudieron extraer los datos');
     data = res.data || {};
   } catch (err) {
     errorLectura = err.message; // la foto NO se pierde: se abre el registro con la foto adjunta
@@ -500,12 +540,12 @@ function abrirModalConDatosExtraidos(data, fotoBase64, fotoMime, errorLectura) {
   });
   root.getElementById('f-estado').value = 'recibido';
   root.getElementById('f-notas').value = errorLectura
-    ? 'Foto de boleta adjunta — no se pudo leer automáticamente, datos ingresados a mano.'
-    : 'Registrado desde foto de boleta — revisa los datos antes de guardar.';
+    ? 'Foto adjunta — los datos no se pudieron extraer, ingresados a mano.'
+    : 'Datos extraídos de la foto — revisa antes de guardar.';
   if (errorLectura) {
-    setTimeout(() => alert('No se pudo leer la boleta automáticamente.\n\n' + errorLectura + '\n\nLa foto quedó adjunta: completa los datos a mano y guarda.'), 50);
+    setTimeout(() => alert('No se pudieron extraer los datos automáticamente.\n\n' + errorLectura + '\n\nLa foto quedó adjunta: completa los datos a mano y guarda.'), 50);
   } else if (items.length > 1) {
-    setTimeout(() => alert('Se detectaron ' + items.length + ' ítems en la boleta. Revísalos antes de guardar: cada ítem queda como un registro aparte, todos con la misma foto.'), 50);
+    setTimeout(() => alert('Se detectaron ' + items.length + ' ítems. Revísalos antes de guardar: quedan todos en un mismo registro.'), 50);
   }
   updateSubtotalPreview();
 }
@@ -537,10 +577,10 @@ async function handleAdjuntarFoto(e) {
   } catch { alert('No se pudo leer la imagen.'); }
 }
 
-function verFoto(id) {
-  const e = entries.find(x => x.id === id);
-  if (!e || !e.fotoUrl) return;
-  root.getElementById('foto-ver-img').src = e.fotoUrl;
+function verFoto(g) {
+  const url = itemsDe(g).map(x => x.fotoUrl).find(Boolean);
+  if (!url) return;
+  root.getElementById('foto-ver-img').src = url;
   root.getElementById('modal-ver-foto').classList.remove('hidden');
 }
 function cerrarVerFoto() { root.getElementById('modal-ver-foto').classList.add('hidden'); }
@@ -551,13 +591,13 @@ async function openModal(id) {
   fotoPendienteMime = null;
   root.getElementById('modal-foto-indicator').classList.add('hidden');
   root.getElementById('items-extra').innerHTML = '';
-  root.getElementById('btn-add-item').classList.toggle('hidden', !!editingId);
   root.getElementById('item1-label').classList.add('hidden');
   root.getElementById('modal-title').textContent = editingId ? 'Editar registro' : 'Nuevo registro';
   root.getElementById('modal-save-label').textContent = editingId ? 'Guardar cambios' : 'Agregar registro';
   root.getElementById('f-sucursal').value = sucursalEquipo();
-  if (editingId) {
-    const e = entries.find(x => x.id === editingId);
+  const items = editingId ? itemsDe(editingId) : [];
+  if (items.length) {
+    const e = items[0];
     root.getElementById('f-sucursal').value = e.sucursal || '';
     root.getElementById('f-fecha').value = e.fecha;
     root.getElementById('f-proveedor').value = e.proveedor;
@@ -568,7 +608,9 @@ async function openModal(id) {
     root.getElementById('f-estado').value = e.estado;
     root.getElementById('f-referencia').value = e.referencia;
     root.getElementById('f-notas').value = e.notas;
+    items.slice(1).forEach(it => agregarItem(it));
   } else {
+    editingId = null;
     root.getElementById('f-fecha').value = today();
     root.getElementById('f-proveedor').value = '';
     root.getElementById('f-producto').value = '';
@@ -661,7 +703,6 @@ async function saveForm() {
   const referencia = root.getElementById('f-referencia').value.trim();
   const notas = root.getElementById('f-notas').value.trim();
   const items = leerItems();
-  const { producto, cantidad, unidad, costoUnitario } = items[0];
   if (!sucursal) { alert('Elige la sucursal que recepciona la compra.'); root.getElementById('f-sucursal').focus(); return; }
   if (!fecha || !proveedor) { alert('Falta la fecha o el proveedor.'); return; }
   guardarSucursalEquipo(sucursal);
@@ -673,36 +714,17 @@ async function saveForm() {
   setSyncStatus('loading','Guardando…');
 
   try {
-    if (editingId) {
-      const existing = entries.find(e => e.id === editingId);
-      const updated = { ...existing, sucursal, fecha, proveedor, producto, cantidad, unidad, costoUnitario, estado, referencia, notas, actualizadoEn: Date.now() };
-      const body = { action: 'update', entry: updated };
-      if (fotoPendienteBase64) { body.image = fotoPendienteBase64; body.mimeType = fotoPendienteMime; }
-      const res = await apiPost(body);
-      if (!res.ok) throw new Error(res.error);
-      if (res.entry && res.entry.fotoUrl) updated.fotoUrl = res.entry.fotoUrl;
-      Object.assign(existing, updated);
-    } else {
-      const ahora = Date.now();
-      const nuevos = items.map((it, i) => ({ id: uid(), sucursal, fecha, proveedor, producto: it.producto, cantidad: it.cantidad, unidad: it.unidad, costoUnitario: it.costoUnitario, estado, referencia, notas, fotoUrl: '', creadoEn: ahora + i, actualizadoEn: ahora }));
-      // El primero sube la foto a Drive; el resto reutiliza el mismo link
-      const body = { action: 'add', entry: nuevos[0] };
-      if (fotoPendienteBase64) { body.image = fotoPendienteBase64; body.mimeType = fotoPendienteMime; }
-      const res = await apiPost(body);
-      if (!res.ok) throw new Error(res.error);
-      if (res.entry && res.entry.fotoUrl) nuevos.forEach(n => { n.fotoUrl = res.entry.fotoUrl; });
-      entries.unshift(nuevos[0]);
-      fotoPendienteBase64 = null; // ya quedó guardada
-      if (nuevos.length > 1) {
-        const resto = nuevos.slice(1);
-        const r2 = await apiPost({ action: 'bulk_add', entries: resto });
-        if (!r2.ok) {
-          closeModal(); render();
-          throw new Error('se guardó solo el ítem 1; los otros ' + resto.length + ' fallaron (' + r2.error + '). Agrégalos a mano.');
-        }
-        entries.unshift(...resto.reverse());
-      }
-    }
+    const ahora = Date.now();
+    const previos = editingId ? itemsDe(editingId) : [];
+    const grupo = editingId || ('g_' + uid().slice(2));
+    const fotoActual = previos.map(x => x.fotoUrl).find(Boolean) || '';
+    const nuevas = items.map((it, i) => ({
+      id: previos[i] ? previos[i].id : uid() + i,
+      sucursal, fecha, proveedor, producto: it.producto, cantidad: it.cantidad, unidad: it.unidad,
+      costoUnitario: it.costoUnitario, estado, referencia, notas, fotoUrl: fotoActual,
+      creadoEn: previos[i] ? previos[i].creadoEn : ahora + i, actualizadoEn: ahora,
+    }));
+    await guardarGrupo(grupo, nuevas, fotoPendienteBase64, fotoPendienteMime);
     fotoPendienteBase64 = null;
     fotoPendienteMime = null;
     setSyncStatus('ok','Sincronizado');
@@ -716,12 +738,12 @@ async function saveForm() {
   }
 }
 
-async function deleteEntry(id) {
+async function deleteEntry(g) {
   setSyncStatus('loading','Eliminando…');
   try {
-    const res = await apiPost({ action: 'delete', id });
+    const res = await apiPost({ action: 'delete_group', grupo: g });
     if (!res.ok) throw new Error(res.error);
-    entries = entries.filter(e => e.id !== id);
+    entries = entries.filter(e => grupoDe(e) !== g);
     setSyncStatus('ok','Sincronizado');
     render();
   } catch (err) {

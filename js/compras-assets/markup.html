@@ -146,13 +146,14 @@
       </div>
       <div class="field">
         <label>Proveedor <span class="required">*</span></label>
-        <input type="text" class="input" id="f-proveedor" placeholder="Ej: Papelera del Pacífico" list="proveedores-list">
+        <input type="text" class="input" id="f-proveedor" placeholder="Escribe o elige un proveedor">
+        <div id="prov-sug" class="prov-sug hidden"></div>
         <datalist id="proveedores-list"></datalist>
       </div>
       <div class="item-extra-head hidden" id="item1-label"><span class="item-num">Ítem 1</span></div>
       <div class="field">
         <label>Producto / Descripción <span class="required">*</span></label>
-        <input type="text" class="input" id="f-producto" placeholder="Ej: Papel bond carta 75gr">
+        <input type="text" class="input" id="f-producto" placeholder="Escribe o elige un producto">
       </div>
       <div class="field-grid-3">
         <div class="field"><label>Cantidad <span class="required">*</span></label><input type="number" step="any" class="input font-mono" id="f-cantidad" placeholder="0"></div>
@@ -247,7 +248,7 @@
         <div class="field"><label>Fecha <span class="required">*</span></label><input type="date" class="input" id="d-fecha"></div>
       </div>
       <div class="field-grid-2">
-        <div class="field"><label>Proveedor <span class="required">*</span></label><input type="text" class="input" id="d-proveedor" list="proveedores-list" placeholder="Ej: GASCO MAPOCHO"></div>
+        <div class="field"><label>Proveedor <span class="required">*</span></label><input type="text" class="input" id="d-proveedor" placeholder="Ej: GASCO MAPOCHO"></div>
         <div class="field"><label>Sucursal</label><select class="input" id="d-sucursal"><option value="">Varias / todas</option><option>San Francisco</option><option>Aldunate</option><option>Viel</option><option>San Ignacio</option></select></div>
       </div>
       <div class="field-grid-3">

@@ -197,3 +197,63 @@
   .dash-col-bar { width: 100%; background: var(--border-strong); border-radius: 4px 4px 0 0; min-height: 2px; }
   .dash-col.actual .dash-col-bar { background: #1F4E78; }
   .dash-col-label { font-size: 11px; color: var(--text-muted); }
+
+  /* ===== Celular ===== */
+  @media (max-width: 700px) {
+    .container { padding: 0 12px; }
+    .header-inner { flex-direction: column; align-items: stretch; padding: 16px 12px 12px; gap: 12px; }
+    .title { font-size: 26px; }
+    .header-actions { flex-wrap: wrap; gap: 6px; }
+    .header-actions .tabs { flex: 1 1 100%; order: -1; }
+    .header-actions .tab { flex: 1; justify-content: center; padding: 8px 4px; }
+    .header-actions .btn:not(.btn-icon-only) { flex: 1 1 0; justify-content: center; padding: 10px 8px; white-space: nowrap; font-size: 13px; }
+    .header-actions .btn-icon-only { padding: 10px; }
+    .summary-grid { gap: 8px; margin-bottom: 14px; }
+    .summary-card { padding: 12px; min-width: 0; }
+    .summary-card .value { font-size: 18px; overflow-wrap: anywhere; }
+    .filters { padding: 12px; gap: 8px; margin-bottom: 14px; display: grid; grid-template-columns: 1fr 1fr; }
+    .filters .filter-group { min-width: 0; }
+    .filters .filter-group.flex { grid-column: 1 / -1; }
+    .filters .input, .filters select.input { width: 100%; min-width: 0 !important; }
+    .filters #btn-export { grid-column: 1 / -1; justify-content: center; }
+
+    /* Lista: cada registro como tarjeta */
+    .table-wrap { overflow: visible; }
+    .table-wrap table, .table-wrap tbody, .table-wrap tfoot { display: block; width: 100%; }
+    .table-wrap thead { display: none; }
+    .table-wrap tbody tr { display: grid; grid-template-columns: 1fr auto; grid-template-areas: "prov sub" "cant unit" "fecha fecha" "estado acc"; gap: 6px 12px; padding: 14px; border-bottom: 1px solid var(--border); }
+    .table-wrap tbody td { display: block; padding: 0; min-width: 0; }
+    .table-wrap tbody td:nth-child(1) { grid-area: fecha; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: 12px; }
+    .table-wrap tbody td:nth-child(1) > div { margin: 0; }
+    .table-wrap tbody td:nth-child(2) { grid-area: prov; }
+    .table-wrap tbody td:nth-child(3) { grid-area: cant; text-align: left; font-size: 13px; }
+    .table-wrap tbody td:nth-child(4) { grid-area: unit; font-size: 13px; color: var(--text-muted); }
+    .table-wrap tbody td:nth-child(4)::before { content: "× "; }
+    .table-wrap tbody td:nth-child(5) { grid-area: sub; font-size: 16px; }
+    .table-wrap tbody td:nth-child(6) { grid-area: estado; }
+    .table-wrap tbody td:nth-child(7) { grid-area: acc; align-self: center; }
+    .table-wrap .row-actions { opacity: 1; justify-content: flex-end; }
+    .table-wrap .icon-btn { padding: 8px; }
+    .table-wrap .estado-select { padding: 6px 10px; font-size: 13px; }
+    .table-wrap tfoot tr { display: flex; justify-content: space-between; align-items: center; padding: 14px; }
+    .table-wrap tfoot td { padding: 0; }
+    .table-wrap tfoot td:empty { display: none; }
+
+    /* Resumen y dashboard */
+    .proveedor-header { flex-wrap: wrap; gap: 6px; }
+    .proveedor-item { flex-wrap: wrap; gap: 4px 10px; }
+    .dash-bar-row { grid-template-columns: minmax(70px, 30%) 1fr 7.5em; gap: 8px; font-size: 12px; }
+    .dash-bar-val span { display: none; }
+    .dash-cols { height: 160px; gap: 4px; }
+
+    /* Formulario a pantalla completa */
+    #modal.modal-backdrop { padding: 0; align-items: stretch; }
+    #modal .modal { max-width: 100%; width: 100%; max-height: 100%; height: 100%; border-radius: 0; display: flex; flex-direction: column; }
+    #modal .modal-body { padding: 16px; overflow-y: auto; flex: 1; }
+    #modal .modal-footer .btn { flex: 1; justify-content: center; padding: 12px; }
+    .input, select.input, textarea.input { font-size: 16px; } /* evita el zoom automático del iPhone */
+  }
+  .doc-items { margin-top: 4px; display: flex; flex-direction: column; gap: 2px; }
+  .doc-item { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; color: var(--text-muted); border-left: 2px solid var(--border-strong); padding-left: 8px; }
+  .doc-item-num { font-family: 'JetBrains Mono', monospace; white-space: nowrap; }
+  @media (max-width: 700px) { .table-wrap tbody td:nth-child(4):empty { display: none; } .doc-item { flex-direction: column; gap: 0; } }

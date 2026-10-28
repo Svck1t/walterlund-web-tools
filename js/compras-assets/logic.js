@@ -434,6 +434,114 @@ function renderDashboard() {
   cont.querySelector('[data-goto]')?.addEventListener('click', () => irA('documentos'));
 }
 
+// ----------- Autocompletar: proveedores existentes y productos del proveedor -----------
+function similitud(q, v) {
+  const x = normProv(q), y = normProv(v);
+  if (!x || !y) return 0;
+  if (x === y) return 100;
+  if (y.startsWith(x)) return 90;
+  if (y.includes(x) || x.includes(y)) return 75;
+  const px = x.split(' '), py = y.split(' ');
+  if (px[0].length >= 3 && px[0] === py[0]) return 60;
+  const comunes = px.filter(w => w.length >= 3 && py.some(z => z.startsWith(w) || w.startsWith(z))).length;
+  return comunes ? 40 + comunes * 5 : 0;
+}
+function fuenteProveedores() {
+  const m = new Map();
+  entries.forEach(e => { if (e.proveedor) m.set(e.proveedor, (m.get(e.proveedor) || new Set()).add(grupoDe(e))); });
+  documentos.forEach(d => { if (d.proveedor && !m.has(d.proveedor)) m.set(d.proveedor, new Set()); });
+  return [...m.entries()].map(([valor, g]) => ({ valor, n: g.size, detalle: g.size + (g.size === 1 ? ' registro' : ' registros') }));
+}
+// Productos ya comprados a un proveedor, con la última unidad y el último precio usados
+function productosDe(proveedor) {
+  const k = normProv(proveedor);
+  const m = new Map();
+  [...entries].sort((a, b) => a.fecha.localeCompare(b.fecha) || a.creadoEn - b.creadoEn).forEach(e => {
+    if (!e.producto || (k && normProv(e.proveedor) !== k)) return;
+    const key = normProv(e.producto);
+    const x = m.get(key) || { n: 0 };
+    Object.assign(x, { valor: e.producto, unidad: e.unidad, costo: e.costoUnitario, proveedor: e.proveedor });
+    x.n++;
+    m.set(key, x);
+  });
+  return [...m.values()];
+}
+function fuenteProductos() {
+  const prov = root.getElementById('f-proveedor').value.trim();
+  let l = productosDe(prov);
+  const otros = !!prov && !l.length;           // proveedor nuevo: se muestran productos de todos
+  if (!prov || otros) l = productosDe('');
+  return l.map(x => ({ ...x, detalle: fmtCLP(x.costo) + ' / ' + x.unidad + (!prov || otros ? ' · ' + x.proveedor : '') }));
+}
+function autocompletar(input, fuente, alElegir) {
+  const wrap = input.parentElement;
+  wrap.classList.add('ac-wrap');
+  input.setAttribute('autocomplete', 'off');
+  input.removeAttribute('list');
+  const box = document.createElement('div');
+  box.className = 'ac-box hidden';
+  wrap.appendChild(box);
+  let items = [], activo = -1;
+  const cerrar = () => { box.classList.add('hidden'); activo = -1; };
+  function mostrar() {
+    const q = input.value.trim();
+    const todos = fuente();
+    items = (q
+      ? todos.map(x => ({ ...x, s: similitud(q, x.valor) })).filter(x => x.s > 0).sort((a, b) => b.s - a.s || b.n - a.n)
+      : todos.slice().sort((a, b) => b.n - a.n)).slice(0, 8);
+    if (items.length === 1 && normProv(items[0].valor) === normProv(q)) items = []; // ya está elegido
+    if (!items.length) { cerrar(); return; }
+    box.innerHTML = items.map((x, i) => `<div class="ac-item${i === activo ? ' activo' : ''}" data-i="${i}"><span class="ac-val">${escapeHtml(x.valor)}</span><span class="ac-det">${escapeHtml(x.detalle || '')}</span></div>`).join('');
+    box.style.top = (input.offsetTop + input.offsetHeight + 2) + 'px';
+    box.classList.remove('hidden');
+  }
+  function elegir(x) {
+    input.value = x.valor;
+    cerrar();
+    input.dispatchEvent(new Event('input'));
+    cerrar();
+    if (alElegir) alElegir(x);
+  }
+  box.addEventListener('mousedown', ev => ev.preventDefault()); // no perder el foco al tocar la lista
+  box.addEventListener('click', ev => { const it = ev.target.closest('.ac-item'); if (it) elegir(items[+it.dataset.i]); });
+  input.addEventListener('focus', mostrar);
+  input.addEventListener('input', mostrar);
+  input.addEventListener('blur', () => setTimeout(cerrar, 150));
+  input.addEventListener('keydown', ev => {
+    if (box.classList.contains('hidden')) return;
+    if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+      ev.preventDefault();
+      activo = (activo + (ev.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+      box.querySelectorAll('.ac-item').forEach((n, i) => n.classList.toggle('activo', i === activo));
+    } else if (ev.key === 'Enter' && activo >= 0) { ev.preventDefault(); elegir(items[activo]); }
+    else if (ev.key === 'Escape') { ev.stopPropagation(); cerrar(); }
+  });
+}
+// Al elegir un producto ya comprado, se completan unidad y último precio (si el precio está vacío)
+function aplicarProducto(x, unidadSel, costoInput) {
+  if (UNIDADES.includes(x.unidad)) unidadSel.value = x.unidad;
+  if (!costoInput.value && x.costo) costoInput.value = x.costo;
+  updateSubtotalPreview();
+}
+// Si el proveedor escrito (o leído de la foto) no existe, sugiere los parecidos
+function sugerirProveedor() {
+  const input = root.getElementById('f-proveedor');
+  const cont = root.getElementById('prov-sug');
+  const v = input.value.trim();
+  const lista = fuenteProveedores();
+  if (!v || lista.some(x => normProv(x.valor) === normProv(v))) { cont.classList.add('hidden'); return; }
+  const sim = lista.map(x => ({ ...x, s: similitud(v, x.valor) })).filter(x => x.s >= 40).sort((a, b) => b.s - a.s || b.n - a.n).slice(0, 3);
+  if (!sim.length) { cont.innerHTML = '<span class="text-faint">Proveedor nuevo</span>'; cont.classList.remove('hidden'); return; }
+  cont.innerHTML = '<span class="text-faint">¿Es alguno de estos?</span>' + sim.map(x => `<button type="button" class="sug-chip" data-v="${escapeHtml(x.valor)}">${escapeHtml(x.valor)}</button>`).join('');
+  cont.classList.remove('hidden');
+  cont.querySelectorAll('.sug-chip').forEach(b => b.addEventListener('click', () => {
+    input.value = b.dataset.v;
+    sugerirProveedor();
+    const p = root.getElementById('f-producto');
+    if (!p.value) p.focus();
+  }));
+}
+
 function emptyStateHtml() {
   return `
     <div class="empty-state">
@@ -539,7 +647,7 @@ function abrirModalConDatosExtraidos(data, fotoBase64, fotoMime, errorLectura) {
   const mm = String(hoy.getMonth() + 1).padStart(2, '0');
   const dd = String(hoy.getDate()).padStart(2, '0');
   root.getElementById('f-fecha').value = `${yyyy}-${mm}-${dd}`;
-  if (data.proveedor) root.getElementById('f-proveedor').value = data.proveedor;
+  if (data.proveedor) root.getElementById('f-proveedor').value = proveedorCanonico(data.proveedor);
   if (data.documento) {
     root.getElementById('f-referencia').value = data.documento;
     root.getElementById('f-tipo').value = /factura/i.test(data.documento) ? 'factura' : /boleta/i.test(data.documento) ? 'boleta' : 'vale';
@@ -557,6 +665,7 @@ function abrirModalConDatosExtraidos(data, fotoBase64, fotoMime, errorLectura) {
     }
   });
   root.getElementById('f-estado').value = 'recibido';
+  sugerirProveedor();
   root.getElementById('f-notas').value = errorLectura
     ? 'Foto adjunta — los datos no se pudieron extraer, ingresados a mano.'
     : 'Datos extraídos de la foto — revisa antes de guardar.';
@@ -642,6 +751,7 @@ async function openModal(id) {
     root.getElementById('f-notas').value = '';
   }
   updateSubtotalPreview();
+  root.getElementById('prov-sug').classList.add('hidden');
   root.getElementById('modal').classList.remove('hidden');
   setTimeout(() => root.getElementById('f-proveedor').focus(), 50);
 }
@@ -686,6 +796,7 @@ function agregarItem(it = {}) {
   row.querySelector('.item-del').addEventListener('click', () => { row.remove(); renumerarItems(); updateSubtotalPreview(); });
   row.querySelectorAll('.i-cantidad, .i-costo').forEach(i => i.addEventListener('input', updateSubtotalPreview));
   cont.appendChild(row);
+  autocompletar(row.querySelector('.i-producto'), fuenteProductos, x => aplicarProducto(x, row.querySelector('.i-unidad'), row.querySelector('.i-costo')));
   renumerarItems();
   updateSubtotalPreview();
   return row;
@@ -1131,6 +1242,14 @@ root.getElementById('btn-foto').addEventListener('click', () => root.getElementB
 root.getElementById('foto-input').addEventListener('change', handleFotoSeleccionada);
 root.getElementById('btn-export').addEventListener('click', exportarCSV);
 root.getElementById('btn-papelera').addEventListener('click', abrirPapelera);
+autocompletar(root.getElementById('f-proveedor'), fuenteProveedores, () => {
+  sugerirProveedor();
+  const p = root.getElementById('f-producto');
+  if (!p.value) setTimeout(() => p.focus(), 0); // muestra los productos de ese proveedor
+});
+root.getElementById('f-proveedor').addEventListener('input', sugerirProveedor);
+autocompletar(root.getElementById('f-producto'), fuenteProductos, x => aplicarProducto(x, root.getElementById('f-unidad'), root.getElementById('f-costo')));
+autocompletar(root.getElementById('d-proveedor'), fuenteProveedores);
 root.getElementById('pap-close').addEventListener('click', cerrarPapelera);
 root.getElementById('modal-papelera').addEventListener('click', e => { if (e.target.id === 'modal-papelera') cerrarPapelera(); });
 root.getElementById('btn-proveedores').addEventListener('click', abrirProveedores);

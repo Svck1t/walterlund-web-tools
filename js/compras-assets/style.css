@@ -317,3 +317,13 @@
     .prov-sel { max-width: none; flex: 1; }
     .docs-bar .btn { flex: 1; justify-content: center; }
   }
+  .ac-wrap { position: relative; }
+  .ac-box { position: absolute; left: 0; right: 0; z-index: 30; background: var(--card); border: 1px solid var(--border-strong); border-radius: 8px; box-shadow: 0 10px 28px rgba(0,0,0,0.14); max-height: 300px; overflow-y: auto; }
+  .ac-item { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 10px 12px; cursor: pointer; font-size: 14px; border-bottom: 1px solid var(--border); }
+  .ac-item:last-child { border-bottom: none; }
+  .ac-item:hover, .ac-item.activo { background: var(--hover); }
+  .ac-val { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ac-det { color: var(--text-faint); font-size: 11px; white-space: nowrap; font-family: 'JetBrains Mono', monospace; }
+  .prov-sug { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; font-size: 12px; }
+  .sug-chip { border: 1px solid #f59e0b; background: #fffbeb; color: #92400e; border-radius: 999px; padding: 4px 10px; font-size: 12px; font-family: inherit; cursor: pointer; }
+  @media (max-width: 700px) { .ac-item { padding: 12px; } .ac-det { font-size: 10px; } }

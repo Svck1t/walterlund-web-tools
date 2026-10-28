@@ -164,3 +164,11 @@
     .header-actions { flex-wrap: wrap; width: 100%; }
     .title { font-size: 24px; }
   }
+  .item-extra { border-top: 1px dashed var(--border-strong); padding-top: 12px; margin-top: 4px; display: flex; flex-direction: column; gap: 8px; }
+  .item-extra-head { display: flex; justify-content: space-between; align-items: center; }
+  .item-extra-head.hidden { display: none; }
+  .item-num { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); }
+  .item-extra .item-del { padding: 4px; }
+  .item-extra .item-del svg { width: 14px; height: 14px; }
+  .btn-add-item { align-self: flex-start; font-size: 12px; padding: 6px 12px; }
+  .btn-add-item.hidden { display: none; }

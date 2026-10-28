@@ -26,9 +26,9 @@
       <button class="btn btn-secondary btn-icon-only" id="btn-refresh" title="Recargar">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
       </button>
-      <button class="btn btn-secondary" id="btn-foto" title="Saca una foto y la IA llena el registro">
+      <button class="btn btn-secondary" id="btn-foto" title="Saca una foto de una boleta, factura o documento y la IA llena el registro">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
-        Leer boleta
+        Extraer datos
       </button>
       <input type="file" accept="image/*" capture="environment" id="foto-input" class="hidden">
       <button class="btn btn-secondary" id="btn-solo-foto" title="Guarda la foto como respaldo, sin leer los datos">
@@ -150,7 +150,7 @@
       <div id="items-extra"></div>
       <button type="button" class="btn btn-secondary btn-add-item" id="btn-add-item">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-        Agregar otro ítem de la misma boleta
+        Agregar otro ítem
       </button>
       <div class="subtotal-preview hidden" id="subtotal-preview">
         <span class="label">Subtotal calculado</span>
@@ -182,7 +182,7 @@
   <div class="modal" style="max-width:420px;">
     <div style="padding:32px 24px;text-align:center;">
       <img id="foto-preview" style="max-width:100%;max-height:240px;border-radius:8px;margin-bottom:16px;object-fit:contain;box-shadow:0 1px 3px rgba(0,0,0,0.15);">
-      <div id="foto-status" class="text-muted" style="font-size:13px;">Analizando boleta…</div>
+      <div id="foto-status" class="text-muted" style="font-size:13px;">Extrayendo datos…</div>
     </div>
   </div>
 </div>

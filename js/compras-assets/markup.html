@@ -18,15 +18,24 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>
           Resumen
         </button>
+        <button class="tab" data-view="dashboard">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>
+          Dashboard
+        </button>
       </div>
       <button class="btn btn-secondary btn-icon-only" id="btn-refresh" title="Recargar">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
       </button>
-      <button class="btn btn-secondary" id="btn-foto">
+      <button class="btn btn-secondary" id="btn-foto" title="Saca una foto y la IA llena el registro">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
-        Foto
+        Leer boleta
       </button>
       <input type="file" accept="image/*" capture="environment" id="foto-input" class="hidden">
+      <button class="btn btn-secondary" id="btn-solo-foto" title="Guarda la foto como respaldo, sin leer los datos">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+        Solo foto
+      </button>
+      <input type="file" accept="image/*" capture="environment" id="solo-foto-input" class="hidden">
       <button class="btn btn-primary" id="btn-nuevo">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
         Nuevo
@@ -42,6 +51,10 @@
     <div class="filter-group">
       <label class="filter-label">Mes</label>
       <select class="input" id="filtro-mes"></select>
+    </div>
+    <div class="filter-group">
+      <label class="filter-label">Sucursal</label>
+      <select class="input" id="filtro-sucursal"></select>
     </div>
     <div class="filter-group">
       <label class="filter-label">Proveedor</label>
@@ -71,6 +84,10 @@
 
   <div id="vista-lista" class="table-card">
     <div id="lista-content"></div>
+  </div>
+
+  <div id="vista-dashboard" class="hidden">
+    <div id="dashboard-content"></div>
   </div>
 
   <div id="vista-resumen" class="hidden">
@@ -104,6 +121,13 @@
         </div>
       </div>
       <div class="field">
+        <label>Sucursal que recepciona <span class="required">*</span></label>
+        <select class="input" id="f-sucursal">
+          <option value="">Elegir sucursal…</option>
+          <option>San Francisco</option><option>Aldunate</option><option>Viel</option><option>San Ignacio</option>
+        </select>
+      </div>
+      <div class="field">
         <label>Proveedor <span class="required">*</span></label>
         <input type="text" class="input" id="f-proveedor" placeholder="Ej: Papelera del Pacífico" list="proveedores-list">
         <datalist id="proveedores-list"></datalist>
@@ -134,9 +158,13 @@
       </div>
       <div class="field"><label>Referencia (N° OC, guía, etc.)</label><input type="text" class="input" id="f-referencia" placeholder="Ej: OC-2026-0142"></div>
       <div class="field"><label>Notas</label><textarea class="input" id="f-notas" rows="2" placeholder="Observaciones, diferencias detectadas, etc." style="resize:none;"></textarea></div>
-      <div id="modal-foto-indicator" class="hidden" style="display:flex;align-items:center;gap:6px;color:var(--text-muted);font-size:12px;">
+      <div class="foto-row">
+        <button type="button" class="btn btn-ghost btn-adjuntar" id="btn-adjuntar-foto"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg> Adjuntar / cambiar foto</button>
+        <input type="file" accept="image/*" capture="environment" id="adjuntar-foto-input" class="hidden">
+        <div id="modal-foto-indicator" class="hidden" style="display:flex;align-items:center;gap:6px;color:var(--text-muted);font-size:12px;">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;flex-shrink:0;"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
-        Foto de la boleta adjunta a este registro
+        Foto lista para guardar con este registro
+      </div>
       </div>
     </div>
     <div class="modal-footer">

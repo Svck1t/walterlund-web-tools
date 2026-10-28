@@ -257,3 +257,7 @@
   .doc-item { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; color: var(--text-muted); border-left: 2px solid var(--border-strong); padding-left: 8px; }
   .doc-item-num { font-family: 'JetBrains Mono', monospace; white-space: nowrap; }
   @media (max-width: 700px) { .table-wrap tbody td:nth-child(4):empty { display: none; } .doc-item { flex-direction: column; gap: 0; } }
+  .dash-cols.doce { grid-template-columns: repeat(12, 1fr); gap: 4px; }
+  .dash-cols.doce .dash-col-track { width: 80%; }
+  .dash-cols.doce .dash-col-val { font-size: 9px; }
+  @media (max-width: 700px) { .dash-cols.doce .dash-col-val { display: none; } .dash-cols.doce .dash-col-label { font-size: 9px; } }

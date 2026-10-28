@@ -344,10 +344,13 @@ function agrupar(list, clave) {
 }
 function renderDashboard() {
   const cont = root.getElementById('dashboard-content');
+  const todos = !filtros.mes;                                         // "Todos los meses"
   const mes = filtros.mes || monthOf(today());
   const base = getFiltered({ sinMes: true });                       // respeta sucursal/proveedor/estado/búsqueda
-  const delMes = base.filter(e => monthOf(e.fecha) === mes);
-  const previo = base.filter(e => monthOf(e.fecha) === mesAnterior(mes));
+  const enPeriodo = e => todos || monthOf(e.fecha) === mes;
+  const delMes = base.filter(enPeriodo);
+  const previo = todos ? [] : base.filter(e => monthOf(e.fecha) === mesAnterior(mes));
+  const mesesConDatos = new Set(delMes.map(e => monthOf(e.fecha)).filter(Boolean)).size;
   const sum = l => l.reduce((s, e) => s + e.cantidad * e.costoUnitario, 0);
   const total = sum(delMes), totalPrev = sum(previo);
   const variacion = totalPrev > 0 ? (total - totalPrev) / totalPrev * 100 : null;
@@ -357,24 +360,25 @@ function renderDashboard() {
   const nPorFacturar = new Set(porFacturar.map(grupoDe)).size;
 
   // Por sucursal: mismo mes y filtros, pero siempre todas las sucursales
-  const mesTodas = getFiltered({ sinMes: true, sinSucursal: true }).filter(e => monthOf(e.fecha) === mes);
+  const mesTodas = getFiltered({ sinMes: true, sinSucursal: true }).filter(enPeriodo);
   const porSuc = agrupar(mesTodas, e => e.sucursal || 'Sin sucursal');
   SUCURSALES.forEach(s => { if (!porSuc.some(x => x.nombre === s)) porSuc.push({ nombre: s, valor: 0 }); });
   const totalTodas = sum(mesTodas);
 
-  // Tendencia últimos 6 meses
-  const meses = [5, 4, 3, 2, 1, 0].map(n => mesAnterior(mes, n));
+  // Tendencia: 6 meses hasta el mes elegido, o 12 meses en "Todos los meses"
+  const nCols = todos ? 12 : 6;
+  const meses = Array.from({ length: nCols }, (_, i) => mesAnterior(mes, nCols - 1 - i));
   const tend = meses.map(m => ({ m, v: sum(base.filter(e => monthOf(e.fecha) === m)) }));
   const maxT = Math.max(...tend.map(t => t.v), 1);
 
   const tituloSuc = filtros.sucursal ? (filtros.sucursal === '-' ? 'Sin sucursal' : filtros.sucursal) : 'Todas las sucursales';
   cont.innerHTML = `
-    <div class="dash-titulo">${tituloSuc} · ${mesTxt(mes)}</div>
+    <div class="dash-titulo">${tituloSuc} · ${todos ? 'Todos los meses' : mesTxt(mes)}</div>
     <div class="summary-grid">
       <div class="summary-card highlight">
-        <div class="label-row"><span class="label">Total del mes</span></div>
+        <div class="label-row"><span class="label">${todos ? 'Total histórico' : 'Total del mes'}</span></div>
         <div class="value">${fmtCLP(total)}</div>
-        <div class="sub">${variacion === null ? 'Sin datos del mes anterior' : (variacion >= 0 ? '▲ ' : '▼ ') + Math.abs(variacion).toFixed(1) + '% vs ' + mesTxt(mesAnterior(mes))}</div>
+        <div class="sub">${todos ? `${mesesConDatos} ${mesesConDatos === 1 ? 'mes' : 'meses'} · prom. ${fmtCLP(mesesConDatos ? total / mesesConDatos : 0)}/mes` : variacion === null ? 'Sin datos del mes anterior' : (variacion >= 0 ? '▲ ' : '▼ ') + Math.abs(variacion).toFixed(1) + '% vs ' + mesTxt(mesAnterior(mes))}</div>
       </div>
       <div class="summary-card">
         <div class="label-row"><span class="label">Registros</span></div>
@@ -398,8 +402,8 @@ function renderDashboard() {
         ${barras(porSuc, totalTodas, 'suc')}
       </div>
       <div class="dash-panel">
-        <div class="dash-panel-title">Últimos 6 meses</div>
-        <div class="dash-cols">
+        <div class="dash-panel-title">Últimos ${nCols} meses</div>
+        <div class="dash-cols${todos ? ' doce' : ''}">
           ${tend.map(t => `
             <div class="dash-col${t.m === mes ? ' actual' : ''}">
               <div class="dash-col-val">${t.v ? fmtCorto(t.v) : ''}</div>

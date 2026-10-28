@@ -22,6 +22,10 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>
           Dashboard
         </button>
+        <button class="tab" data-view="documentos">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 2v20l3-2 3 2 3-2 3 2 3-2 1 .7V2l-1 .7-3-2-3 2-3-2-3 2-3-2z"/><line x1="8" y1="8" x2="16" y2="8"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+          Facturas
+        </button>
       </div>
       <button class="btn btn-secondary btn-icon-only" id="btn-refresh" title="Recargar">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
@@ -90,12 +94,17 @@
     <div id="dashboard-content"></div>
   </div>
 
+  <div id="vista-documentos" class="hidden">
+    <div id="documentos-content"></div>
+  </div>
+
   <div id="vista-resumen" class="hidden">
+    <div class="docs-bar"><span class="text-muted" style="font-size:13px;">Gasto por proveedor</span><button class="btn btn-secondary btn-adjuntar" id="btn-proveedores">Ordenar proveedores</button></div>
     <div id="resumen-content" class="resumen-list"></div>
   </div>
 
   <footer>
-    Datos sincronizados con Google Sheets · <span id="total-registros">0 registros totales</span>
+    Datos sincronizados con Google Sheets · <span id="total-registros">0 registros totales</span> · <button class="link-btn" id="btn-papelera">Papelera (<span id="pap-count">0</span>)</button>
   </footer>
 </main>
 </div>
@@ -125,6 +134,14 @@
         <select class="input" id="f-sucursal">
           <option value="">Elegir sucursal…</option>
           <option>San Francisco</option><option>Aldunate</option><option>Viel</option><option>San Ignacio</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Tipo de documento</label>
+        <select class="input" id="f-tipo">
+          <option value="vale">Vale / comprobante (espera factura)</option>
+          <option value="boleta">Boleta</option>
+          <option value="factura">Factura</option>
         </select>
       </div>
       <div class="field">
@@ -207,11 +224,77 @@
   <div class="modal" style="max-width:400px;">
     <div style="padding:24px;">
       <h3 class="font-display" style="font-size:20px;margin-bottom:8px;">¿Eliminar este registro?</h3>
-      <p style="color:var(--text-muted);font-size:13px;margin-bottom:20px;">Esta acción no se puede deshacer.</p>
+      <p style="color:var(--text-muted);font-size:13px;margin-bottom:20px;">Se moverá a la papelera y podrás restaurarlo desde ahí.</p>
       <div style="display:flex;justify-content:flex-end;gap:8px;">
         <button class="btn btn-ghost" id="del-cancel">Cancelar</button>
         <button class="btn btn-danger" id="del-confirm">Eliminar</button>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal factura / boleta del proveedor -->
+<div class="modal-backdrop hidden" id="modal-doc">
+  <div class="modal" style="max-width:720px;">
+    <div class="modal-header">
+      <h2 id="doc-title">Registrar factura</h2>
+      <button class="icon-btn" id="doc-close" style="padding:8px;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:20px;height:20px;"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="modal-body">
+      <div class="field-grid-3">
+        <div class="field"><label>Tipo</label><select class="input" id="d-tipo"><option value="factura">Factura</option><option value="boleta">Boleta</option></select></div>
+        <div class="field"><label>N° documento <span class="required">*</span></label><input type="text" class="input font-mono" id="d-numero" placeholder="Ej: 845123"></div>
+        <div class="field"><label>Fecha <span class="required">*</span></label><input type="date" class="input" id="d-fecha"></div>
+      </div>
+      <div class="field-grid-2">
+        <div class="field"><label>Proveedor <span class="required">*</span></label><input type="text" class="input" id="d-proveedor" list="proveedores-list" placeholder="Ej: GASCO MAPOCHO"></div>
+        <div class="field"><label>Sucursal</label><select class="input" id="d-sucursal"><option value="">Varias / todas</option><option>San Francisco</option><option>Aldunate</option><option>Viel</option><option>San Ignacio</option></select></div>
+      </div>
+      <div class="field-grid-3">
+        <div class="field"><label>Neto</label><input type="number" step="any" class="input font-mono" id="d-neto" placeholder="0"></div>
+        <div class="field"><label>IVA (19%)</label><input type="number" step="any" class="input font-mono" id="d-iva" placeholder="0"></div>
+        <div class="field"><label>Total <span class="required">*</span></label><input type="number" step="any" class="input font-mono" id="d-total" placeholder="0"></div>
+      </div>
+      <div class="field">
+        <div class="vales-tools"><label style="margin:0;">Vales que cubre</label><span id="d-vales-info" class="text-faint" style="font-size:12px;"></span><button type="button" class="btn btn-ghost btn-adjuntar" id="d-vales-todos">Marcar todos</button></div>
+        <div id="d-vales" class="vales-list"></div>
+      </div>
+      <div id="d-cuadre" class="cuadre-box"></div>
+      <div class="field"><label>Notas</label><textarea class="input" id="d-notas" rows="2" style="resize:none;" placeholder="Ej: factura mensual de octubre"></textarea></div>
+      <div class="foto-row">
+        <button type="button" class="btn btn-ghost btn-adjuntar" id="d-foto-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg> Adjuntar foto</button>
+        <input type="file" accept="image/*" capture="environment" id="d-foto-input" class="hidden">
+        <span id="d-foto-ind" class="text-muted hidden" style="font-size:12px;"></span>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" id="doc-cancel">Cancelar</button>
+      <button class="btn btn-primary" id="doc-save">Guardar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal papelera -->
+<div class="modal-backdrop hidden" id="modal-papelera">
+  <div class="modal" style="max-width:560px;">
+    <div class="modal-header">
+      <h2>Papelera</h2>
+      <button class="icon-btn" id="pap-close" style="padding:8px;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:20px;height:20px;"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="modal-body"><div id="pap-list"></div></div>
+  </div>
+</div>
+
+<!-- Modal ordenar proveedores -->
+<div class="modal-backdrop hidden" id="modal-prov">
+  <div class="modal" style="max-width:640px;">
+    <div class="modal-header">
+      <h2>Ordenar proveedores</h2>
+      <button class="icon-btn" id="prov-close" style="padding:8px;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:20px;height:20px;"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="modal-body">
+      <p class="text-muted" style="font-size:13px;margin:0;">Si un proveedor está escrito de varias formas, únelo con el nombre correcto: se corrigen todos sus registros y facturas.</p>
+      <div id="prov-list"></div>
     </div>
   </div>
 </div>

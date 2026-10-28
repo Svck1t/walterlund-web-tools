@@ -15,7 +15,16 @@ let entries = [];
 let editingId = null;
 let confirmDeleteId = null;
 let vista = 'lista';
-let filtros = { mes: monthOf(today()), proveedor: '', estado: 'todos', busqueda: '' };
+let filtros = { mes: monthOf(today()), sucursal: '', proveedor: '', estado: 'todos', busqueda: '' };
+
+// Sucursales que recepcionan compras. Cada equipo recuerda la última sucursal usada.
+const SUCURSALES = ['San Francisco', 'Aldunate', 'Viel', 'San Ignacio'];
+const SUCURSAL_KEY = 'compras-sucursal-equipo';
+function sucursalEquipo() { try { return localStorage.getItem(SUCURSAL_KEY) || ''; } catch { return ''; } }
+function guardarSucursalEquipo(s) { try { localStorage.setItem(SUCURSAL_KEY, s); } catch {} }
+const MESES_TXT = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
+function mesTxt(m) { const [y, mm] = m.split('-'); return MESES_TXT[Number(mm) - 1] + ' ' + y.slice(2); }
+function mesAnterior(m, n = 1) { const [y, mm] = m.split('-').map(Number); const d = new Date(y, mm - 1 - n, 1); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'); }
 let fotoPendienteBase64 = null;
 let fotoPendienteMime = null;
 
@@ -89,16 +98,18 @@ function normalize(e) {
     referencia: String(e.referencia || ''),
     notas: String(e.notas || ''),
     fotoUrl: String(e.fotoUrl || ''),
+    sucursal: String(e.sucursal || ''),
     creadoEn: Number(e.creadoEn) || Date.now(),
     actualizadoEn: Number(e.actualizadoEn) || Date.now(),
   };
 }
 
 // ----------- Lógica filtros / totales -----------
-function getFiltered() {
+function getFiltered(opt = {}) {
   const q = filtros.busqueda.trim().toLowerCase();
   return entries
-    .filter(e => !filtros.mes || monthOf(e.fecha) === filtros.mes)
+    .filter(e => opt.sinMes || !filtros.mes || monthOf(e.fecha) === filtros.mes)
+    .filter(e => opt.sinSucursal || !filtros.sucursal || (filtros.sucursal === '-' ? !e.sucursal : e.sucursal === filtros.sucursal))
     .filter(e => !filtros.proveedor || e.proveedor === filtros.proveedor)
     .filter(e => filtros.estado === 'todos' || e.estado === filtros.estado)
     .filter(e => !q || e.producto.toLowerCase().includes(q) || e.proveedor.toLowerCase().includes(q) || e.referencia.toLowerCase().includes(q) || e.notas.toLowerCase().includes(q))
@@ -122,16 +133,11 @@ function getMesesDisponibles() {
 
 // ----------- Render -----------
 function render() {
-  renderSummary(); renderFiltros();
-  if (vista === 'lista') {
-    root.getElementById('vista-lista').classList.remove('hidden');
-    root.getElementById('vista-resumen').classList.add('hidden');
-    renderLista();
-  } else {
-    root.getElementById('vista-lista').classList.add('hidden');
-    root.getElementById('vista-resumen').classList.remove('hidden');
-    renderResumen();
-  }
+  renderFiltros();
+  ['lista', 'resumen', 'dashboard'].forEach(v => root.getElementById('vista-' + v).classList.toggle('hidden', v !== vista));
+  root.getElementById('summary-grid').classList.toggle('hidden', vista === 'dashboard');
+  if (vista === 'dashboard') renderDashboard();
+  else { renderSummary(); vista === 'lista' ? renderLista() : renderResumen(); }
   root.getElementById('total-registros').textContent = entries.length === 1 ? '1 registro total' : entries.length + ' registros totales';
 }
 
@@ -166,6 +172,9 @@ function renderFiltros() {
   root.getElementById('filtro-proveedor').innerHTML = '<option value="">Todos</option>' +
     provs.map(p => `<option value="${escapeHtml(p)}" ${p===filtros.proveedor?'selected':''}>${escapeHtml(p)}</option>`).join('');
   root.getElementById('proveedores-list').innerHTML = provs.map(p => `<option value="${escapeHtml(p)}">`).join('');
+  root.getElementById('filtro-sucursal').innerHTML = '<option value="">Todas</option>' +
+    SUCURSALES.map(x => `<option ${x===filtros.sucursal?'selected':''}>${x}</option>`).join('') +
+    (entries.some(e => !e.sucursal) ? `<option value="-" ${filtros.sucursal==='-'?'selected':''}>Sin sucursal</option>` : '');
   root.getElementById('filtro-estado').value = filtros.estado;
   root.getElementById('busqueda').value = filtros.busqueda;
 }
@@ -183,6 +192,7 @@ function renderLista() {
     <tr data-id="${e.id}">
       <td class="mono text-muted" style="font-size:12px;">
         ${e.fecha}${e.referencia ? `<div class="text-faint">${escapeHtml(e.referencia)}</div>` : ''}
+        <div class="suc-badge${e.sucursal ? '' : ' suc-vacia'}">${escapeHtml(e.sucursal || 'Sin sucursal')}</div>
       </td>
       <td>
         <div class="product-name">${escapeHtml(e.proveedor)}</div>
@@ -267,12 +277,103 @@ function renderResumen() {
         <div class="proveedor-item">
           <div class="item-main">
             <div>${escapeHtml(e.producto)}</div>
-            <div class="item-detail">${e.fecha} · ${fmtNum(e.cantidad)} ${escapeHtml(e.unidad)} × ${fmtCLP(e.costoUnitario)}${e.referencia ? ' · ' + escapeHtml(e.referencia) : ''}</div>
+            <div class="item-detail">${e.fecha}${e.sucursal ? ' · ' + escapeHtml(e.sucursal) : ''} · ${fmtNum(e.cantidad)} ${escapeHtml(e.unidad)} × ${fmtCLP(e.costoUnitario)}${e.referencia ? ' · ' + escapeHtml(e.referencia) : ''}</div>
           </div>
           <div class="item-estado ${ESTADOS[e.estado].cls}">${ESTADOS[e.estado].label}</div>
           <div class="item-subtotal">${fmtCLP(e.cantidad * e.costoUnitario)}</div>
         </div>`).join('')}
     </div>`).join('');
+}
+
+// ----------- Dashboard -----------
+function barras(lista, total, cls = '') {
+  if (!lista.length) return '<div class="dash-vacio">Sin datos en este período</div>';
+  const max = Math.max(...lista.map(x => x.valor), 1);
+  return lista.map(x => `
+    <div class="dash-bar-row">
+      <div class="dash-bar-label" title="${escapeHtml(x.nombre)}">${escapeHtml(x.nombre)}</div>
+      <div class="dash-bar-track"><div class="dash-bar ${cls}" style="width:${(x.valor / max * 100).toFixed(1)}%"></div></div>
+      <div class="dash-bar-val">${fmtCLP(x.valor)}${total ? `<span>${Math.round(x.valor / total * 100)}%</span>` : ''}</div>
+    </div>`).join('');
+}
+function agrupar(list, clave) {
+  const m = new Map();
+  list.forEach(e => { const k = clave(e); m.set(k, (m.get(k) || 0) + e.cantidad * e.costoUnitario); });
+  return [...m.entries()].map(([nombre, valor]) => ({ nombre, valor })).sort((a, b) => b.valor - a.valor);
+}
+function renderDashboard() {
+  const cont = root.getElementById('dashboard-content');
+  const mes = filtros.mes || monthOf(today());
+  const base = getFiltered({ sinMes: true });                       // respeta sucursal/proveedor/estado/búsqueda
+  const delMes = base.filter(e => monthOf(e.fecha) === mes);
+  const previo = base.filter(e => monthOf(e.fecha) === mesAnterior(mes));
+  const sum = l => l.reduce((s, e) => s + e.cantidad * e.costoUnitario, 0);
+  const total = sum(delMes), totalPrev = sum(previo);
+  const variacion = totalPrev > 0 ? (total - totalPrev) / totalPrev * 100 : null;
+  const porFacturar = delMes.filter(e => e.estado !== 'facturado');
+  const conFoto = delMes.filter(e => e.fotoUrl).length;
+
+  // Por sucursal: mismo mes y filtros, pero siempre todas las sucursales
+  const mesTodas = getFiltered({ sinMes: true, sinSucursal: true }).filter(e => monthOf(e.fecha) === mes);
+  const porSuc = agrupar(mesTodas, e => e.sucursal || 'Sin sucursal');
+  SUCURSALES.forEach(s => { if (!porSuc.some(x => x.nombre === s)) porSuc.push({ nombre: s, valor: 0 }); });
+  const totalTodas = sum(mesTodas);
+
+  // Tendencia últimos 6 meses
+  const meses = [5, 4, 3, 2, 1, 0].map(n => mesAnterior(mes, n));
+  const tend = meses.map(m => ({ m, v: sum(base.filter(e => monthOf(e.fecha) === m)) }));
+  const maxT = Math.max(...tend.map(t => t.v), 1);
+
+  const tituloSuc = filtros.sucursal ? (filtros.sucursal === '-' ? 'Sin sucursal' : filtros.sucursal) : 'Todas las sucursales';
+  cont.innerHTML = `
+    <div class="dash-titulo">${tituloSuc} · ${mesTxt(mes)}</div>
+    <div class="summary-grid">
+      <div class="summary-card highlight">
+        <div class="label-row"><span class="label">Total del mes</span></div>
+        <div class="value">${fmtCLP(total)}</div>
+        <div class="sub">${variacion === null ? 'Sin datos del mes anterior' : (variacion >= 0 ? '▲ ' : '▼ ') + Math.abs(variacion).toFixed(1) + '% vs ' + mesTxt(mesAnterior(mes))}</div>
+      </div>
+      <div class="summary-card">
+        <div class="label-row"><span class="label">Registros</span></div>
+        <div class="value">${delMes.length}</div>
+        <div class="sub">${new Set(delMes.map(e => e.proveedor)).size} proveedores</div>
+      </div>
+      <div class="summary-card">
+        <div class="label-row"><span class="dot" style="background:var(--amber-dot)"></span><span class="label">Por facturar</span></div>
+        <div class="value">${fmtCLP(sum(porFacturar))}</div>
+        <div class="sub">${porFacturar.length} ${porFacturar.length === 1 ? 'registro' : 'registros'} pendiente o recibido</div>
+      </div>
+      <div class="summary-card">
+        <div class="label-row"><span class="label">Con foto</span></div>
+        <div class="value">${conFoto} / ${delMes.length}</div>
+        <div class="sub">${delMes.length ? Math.round(conFoto / delMes.length * 100) : 0}% respaldado</div>
+      </div>
+    </div>
+    <div class="dash-grid">
+      <div class="dash-panel">
+        <div class="dash-panel-title">Por sucursal</div>
+        ${barras(porSuc, totalTodas, 'suc')}
+      </div>
+      <div class="dash-panel">
+        <div class="dash-panel-title">Últimos 6 meses</div>
+        <div class="dash-cols">
+          ${tend.map(t => `
+            <div class="dash-col${t.m === mes ? ' actual' : ''}">
+              <div class="dash-col-val">${t.v ? fmtCLP(t.v).replace('$', '$ ') : ''}</div>
+              <div class="dash-col-track"><div class="dash-col-bar" style="height:${(t.v / maxT * 100).toFixed(1)}%"></div></div>
+              <div class="dash-col-label">${mesTxt(t.m)}</div>
+            </div>`).join('')}
+        </div>
+      </div>
+      <div class="dash-panel">
+        <div class="dash-panel-title">Top proveedores</div>
+        ${barras(agrupar(delMes, e => e.proveedor).slice(0, 6), total)}
+      </div>
+      <div class="dash-panel">
+        <div class="dash-panel-title">Top productos</div>
+        ${barras(agrupar(delMes, e => e.producto).slice(0, 6), total)}
+      </div>
+    </div>`;
 }
 
 function emptyStateHtml() {
@@ -409,6 +510,33 @@ function abrirModalConDatosExtraidos(data, fotoBase64, fotoMime, errorLectura) {
   updateSubtotalPreview();
 }
 
+// Solo guarda la foto (sin Gemini): sirve para respaldar vales, guías o documentos que no hay que leer
+async function leerFotoSinAnalisis(file) {
+  const dataUrl = await resizeImage(file);
+  return { base64: dataUrl.split(',')[1], mimeType: 'image/jpeg' };
+}
+async function handleSoloFoto(e) {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  let f;
+  try { f = await leerFotoSinAnalisis(file); } catch { alert('No se pudo leer la imagen.'); return; }
+  openModal();
+  fotoPendienteBase64 = f.base64; fotoPendienteMime = f.mimeType;
+  root.getElementById('modal-foto-indicator').classList.remove('hidden');
+}
+// Adjuntar o cambiar la foto desde el formulario (nuevo o edición), sin análisis
+async function handleAdjuntarFoto(e) {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  try {
+    const f = await leerFotoSinAnalisis(file);
+    fotoPendienteBase64 = f.base64; fotoPendienteMime = f.mimeType;
+    root.getElementById('modal-foto-indicator').classList.remove('hidden');
+  } catch { alert('No se pudo leer la imagen.'); }
+}
+
 function verFoto(id) {
   const e = entries.find(x => x.id === id);
   if (!e || !e.fotoUrl) return;
@@ -427,8 +555,10 @@ async function openModal(id) {
   root.getElementById('item1-label').classList.add('hidden');
   root.getElementById('modal-title').textContent = editingId ? 'Editar registro' : 'Nuevo registro';
   root.getElementById('modal-save-label').textContent = editingId ? 'Guardar cambios' : 'Agregar registro';
+  root.getElementById('f-sucursal').value = sucursalEquipo();
   if (editingId) {
     const e = entries.find(x => x.id === editingId);
+    root.getElementById('f-sucursal').value = e.sucursal || '';
     root.getElementById('f-fecha').value = e.fecha;
     root.getElementById('f-proveedor').value = e.proveedor;
     root.getElementById('f-producto').value = e.producto;
@@ -525,13 +655,16 @@ function leerItems() {
 
 async function saveForm() {
   const fecha = root.getElementById('f-fecha').value;
+  const sucursal = root.getElementById('f-sucursal').value;
   const proveedor = root.getElementById('f-proveedor').value.trim();
   const estado = root.getElementById('f-estado').value;
   const referencia = root.getElementById('f-referencia').value.trim();
   const notas = root.getElementById('f-notas').value.trim();
   const items = leerItems();
   const { producto, cantidad, unidad, costoUnitario } = items[0];
+  if (!sucursal) { alert('Elige la sucursal que recepciona la compra.'); root.getElementById('f-sucursal').focus(); return; }
   if (!fecha || !proveedor) { alert('Falta la fecha o el proveedor.'); return; }
+  guardarSucursalEquipo(sucursal);
   const malo = items.findIndex(it => !it.producto || isNaN(it.cantidad) || isNaN(it.costoUnitario));
   if (malo !== -1) { alert('Al ítem ' + (malo + 1) + ' le falta producto, cantidad o costo unitario.'); return; }
 
@@ -542,13 +675,16 @@ async function saveForm() {
   try {
     if (editingId) {
       const existing = entries.find(e => e.id === editingId);
-      const updated = { ...existing, fecha, proveedor, producto, cantidad, unidad, costoUnitario, estado, referencia, notas, actualizadoEn: Date.now() };
-      const res = await apiPost({ action: 'update', entry: updated });
+      const updated = { ...existing, sucursal, fecha, proveedor, producto, cantidad, unidad, costoUnitario, estado, referencia, notas, actualizadoEn: Date.now() };
+      const body = { action: 'update', entry: updated };
+      if (fotoPendienteBase64) { body.image = fotoPendienteBase64; body.mimeType = fotoPendienteMime; }
+      const res = await apiPost(body);
       if (!res.ok) throw new Error(res.error);
+      if (res.entry && res.entry.fotoUrl) updated.fotoUrl = res.entry.fotoUrl;
       Object.assign(existing, updated);
     } else {
       const ahora = Date.now();
-      const nuevos = items.map((it, i) => ({ id: uid(), fecha, proveedor, producto: it.producto, cantidad: it.cantidad, unidad: it.unidad, costoUnitario: it.costoUnitario, estado, referencia, notas, fotoUrl: '', creadoEn: ahora + i, actualizadoEn: ahora }));
+      const nuevos = items.map((it, i) => ({ id: uid(), sucursal, fecha, proveedor, producto: it.producto, cantidad: it.cantidad, unidad: it.unidad, costoUnitario: it.costoUnitario, estado, referencia, notas, fotoUrl: '', creadoEn: ahora + i, actualizadoEn: ahora }));
       // El primero sube la foto a Drive; el resto reutiliza el mismo link
       const body = { action: 'add', entry: nuevos[0] };
       if (fotoPendienteBase64) { body.image = fotoPendienteBase64; body.mimeType = fotoPendienteMime; }
@@ -598,9 +734,9 @@ async function deleteEntry(id) {
 function exportarCSV() {
   const list = getFiltered();
   if (list.length === 0) return;
-  const headers = ['Fecha','Proveedor','Producto','Cantidad','Unidad','Costo Unitario','Subtotal','Estado','Referencia','Notas'];
+  const headers = ['Fecha','Sucursal','Proveedor','Producto','Cantidad','Unidad','Costo Unitario','Subtotal','Estado','Referencia','Notas'];
   const rows = list.map(e => [
-    e.fecha, e.proveedor, e.producto, e.cantidad, e.unidad, e.costoUnitario,
+    e.fecha, e.sucursal, e.proveedor, e.producto, e.cantidad, e.unidad, e.costoUnitario,
     (e.cantidad * e.costoUnitario).toFixed(0), ESTADOS[e.estado].label, e.referencia, (e.notas||'').replace(/\n/g,' '),
   ]);
   const csv = [headers, ...rows].map(r => r.map(c => `"${String(c).replace(/"/g,'""')}"`).join(';')).join('\n');
@@ -632,6 +768,12 @@ root.getElementById('f-costo').addEventListener('input', updateSubtotalPreview);
 root.getElementById('btn-add-item').addEventListener('click', () => { const r = agregarItem(); r.querySelector('.i-producto').focus(); });
 
 root.getElementById('filtro-mes').addEventListener('change', e => { filtros.mes = e.target.value; render(); });
+root.getElementById('filtro-sucursal').addEventListener('change', e => { filtros.sucursal = e.target.value; render(); });
+root.getElementById('btn-solo-foto').addEventListener('click', () => root.getElementById('solo-foto-input').click());
+root.getElementById('solo-foto-input').addEventListener('change', handleSoloFoto);
+root.getElementById('btn-adjuntar-foto').addEventListener('click', () => root.getElementById('adjuntar-foto-input').click());
+root.getElementById('adjuntar-foto-input').addEventListener('change', handleAdjuntarFoto);
+root.getElementById('f-sucursal').addEventListener('change', e => { if (e.target.value) guardarSucursalEquipo(e.target.value); });
 root.getElementById('filtro-proveedor').addEventListener('change', e => { filtros.proveedor = e.target.value; render(); });
 root.getElementById('filtro-estado').addEventListener('change', e => { filtros.estado = e.target.value; render(); });
 root.getElementById('busqueda').addEventListener('input', e => { filtros.busqueda = e.target.value; render(); });

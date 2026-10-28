@@ -32,13 +32,22 @@ async function apiGet() {
   if (!res.ok) throw new Error('HTTP ' + res.status);
   return await res.json();
 }
-async function apiPost(body) {
+async function apiPost(body, timeoutMs) {
   // No establecer Content-Type para evitar preflight CORS con Apps Script
-  const res = await fetch(API_URL, {
-    method: 'POST',
-    body: JSON.stringify(body),
-    redirect: 'follow',
-  });
+  const ctrl = timeoutMs ? new AbortController() : null;
+  const t = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : null;
+  let res;
+  try {
+    res = await fetch(API_URL, {
+      method: 'POST',
+      body: JSON.stringify(body),
+      redirect: 'follow',
+      signal: ctrl ? ctrl.signal : undefined,
+    });
+  } catch (err) {
+    if (err.name === 'AbortError') throw new Error('Gemini tardó demasiado en responder');
+    throw err;
+  } finally { if (t) clearTimeout(t); }
   if (!res.ok) throw new Error('HTTP ' + res.status);
   return await res.json();
 }
@@ -343,22 +352,27 @@ async function handleFotoSeleccionada(e) {
   const mimeType = 'image/jpeg';
 
   root.getElementById('foto-preview').src = dataUrl;
-  root.getElementById('foto-status').textContent = 'Analizando boleta…';
+  const status = root.getElementById('foto-status');
+  status.textContent = 'Analizando boleta…';
   root.getElementById('modal-foto').classList.remove('hidden');
+  // Gemini a veces tarda porque el servidor reintenta con otro modelo: se avisa para que no parezca pegado
+  const aviso = setTimeout(() => { status.textContent = 'Gemini está lento, probando de nuevo…'; }, 12000);
 
+  let data = {}, errorLectura = null;
   try {
-    const res = await apiPost({ action: 'extract', image: base64, mimeType });
-    root.getElementById('modal-foto').classList.add('hidden');
+    const res = await apiPost({ action: 'extract', image: base64, mimeType }, 100000);
     if (!res.ok) throw new Error(res.error || 'No se pudo leer la boleta');
-    abrirModalConDatosExtraidos(res.data || {}, base64, mimeType);
+    data = res.data || {};
   } catch (err) {
+    errorLectura = err.message; // la foto NO se pierde: se abre el registro con la foto adjunta
+  } finally {
+    clearTimeout(aviso);
     root.getElementById('modal-foto').classList.add('hidden');
-    alert('No se pudo extraer la información automáticamente (' + err.message + '). Completa el registro a mano y revisa que esté todo correcto.');
-    openModal();
   }
+  abrirModalConDatosExtraidos(data, base64, mimeType, errorLectura);
 }
 
-function abrirModalConDatosExtraidos(data, fotoBase64, fotoMime) {
+function abrirModalConDatosExtraidos(data, fotoBase64, fotoMime, errorLectura) {
   openModal(); // limpia cualquier foto pendiente anterior
   fotoPendienteBase64 = fotoBase64 || null;
   fotoPendienteMime = fotoMime || null;
@@ -370,11 +384,28 @@ function abrirModalConDatosExtraidos(data, fotoBase64, fotoMime) {
   const dd = String(hoy.getDate()).padStart(2, '0');
   root.getElementById('f-fecha').value = `${yyyy}-${mm}-${dd}`;
   if (data.proveedor) root.getElementById('f-proveedor').value = data.proveedor;
-  if (data.producto) root.getElementById('f-producto').value = data.producto;
-  if (data.cantidad !== null && data.cantidad !== undefined) root.getElementById('f-cantidad').value = data.cantidad;
-  if (data.costoUnitario !== null && data.costoUnitario !== undefined) root.getElementById('f-costo').value = data.costoUnitario;
+  if (data.documento) root.getElementById('f-referencia').value = data.documento;
+  // Formato nuevo: data.items = [{producto, cantidad, costoUnitario}, ...]. Formato antiguo: un solo producto.
+  const items = Array.isArray(data.items) && data.items.length ? data.items
+    : (data.producto || data.costoUnitario != null) ? [data] : [];
+  items.forEach((it, i) => {
+    if (i === 0) {
+      if (it.producto) root.getElementById('f-producto').value = it.producto;
+      if (it.cantidad !== null && it.cantidad !== undefined) root.getElementById('f-cantidad').value = it.cantidad;
+      if (it.costoUnitario !== null && it.costoUnitario !== undefined) root.getElementById('f-costo').value = it.costoUnitario;
+    } else {
+      agregarItem(it);
+    }
+  });
   root.getElementById('f-estado').value = 'recibido';
-  root.getElementById('f-notas').value = 'Registrado desde foto de boleta — revisa los datos antes de guardar.';
+  root.getElementById('f-notas').value = errorLectura
+    ? 'Foto de boleta adjunta — no se pudo leer automáticamente, datos ingresados a mano.'
+    : 'Registrado desde foto de boleta — revisa los datos antes de guardar.';
+  if (errorLectura) {
+    setTimeout(() => alert('No se pudo leer la boleta automáticamente.\n\n' + errorLectura + '\n\nLa foto quedó adjunta: completa los datos a mano y guarda.'), 50);
+  } else if (items.length > 1) {
+    setTimeout(() => alert('Se detectaron ' + items.length + ' ítems en la boleta. Revísalos antes de guardar: cada ítem queda como un registro aparte, todos con la misma foto.'), 50);
+  }
   updateSubtotalPreview();
 }
 
@@ -391,6 +422,9 @@ async function openModal(id) {
   fotoPendienteBase64 = null;
   fotoPendienteMime = null;
   root.getElementById('modal-foto-indicator').classList.add('hidden');
+  root.getElementById('items-extra').innerHTML = '';
+  root.getElementById('btn-add-item').classList.toggle('hidden', !!editingId);
+  root.getElementById('item1-label').classList.add('hidden');
   root.getElementById('modal-title').textContent = editingId ? 'Editar registro' : 'Nuevo registro';
   root.getElementById('modal-save-label').textContent = editingId ? 'Guardar cambios' : 'Agregar registro';
   if (editingId) {
@@ -427,26 +461,79 @@ function closeModal() {
 }
 
 function updateSubtotalPreview() {
-  const c = parseFloat(root.getElementById('f-cantidad').value);
-  const u = parseFloat(root.getElementById('f-costo').value);
+  const items = leerItems();
+  const total = items.reduce((s, it) => s + (it.cantidad > 0 && it.costoUnitario > 0 ? it.cantidad * it.costoUnitario : 0), 0);
   const box = root.getElementById('subtotal-preview');
-  if (!isNaN(c) && !isNaN(u) && c > 0 && u > 0) {
-    root.getElementById('subtotal-value').textContent = fmtCLP(c * u);
+  box.querySelector('.label').textContent = items.length > 1 ? `Total (${items.length} ítems)` : 'Subtotal calculado';
+  if (total > 0) {
+    root.getElementById('subtotal-value').textContent = fmtCLP(total);
     box.classList.remove('hidden');
   } else box.classList.add('hidden');
+}
+
+// ----------- Varios ítems por boleta/factura -----------
+const UNIDADES = ['unidad','caja','resma','rollo','pallet','kg','m','lt','paquete'];
+function agregarItem(it = {}) {
+  const cont = root.getElementById('items-extra');
+  const row = document.createElement('div');
+  row.className = 'item-extra';
+  const unidad = UNIDADES.includes(it.unidad) ? it.unidad : 'unidad';
+  row.innerHTML = `
+    <div class="item-extra-head">
+      <span class="item-num"></span>
+      <button type="button" class="icon-btn danger item-del" title="Quitar ítem">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="field"><input type="text" class="input i-producto" placeholder="Producto / Descripción" value="${escapeHtml(it.producto || '')}"></div>
+    <div class="field-grid-3">
+      <div class="field"><input type="number" step="any" class="input font-mono i-cantidad" placeholder="Cantidad" value="${it.cantidad ?? ''}"></div>
+      <div class="field"><select class="input i-unidad">${UNIDADES.map(u => `<option${u === unidad ? ' selected' : ''}>${u}</option>`).join('')}</select></div>
+      <div class="field"><input type="number" step="any" class="input font-mono i-costo" placeholder="Costo unitario" value="${it.costoUnitario ?? ''}"></div>
+    </div>`;
+  row.querySelector('.item-del').addEventListener('click', () => { row.remove(); renumerarItems(); updateSubtotalPreview(); });
+  row.querySelectorAll('.i-cantidad, .i-costo').forEach(i => i.addEventListener('input', updateSubtotalPreview));
+  cont.appendChild(row);
+  renumerarItems();
+  updateSubtotalPreview();
+  return row;
+}
+function renumerarItems() {
+  const rows = root.getElementById('items-extra').querySelectorAll('.item-extra');
+  rows.forEach((r, i) => { r.querySelector('.item-num').textContent = 'Ítem ' + (i + 2); });
+  root.getElementById('item1-label').classList.toggle('hidden', rows.length === 0);
+}
+// Ítem 1 = campos principales; los demás vienen de #items-extra (se ignoran filas totalmente vacías)
+function leerItems() {
+  const items = [{
+    producto: root.getElementById('f-producto').value.trim(),
+    cantidad: parseFloat(root.getElementById('f-cantidad').value),
+    unidad: root.getElementById('f-unidad').value,
+    costoUnitario: parseFloat(root.getElementById('f-costo').value),
+  }];
+  root.getElementById('items-extra').querySelectorAll('.item-extra').forEach(r => {
+    const it = {
+      producto: r.querySelector('.i-producto').value.trim(),
+      cantidad: parseFloat(r.querySelector('.i-cantidad').value),
+      unidad: r.querySelector('.i-unidad').value,
+      costoUnitario: parseFloat(r.querySelector('.i-costo').value),
+    };
+    if (it.producto || !isNaN(it.cantidad) || !isNaN(it.costoUnitario)) items.push(it);
+  });
+  return items;
 }
 
 async function saveForm() {
   const fecha = root.getElementById('f-fecha').value;
   const proveedor = root.getElementById('f-proveedor').value.trim();
-  const producto = root.getElementById('f-producto').value.trim();
-  const cantidad = parseFloat(root.getElementById('f-cantidad').value);
-  const unidad = root.getElementById('f-unidad').value;
-  const costoUnitario = parseFloat(root.getElementById('f-costo').value);
   const estado = root.getElementById('f-estado').value;
   const referencia = root.getElementById('f-referencia').value.trim();
   const notas = root.getElementById('f-notas').value.trim();
-  if (!fecha || !proveedor || !producto || isNaN(cantidad) || isNaN(costoUnitario)) return;
+  const items = leerItems();
+  const { producto, cantidad, unidad, costoUnitario } = items[0];
+  if (!fecha || !proveedor) { alert('Falta la fecha o el proveedor.'); return; }
+  const malo = items.findIndex(it => !it.producto || isNaN(it.cantidad) || isNaN(it.costoUnitario));
+  if (malo !== -1) { alert('Al ítem ' + (malo + 1) + ' le falta producto, cantidad o costo unitario.'); return; }
 
   const saveBtn = root.getElementById('modal-save');
   saveBtn.disabled = true;
@@ -460,13 +547,25 @@ async function saveForm() {
       if (!res.ok) throw new Error(res.error);
       Object.assign(existing, updated);
     } else {
-      const entry = { id: uid(), fecha, proveedor, producto, cantidad, unidad, costoUnitario, estado, referencia, notas, fotoUrl: '', creadoEn: Date.now(), actualizadoEn: Date.now() };
-      const body = { action: 'add', entry };
+      const ahora = Date.now();
+      const nuevos = items.map((it, i) => ({ id: uid(), fecha, proveedor, producto: it.producto, cantidad: it.cantidad, unidad: it.unidad, costoUnitario: it.costoUnitario, estado, referencia, notas, fotoUrl: '', creadoEn: ahora + i, actualizadoEn: ahora }));
+      // El primero sube la foto a Drive; el resto reutiliza el mismo link
+      const body = { action: 'add', entry: nuevos[0] };
       if (fotoPendienteBase64) { body.image = fotoPendienteBase64; body.mimeType = fotoPendienteMime; }
       const res = await apiPost(body);
       if (!res.ok) throw new Error(res.error);
-      if (res.entry && res.entry.fotoUrl) entry.fotoUrl = res.entry.fotoUrl;
-      entries.unshift(entry);
+      if (res.entry && res.entry.fotoUrl) nuevos.forEach(n => { n.fotoUrl = res.entry.fotoUrl; });
+      entries.unshift(nuevos[0]);
+      fotoPendienteBase64 = null; // ya quedó guardada
+      if (nuevos.length > 1) {
+        const resto = nuevos.slice(1);
+        const r2 = await apiPost({ action: 'bulk_add', entries: resto });
+        if (!r2.ok) {
+          closeModal(); render();
+          throw new Error('se guardó solo el ítem 1; los otros ' + resto.length + ' fallaron (' + r2.error + '). Agrégalos a mano.');
+        }
+        entries.unshift(...resto.reverse());
+      }
     }
     fotoPendienteBase64 = null;
     fotoPendienteMime = null;
@@ -530,6 +629,7 @@ root.getElementById('modal-cancel').addEventListener('click', closeModal);
 root.getElementById('modal-save').addEventListener('click', saveForm);
 root.getElementById('f-cantidad').addEventListener('input', updateSubtotalPreview);
 root.getElementById('f-costo').addEventListener('input', updateSubtotalPreview);
+root.getElementById('btn-add-item').addEventListener('click', () => { const r = agregarItem(); r.querySelector('.i-producto').focus(); });
 
 root.getElementById('filtro-mes').addEventListener('change', e => { filtros.mes = e.target.value; render(); });
 root.getElementById('filtro-proveedor').addEventListener('change', e => { filtros.proveedor = e.target.value; render(); });

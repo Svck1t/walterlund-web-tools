@@ -1,0 +1,10 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Acceso abierto: cualquiera que tenga el link puede leer y escribir.
+    // Para algo más seguro, ver README ("Seguridad").
+    match /{document=**} {
+      allow read, write: if true;
+    }
+  }
+}

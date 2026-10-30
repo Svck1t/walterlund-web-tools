@@ -26,6 +26,7 @@ document.addEventListener('DOMContentLoaded', () => {
     bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.9 1.9 0 0 0 3.4 0"/>',
     transfer: '<path d="M4 8h13"/><path d="m14 4 4 4-4 4"/><path d="M20 16H7"/><path d="m10 12-4 4 4 4"/>',
     clipboard: '<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4V3h6v1"/><path d="M9 10h6M9 14h6M9 18h4"/>',
+    users: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7"/><path d="M18 14.5a6.5 6.5 0 0 1 3.5 5.5"/>',
     cart: '<circle cx="9" cy="20" r="1.5"/><circle cx="18" cy="20" r="1.5"/><path d="M2 3h3l2.7 12.4a1 1 0 0 0 1 .8h9.6a1 1 0 0 0 1-.8L21 7H6"/>',
     chevron: '<path d="m6 9 6 6 6-6"/>'
   };
@@ -52,6 +53,7 @@ document.addEventListener('DOMContentLoaded', () => {
     stock: 'Stock',
     reposicion: 'Reposición de Productos',
     descargas: 'Descargas',
+    bodega: 'Bodega y Logística',
     supervision: 'Supervisión',
     apilador: 'Apilador',
     corte: 'Corte'
@@ -93,6 +95,9 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'compras':
         ComprasSection.render(content);
         break;
+      case 'bodega':
+        content.innerHTML = '<iframe src="bodega/index.html" title="Bodega y Logística WL" style="display:block;width:100%;height:calc(100vh - 120px);min-height:520px;border:0;border-radius:10px;background:#fff"></iframe>';
+        break;
       case 'control-facturas':
         ControlFacturasSection.render(content);
         break;
@@ -112,6 +117,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const section = item.dataset.section;
       setActive(item);
       loadSection(section);
+      history.replaceState(null, '', section === 'bodega' ? '#bodega' : '#');
       if (mq.matches) abrirMovil(false); // en teléfono, cerrar el menú al elegir
       window.scrollTo(0, 0);
     });
@@ -142,5 +148,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // Carga inicial: Inicio (resumen del día)
-  loadSection('inicio');
+  const itemBodega = document.querySelector('.nav-item[data-section="bodega"]');
+  if (location.hash === '#bodega' && itemBodega) { setActive(itemBodega); loadSection('bodega'); }
+  else loadSection('inicio');
 });

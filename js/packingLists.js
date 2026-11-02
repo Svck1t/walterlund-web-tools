@@ -1,8 +1,129 @@
 // =====================================================
-// SECCIÓN: PACKING LISTS — v2 (sección propia, conectada con Control Importaciones)
+// SECCIÓN: PACKING LISTS — v3 (importar Excel: asigna cada bloque a su contenedor)
 // Fuente: planilla "Packing Lists" (PL_Cabecera + PL_Detalle) vía /api/packing-lists
 // Cruza con Importaciones para proveedor, orden, llegada, estado, GE y bodega
 // =====================================================
+
+// Lee un Excel con el formato de planilla de packing lists (bloques por contenedor)
+// y devuelve un packing list por contenedor con la misma estructura que usa la web:
+// { c, g:[], b, f:'pallet'|'bulto'|'simple', lb, lc, l:[[cod, prod, nPallet, kg, bultos, unXbulto, cantidad, vb, costo]] }
+const PLImportParser = (() => {
+  const T = v => String(v ?? '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+  const K = v => T(v).toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const normC = v => String(v || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const n = v => {
+    if (v === null || v === undefined || v === '') return null;
+    if (typeof v === 'number') return isFinite(v) ? v : null;
+    let s = T(v); if (!s) return null;
+    if (s.includes(',')) s = s.replace(/\./g, '').replace(',', '.');
+    const x = Number(s); return isNaN(x) ? null : x;
+  };
+  // Dígito verificador ISO 6346 (para completar números de 10 caracteres)
+  const ISO = 'A10B12C13D14E15F16G17H18I19J20K21L23M24N25O26P27Q28R29S30T31U32V34W35X36Y37Z38';
+  function digito(c10) {
+    let s = 0;
+    for (let i = 0; i < 10; i++) {
+      const ch = c10[i], k = ISO.indexOf(ch);
+      const v = /\d/.test(ch) ? Number(ch) : Number(ISO.substr(k + 1, 2));
+      s += v * Math.pow(2, i);
+    }
+    return (s % 11) % 10;
+  }
+  // Devuelve { c, nota } con el número limpio, completado o vacío si no parece contenedor
+  function limpiarC(orig) {
+    const c = normC(orig);
+    if (/^[A-Z]{4}\d{7}$/.test(c)) return { c, nota: '' };
+    if (/^[A-Z]{4}\d{6}$/.test(c)) { const d = c + digito(c); return { c: d, nota: `N° completado: ${T(orig)} → ${d}` }; }
+    return { c: '', nota: T(orig) ? `Sin N° de contenedor ("${T(orig)}")` : 'Sin N° de contenedor' };
+  }
+  const r3 = x => x === null ? null : Math.round(x * 1000) / 1000;
+
+  // Hojas a leer: solo las de packing lists; la primera que aparece gana si un contenedor se repite
+  function hojasPL(wb) {
+    const hs = wb.SheetNames.filter(s => K(s).replace(/\s/g, '').startsWith('PACKINGLIST'));
+    // "Impresión" primero (lo vigente), después "Antiguos"
+    return hs.sort((a, b) => (K(b).includes('IMPRES') ? 1 : 0) - (K(a).includes('IMPRES') ? 1 : 0));
+  }
+
+  function mapearCabecera(row, j0) {
+    const m = { cod: null, prod: null, np: null, kg: null, vb: null, co: null, q: [] };
+    for (let j = j0 + 1; j < row.length; j++) {
+      const h = K(row[j]); if (!h) continue;
+      if (h === 'CODIGO') m.cod = j;
+      else if (h === 'PRODUCTO') m.prod = j;
+      else if (h.startsWith('N° PALLET') || h.startsWith('NO PALLET')) m.np = j;
+      else if (h === 'TOTAL KGS') m.kg = j;
+      else if (h.startsWith('VB')) m.vb = j;
+      else if (h.startsWith('COSTO')) m.co = j;
+      else if (h === 'KGS X PAL' || h.startsWith('KGS X')) continue; // calculadas
+      else m.q.push({ j, h: T(row[j]) });
+    }
+    return m;
+  }
+
+  function leerHoja(ws, XLSX, hoja) {
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null, blankrows: true });
+    const out = [];
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i] || [];
+      const j0 = row.findIndex(v => K(v).startsWith('N° CONTENEDOR'));
+      if (j0 < 0) continue;
+      const m = mapearCabecera(row, j0);
+      if (m.cod === null || m.prod === null) continue; // no es un bloque de packing list
+      const ok = row.slice(0, j0).some(v => K(v) === 'OK');
+      const q = m.q;
+      let f, lb = null, lc, ib = null, iu = null, ic;
+      if (q.length >= 3) { ib = q[0].j; iu = q[1].j; ic = q[2].j; lb = q[0].h; lc = q[2].h; f = K(lb) === 'PALLETS' ? 'pallet' : 'bulto'; }
+      else if (q.length === 2) { ib = q[0].j; ic = q[1].j; lb = q[0].h; lc = q[1].h; f = 'bulto'; }
+      else { ic = q.length ? q[0].j : null; lc = q.length ? q[0].h : 'Cantidad'; f = 'simple'; }
+      const pl = { c: '', cOrig: '', nota: '', g: [], b: 'POR ASIGNAR', f, lb, lc, l: [], hoja, fila: i + 1, ok };
+      let blancos = 0;
+      for (let k = i + 1; k < rows.length; k++) {
+        const r = rows[k] || [];
+        if (r.some(v => K(v).startsWith('N° CONTENEDOR'))) break;
+        const a = T(r[j0]), au = K(r[j0]);
+        const cod = T(r[m.cod]), prod = T(r[m.prod]);
+        if (K(prod) === 'TOTAL' || K(cod) === 'TOTAL') break;
+        // columna del contenedor: N°, guía y bodega
+        if (k === i + 1) { const x = limpiarC(a); pl.cOrig = a; pl.c = x.c; pl.nota = x.nota; }
+        else if (au.startsWith('N° GUIA') || au.startsWith('BODEGA DESTINO') || !a) { /* etiquetas */ }
+        else {
+          const prev = K((rows[k - 1] || [])[j0]);
+          if (prev.startsWith('N° GUIA')) pl.g = a.split(/[,/;]|\s-\s/).map(T).filter(Boolean);
+          else if (prev.startsWith('BODEGA DESTINO')) pl.b = au.includes('POR ASIGNAR') ? 'POR ASIGNAR' : au.replace(/[\[\]]/g, '').trim();
+        }
+        if (!cod && !prod) { if (!a && ++blancos >= 2) break; continue; }
+        blancos = 0;
+        const bu = ib !== null ? n(r[ib]) : null, ub = iu !== null ? n(r[iu]) : null;
+        let ca = ic !== null ? n(r[ic]) : null;
+        if (ca === null && bu && ub) ca = bu * ub;
+        const vb = m.vb !== null ? T(r[m.vb]) : '';
+        pl.l.push([cod, prod, m.np !== null ? T(r[m.np]) : '', r3(n(r[m.kg])), bu, ub, ca, vb === '0' ? '' : vb, m.co !== null ? n(r[m.co]) : null]);
+      }
+      if (pl.l.length || pl.c) out.push(pl);
+    }
+    return out;
+  }
+
+  // Devuelve { pls, avisos } — un packing list por contenedor
+  function parse(wb, XLSX) {
+    const hojas = hojasPL(wb);
+    const avisos = [];
+    if (!hojas.length) return { pls: [], avisos: ['El archivo no tiene hojas "PackingLists…" / "Packinglist…"'], hojas };
+    const vistos = new Map(), pls = [];
+    hojas.forEach(h => leerHoja(wb.Sheets[h], XLSX, h).forEach(pl => {
+      if (pl.c && vistos.has(pl.c)) { const p = vistos.get(pl.c); p.dups = (p.dups || 0) + 1; return; }
+      if (pl.c) vistos.set(pl.c, pl);
+      pls.push(pl);
+    }));
+    return { pls, avisos, hojas };
+  }
+
+  // Firma para comparar con lo que ya está en la web (ignora nombres de producto y formato de números)
+  const firma = pl => pl.l.map(l => [K(l[0]), Math.round((Number(l[3]) || 0) * 10), Number(l[4]) || 0, Number(l[5]) || 0, Math.round(Number(l[6]) || 0)].join(':')).sort().join('|');
+
+  return { parse, firma, normC, digito };
+})();
 
 const PackingLists = (() => {
   const API = '/api/packing-lists'; // proxy de Vercel (el POST directo a Apps Script falla por CORS)
@@ -142,7 +263,7 @@ const PackingLists = (() => {
           <div class="pl-list-head">
             <input class="ci-search pl-search" id="pl-q" type="search" placeholder="Buscar contenedor, GE, código o producto" value="${esc(st.q)}">
             <div class="pl-filters" id="pl-filters"></div>
-            <button class="pl-b pl-pri pl-new-sm" data-new>➕ Nuevo packing list</button>
+            <div class="pl-new-sm"><button class="pl-b" data-importar>📥 Importar Excel</button><button class="pl-b pl-pri" data-new>➕ Nuevo</button></div>
           </div>
           <div class="pl-items" id="pl-items"><p class="ci-empty">Cargando packing lists…</p></div>
           <div class="pl-selbar" id="pl-selbar"><span id="pl-seln"></span><button class="pl-b" id="pl-selclear">Limpiar</button><button class="pl-b pl-pri" id="pl-selprint">Descargar PDF</button></div>
@@ -174,13 +295,15 @@ const PackingLists = (() => {
       const id = e.target.dataset.m; if (!id) return;
       e.target.checked ? st.marked.add(id) : st.marked.delete(id); renderSel();
     });
-    body.querySelector('.pl-new-sm').addEventListener('click', () => abrirForm(null));
+    body.querySelector('.pl-new-sm [data-new]').addEventListener('click', () => abrirForm(null));
+    body.querySelector('.pl-new-sm [data-importar]').addEventListener('click', elegirArchivo);
     body.querySelector('#pl-selall').addEventListener('click', e => { e.preventDefault(); filtrados().forEach(pl => st.marked.add(pl.id)); renderList(); });
     body.querySelector('#pl-selclear').addEventListener('click', () => { st.marked.clear(); renderList(); });
     body.querySelector('#pl-selprint').addEventListener('click', () => pdf(ordenados().filter(pl => st.marked.has(pl.id))));
     body.querySelector('#pl-detail').addEventListener('click', e => {
       if (e.target.closest('[data-back]')) body.querySelector('.pl-wrap').classList.remove('pl-show');
       if (e.target.closest('[data-new]')) abrirForm(null);
+      if (e.target.closest('[data-importar]')) elegirArchivo();
       if (e.target.closest('[data-edit]')) abrirForm(items.find(x => x.id === st.sel));
       if (e.target.closest('[data-pdf1]')) pdf(items.filter(x => x.id === st.sel));
       if (e.target.closest('[data-imp]')) { const pl = items.find(x => x.id === st.sel); if (pl && pl.c) ContendedoresSection.abrir(pl.c); }
@@ -251,7 +374,7 @@ const PackingLists = (() => {
 
   function renderDetail() {
     const el = body && body.querySelector('#pl-detail'); if (!el) return;
-    const bar = (extra = '') => `<div class="pl-top"><button class="pl-b pl-back" data-back>‹ Contenedores</button><span></span><div class="pl-acts">${extra}<button class="pl-b pl-pri" data-new>➕ Nuevo packing list</button></div></div>`;
+    const bar = (extra = '') => `<div class="pl-top"><button class="pl-b pl-back" data-back>‹ Contenedores</button><span></span><div class="pl-acts">${extra}<button class="pl-b" data-importar>📥 Importar Excel</button><button class="pl-b pl-pri" data-new>➕ Nuevo packing list</button></div></div>`;
     if (errorCarga) { el.innerHTML = bar() + `<p class="ci-err">Revisa que api/packing-lists.js tenga la URL del Web App. <button class="pl-b" data-retry>Reintentar</button></p>`; return; }
     const pl = items.find(x => x.id === st.sel);
     if (!pl) { el.innerHTML = bar() + `<p class="ci-empty">${cargado ? 'Elige un contenedor de la lista o crea un packing list nuevo' : 'Cargando…'}</p>`; return; }
@@ -493,6 +616,162 @@ const PackingLists = (() => {
     } finally { btn.disabled = false; btn.textContent = 'Guardar packing list'; }
   }
 
+  // ============ IMPORTAR EXCEL ============
+  // Lee la planilla (hojas PackingLists Impresión / Packinglist Antiguos), separa los bloques
+  // y asigna cada uno a su contenedor. Compara con lo que ya está en la web:
+  // nuevo → se crea · con cambios → se actualiza (si lo marcas) · igual → no se toca
+  let idlg = null, imp_ = [];
+  function elegirArchivo() {
+    if (!cargado) { toast('Espera a que carguen los packing lists', true); return; }
+    if (!window.XLSX) { toast('No se cargó la librería de Excel', true); return; }
+    const inp = document.createElement('input');
+    inp.type = 'file'; inp.accept = '.xlsx,.xlsm,.xls';
+    inp.addEventListener('change', () => { if (inp.files[0]) leerArchivo(inp.files[0]); });
+    inp.click();
+  }
+  async function leerArchivo(file) {
+    crearImpDialog();
+    idlg.querySelector('#pl-ibody').innerHTML = '<p class="ci-empty">Leyendo ' + esc(file.name) + '…</p>';
+    idlg.querySelector('#pl-isave').disabled = true;
+    idlg.showModal();
+    try {
+      const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+      const { pls, avisos, hojas } = PLImportParser.parse(wb, XLSX);
+      if (!pls.length) throw new Error(avisos[0] || 'No encontré bloques "N° Contenedor" en el archivo');
+      imp_ = pls.map(clasificar);
+      idlg.querySelector('#pl-ititle').textContent = `Importar ${file.name}`;
+      idlg.dataset.hojas = hojas.join(' + ');
+      renderImp();
+    } catch (e) {
+      console.error('Importar Excel:', e);
+      idlg.querySelector('#pl-ibody').innerHTML = `<p class="ci-err">${esc(e.message)}</p>`;
+    }
+  }
+  // Compara un bloque del Excel con lo que hay en la web
+  function clasificar(x) {
+    let prev = x.c ? porCont.get(x.c) : null;
+    // sin N° de contenedor: lo reconoce por sus líneas (así, cuando le pongas el N° en el Excel, se actualiza el mismo)
+    const fx = PLImportParser.firma(x);
+    if (!prev) prev = items.find(p => !p.c && PLImportParser.firma(p) === fx) || null;
+    const r = x.c ? imp.get(x.c) : null;
+    const av = [];
+    if (x.nota) av.push(x.nota);
+    if (x.c && !r) av.push('No está en Importaciones');
+    const sinCod = x.l.filter(l => !l[0] || K_(l[0]) === 'SIN CODIGO').length;
+    if (sinCod) av.push(`${sinCod} ${sinCod === 1 ? 'línea' : 'líneas'} sin código`);
+    const nuevos = [...new Set(x.l.map(l => l[0]).filter(c => c && K_(c) !== 'SIN CODIGO' && !cat[c]))];
+    if (nuevos.length) av.push(`Código${nuevos.length > 1 ? 's' : ''} que no estaba${nuevos.length > 1 ? 'n' : ''} en la web: ${nuevos.slice(0, 4).join(', ')}${nuevos.length > 4 ? '…' : ''}`);
+    // GE y bodega: se usa lo del Excel; si el Excel no tiene, se mantiene lo de la web
+    const g = x.g.length ? x.g : (prev ? prev.g : []);
+    const b = !sinBodega(x.b) ? x.b : (prev && !sinBodega(prev.b) ? prev.b : 'POR ASIGNAR');
+    const cambios = [];
+    if (prev) {
+      if (PLImportParser.firma(prev) !== fx) cambios.push(resumenLineas(prev, x));
+      if (!prev.c && x.c) cambios.push('N° de contenedor ' + x.c);
+      if (g.join(',') !== prev.g.join(',')) cambios.push('GE ' + (g.join(', ') || '—'));
+      if (String(b).toUpperCase() !== String(prev.b || 'POR ASIGNAR').toUpperCase()) cambios.push('bodega ' + bodLbl(b));
+    }
+    const estado = !prev ? 'nuevo' : cambios.length ? 'cambio' : 'igual';
+    const pl = { id: prev ? prev.id : null, c: x.c, g, b, f: x.f, lb: x.lb, lc: x.lc, l: x.l };
+    // marcados por defecto: los nuevos y los cambios de la hoja vigente (Impresión)
+    const on = estado === 'nuevo' || (estado === 'cambio' && K_(x.hoja).includes('IMPRES'));
+    return { x, pl, prev, estado, cambios, av, on, ok: x.ok, r };
+  }
+  const K_ = v => String(v ?? '').toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+  function resumenLineas(a, b) {
+    const s = (pl, k) => pl.l.reduce((t, l) => t + (Number(l[k]) || 0), 0);
+    const p = [];
+    if (a.l.length !== b.l.length) p.push(`${a.l.length} → ${b.l.length} líneas`);
+    const ka = s(a, 3), kb = s(b, 3);
+    if (Math.abs(ka - kb) > 0.5) p.push(`${nf(ka, 1)} → ${nf(kb, 1)} kg`);
+    const ca = s(a, 6), cb = s(b, 6);
+    if (Math.round(ca) !== Math.round(cb)) p.push(`${nf(ca)} → ${nf(cb)} ${String(b.lc || 'cantidad').toLowerCase()}`);
+    return p.length ? p.join(', ') : 'códigos o cantidades por línea';
+  }
+  function crearImpDialog() {
+    if (idlg) return;
+    idlg = document.createElement('dialog');
+    idlg.className = 'pl-dlg pl-idlg';
+    idlg.innerHTML = `
+      <div class="pl-dlg-head"><h2 id="pl-ititle">Importar Excel</h2><button class="pl-x" data-close aria-label="Cerrar">✕</button></div>
+      <div class="pl-dlg-body" id="pl-ibody"></div>
+      <div class="pl-dlg-foot"><span id="pl-isum"></span><span class="ci-err" id="pl-ierr"></span><button class="pl-b pl-pri" id="pl-isave">Guardar</button></div>`;
+    document.body.appendChild(idlg);
+    idlg.querySelector('[data-close]').addEventListener('click', () => { if (!idlg.dataset.busy) idlg.close(); });
+    idlg.addEventListener('cancel', e => { if (idlg.dataset.busy) e.preventDefault(); });
+    idlg.querySelector('#pl-ibody').addEventListener('change', e => {
+      const i = e.target.dataset.i;
+      if (i !== undefined) { imp_[i].on = e.target.checked; sumImp(); }
+      if (e.target.dataset.all !== undefined) { const est = e.target.dataset.all; imp_.forEach(o => { if (o.estado === est) o.on = e.target.checked; }); renderImp(); }
+    });
+    idlg.querySelector('#pl-ibody').addEventListener('click', e => {
+      const t = e.target.closest('[data-ver]'); if (t) { const v = idlg.querySelector('#pl-igual'); v.hidden = !v.hidden; }
+    });
+    idlg.querySelector('#pl-isave').addEventListener('click', guardarImp);
+  }
+  function filaImp(o, i) {
+    const x = o.x, L = o.pl, sum = k => L.l.reduce((t, l) => t + (Number(l[k]) || 0), 0);
+    const tag = { nuevo: '<span class="pl-tag pl-tag-n">Nuevo</span>', cambio: '<span class="pl-tag pl-tag-c">Cambió</span>', igual: '<span class="pl-tag">Sin cambios</span>' }[o.estado];
+    const det = [o.cambios.length ? 'Cambia: ' + o.cambios.join(' · ') : '', ...o.av].filter(Boolean);
+    return `<tr class="${o.estado === 'igual' ? 'pl-ig' : ''}">
+      <td>${o.estado === 'igual' ? '' : `<input type="checkbox" data-i="${i}" ${o.on ? 'checked' : ''} aria-label="Importar ${esc(L.c || 'bloque')}">`}</td>
+      <td><b class="pl-ic">${esc(L.c || x.cOrig || 'Sin N°')}</b>${tag}${o.ok ? ' <span class="pl-tag pl-tag-ok">ok</span>' : ''}
+        <small>${esc(o.r ? (o.r.proveedor || '') : '')}${o.r && o.r.proveedor ? ' · ' : ''}${esc(x.hoja)} fila ${x.fila}</small>
+        ${det.length ? `<small class="pl-idet">${det.map(esc).join('<br>')}</small>` : ''}</td>
+      <td class="num">${L.l.length}</td>
+      <td class="num">${nf(sum(3), 1)}</td>
+      <td class="num">${nf(sum(6))} <small>${esc(String(L.lc || '').toLowerCase())}</small></td>
+      <td>${esc(L.g.join(', ') || '—')}</td>
+      <td><span class="ci-bod${bodCls(L.b) ? ' ci-bod-' + bodCls(L.b) : ''}">${esc(bodLbl(L.b))}</span></td>
+    </tr>`;
+  }
+  function renderImp() {
+    const grupos = ['nuevo', 'cambio', 'igual'].map(est => ({ est, l: imp_.map((o, i) => [o, i]).filter(([o]) => o.estado === est) }));
+    const tit = { nuevo: 'Nuevos', cambio: 'Ya están en la web, pero cambiaron', igual: 'Sin cambios (no se tocan)' };
+    const head = '<thead><tr><th style="width:28px"></th><th>Contenedor</th><th class="num">Líneas</th><th class="num">Total kg</th><th class="num">Cantidad</th><th>GE</th><th>Bodega</th></tr></thead>';
+    idlg.querySelector('#pl-ibody').innerHTML = `<p class="pl-hint" style="margin:0 0 12px">Leí ${imp_.length} contenedores de ${esc(idlg.dataset.hojas || '')}. Si un contenedor está en las dos hojas, se usa el de Impresión. GE y bodega se toman del Excel; si allí están vacías, se mantiene lo que tenga la web.</p>` +
+      grupos.map(gr => !gr.l.length ? '' : gr.est === 'igual'
+        ? `<p class="pl-igh">✓ ${gr.l.length} ${tit.igual} <a href="#" data-ver onclick="return false">ver</a></p><div id="pl-igual" hidden><div class="ci-table-wrap"><table class="ci-table pl-itable">${head}<tbody>${gr.l.map(([o, i]) => filaImp(o, i)).join('')}</tbody></table></div></div>`
+        : `<h3 class="pl-ih"><label><input type="checkbox" data-all="${gr.est}" ${gr.l.every(([o]) => o.on) ? 'checked' : ''}> ${tit[gr.est]} (${gr.l.length})</label></h3>
+           <div class="ci-table-wrap"><table class="ci-table pl-itable">${head}<tbody>${gr.l.map(([o, i]) => filaImp(o, i)).join('')}</tbody></table></div>`).join('');
+    sumImp();
+  }
+  function sumImp() {
+    const n = imp_.filter(o => o.on && o.estado !== 'igual');
+    const nn = n.filter(o => o.estado === 'nuevo').length, nc = n.length - nn;
+    idlg.querySelector('#pl-isum').textContent = n.length ? [nn ? `${nn} nuevo${nn > 1 ? 's' : ''}` : '', nc ? `${nc} actualizado${nc > 1 ? 's' : ''}` : ''].filter(Boolean).join(' · ') : 'Nada marcado para guardar';
+    const btn = idlg.querySelector('#pl-isave');
+    btn.disabled = !n.length; btn.textContent = n.length ? `Guardar ${n.length}` : 'Guardar';
+  }
+  async function guardarImp() {
+    const lista = imp_.filter(o => o.on && o.estado !== 'igual');
+    if (!lista.length) return;
+    const btn = idlg.querySelector('#pl-isave'), err = idlg.querySelector('#pl-ierr');
+    err.textContent = ''; btn.disabled = true; idlg.dataset.busy = '1';
+    const fallos = [];
+    let ok = 0;
+    for (let k = 0; k < lista.length; k++) {
+      const o = lista[k];
+      btn.textContent = `Guardando ${k + 1} de ${lista.length}…`;
+      try {
+        const r = await fetch(API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'save', pl: o.pl }) });
+        const d = await r.json();
+        if (!d.ok) throw new Error(d.error || 'No se pudo guardar');
+        o.on = false; o.estado = 'igual'; o.cambios = []; ok++;
+      } catch (e) { fallos.push(`${o.pl.c || o.x.cOrig || 'Sin N°'}: ${e.message}`); }
+    }
+    delete idlg.dataset.busy;
+    await cargar(true);
+    renderFilters(); renderList(); renderDetail();
+    if (fallos.length) {
+      renderImp();
+      err.textContent = `${ok} guardados, ${fallos.length} con error: ${fallos.slice(0, 3).join(' · ')}${fallos.length > 3 ? '…' : ''}`;
+    } else {
+      idlg.close();
+      toast(`${ok} packing list${ok > 1 ? 's' : ''} importado${ok > 1 ? 's' : ''}`);
+    }
+  }
+
   function toast(msg, error) {
     const t = document.createElement('div');
     t.className = 'ci-toast' + (error ? ' ci-toast-err' : '');
@@ -536,7 +815,6 @@ const PackingLists = (() => {
       .pl-top{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap}
       .pl-acts{display:flex;gap:8px;flex-wrap:wrap}
       .pl-back{display:none}
-      .pl-new-sm{display:none;width:100%;margin-top:10px}
       .pl-headline{display:flex;align-items:center;gap:18px;flex-wrap:wrap;margin-bottom:16px}
       .pl-headline strong{display:block;font-size:17px}
       .pl-headline small{color:#6b7280;font-size:13px}
@@ -569,6 +847,21 @@ const PackingLists = (() => {
       .pl-lines th.num,.pl-lines input.num{text-align:right}
       .pl-lines td{padding:4px}
       .pl-out{text-align:right;color:#6b7280;font-variant-numeric:tabular-nums;padding-right:8px!important}
+      .pl-ih{font-size:14px;margin:16px 0 8px}
+      .pl-ih label{display:flex;gap:8px;align-items:center;cursor:pointer}
+      .pl-itable td{vertical-align:top}
+      .pl-itable td small{display:block;color:#6b7280;font-size:12px;margin-top:2px}
+      .pl-itable .pl-idet{color:#92400e}
+      .pl-itable input{width:16px;height:16px;accent-color:#4f5bd5}
+      .pl-ic{font-size:14px;margin-right:6px}
+      .pl-tag{display:inline-block;font-size:11px;font-weight:700;border-radius:999px;padding:1px 8px;background:#f3f4f6;color:#6b7280}
+      .pl-tag-n{background:#dcfce7;color:#166534}
+      .pl-tag-c{background:#fef3c7;color:#92400e}
+      .pl-tag-ok{background:#e0e7ff;color:#3730a3}
+      .pl-igh{font-size:13px;color:#4b5563;margin:16px 0 8px}
+      .pl-igh a{color:#4f5bd5;margin-left:6px}
+      .pl-new-sm{display:none;gap:8px;margin-top:10px}
+      .pl-new-sm .pl-b{flex:1}
       .pl-x{background:none;border:0;color:#9ca3af;font-size:16px;cursor:pointer;padding:4px 8px}
       @media (max-width:900px){
         .pl-wrap{grid-template-columns:1fr}
@@ -576,7 +869,7 @@ const PackingLists = (() => {
         .pl-wrap.pl-show .pl-list{display:none}
         .pl-wrap:not(.pl-show) .pl-detail{display:none}
         .pl-back{display:inline-block}
-        .pl-new-sm{display:block}
+        .pl-new-sm{display:flex}
         .pl-grid4{grid-template-columns:1fr 1fr}
         .pl-plate{font-size:24px}
       }

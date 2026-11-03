@@ -1,5 +1,5 @@
 // =====================================================
-// SECCIÓN: COLA DE CONTENEDORES (v9 — pestaña Packing lists + sección Packing Lists, js/packingLists.js)
+// SECCIÓN: COLA DE CONTENEDORES (v9.1 — listeners una sola vez; pestaña Packing lists + sección Packing Lists, js/packingLists.js)
 // Fuente: pestaña "Importaciones" (espejo del Excel Control Contenedores 2026)
 // Solo lectura: el estado se marca en el Excel
 // =====================================================
@@ -68,17 +68,22 @@ const ContendedoresSection = (() => {
 
     root.querySelector('#ci-refresh').addEventListener('click', () => cargar(true));
     root.querySelectorAll('.ci-tab').forEach(b => b.addEventListener('click', () => irTab(b.dataset.tab)));
-    root.addEventListener('click', e => {
-      const ver = e.target.closest('[data-pl]');
-      if (ver) { PackingLists.seleccionar(ver.dataset.pl); irTab('packing', true); return; }
-      const nuevo = e.target.closest('[data-plnew]');
-      if (nuevo) { irTab('packing'); PackingLists.formNuevo(nuevo.dataset.plnew); return; }
-      const pdf = e.target.closest('[data-plpdf]');
-      if (pdf) { PackingLists.pdfContenedores(pdf.dataset.plpdf.split(',')); return; }
-    });
-    root.addEventListener('input', e => {
-      if (e.target.id === 'ci-buscar') { filtro = e.target.value; renderTabla(); }
-    });
+    // root es el mismo elemento cada vez que se entra a la sección: los listeners se agregan una sola vez
+    // (si no, se acumulan y un click se ejecuta varias veces, ej. 3 PDFs iguales)
+    if (!root.dataset.ciBound) {
+      root.dataset.ciBound = '1';
+      root.addEventListener('click', e => {
+        const ver = e.target.closest('[data-pl]');
+        if (ver) { PackingLists.seleccionar(ver.dataset.pl); irTab('packing', true); return; }
+        const nuevo = e.target.closest('[data-plnew]');
+        if (nuevo) { irTab('packing'); PackingLists.formNuevo(nuevo.dataset.plnew); return; }
+        const pdf = e.target.closest('[data-plpdf]');
+        if (pdf) { PackingLists.pdfContenedores(pdf.dataset.plpdf.split(',')); return; }
+      });
+      root.addEventListener('input', e => {
+        if (e.target.id === 'ci-buscar') { filtro = e.target.value; renderTabla(); }
+      });
+    }
 
     if (pendiente) { tab = 'todas'; filtro = pendiente; pendiente = null; }
     cargar(true);

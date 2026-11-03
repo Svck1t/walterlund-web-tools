@@ -28,6 +28,7 @@ document.addEventListener('DOMContentLoaded', () => {
     clipboard: '<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4V3h6v1"/><path d="M9 10h6M9 14h6M9 18h4"/>',
     users: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7"/><path d="M18 14.5a6.5 6.5 0 0 1 3.5 5.5"/>',
     cart: '<circle cx="9" cy="20" r="1.5"/><circle cx="18" cy="20" r="1.5"/><path d="M2 3h3l2.7 12.4a1 1 0 0 0 1 .8h9.6a1 1 0 0 0 1-.8L21 7H6"/>',
+    ship: '<path d="M3 15l1.5 4.5a1 1 0 0 0 1 .5h13a1 1 0 0 0 1-.5L21 15H3z"/><path d="M5 15V9h14v6"/><path d="M9 9V5h6v4"/><path d="M12 2v3"/>',
     chevron: '<path d="m6 9 6 6 6-6"/>'
   };
   document.querySelectorAll('[data-icon]').forEach(el => {
@@ -47,6 +48,7 @@ document.addEventListener('DOMContentLoaded', () => {
     inicio: 'Inicio',
     despachos: 'Despachos',
     'cola-contenedores': 'Control Importaciones',
+    llegadas: 'Próximas llegadas',
     'control-facturas': 'Control de Despachos',
     traslados: 'Control de Traslados',
     compras: 'Compras Nacionales',
@@ -76,6 +78,9 @@ document.addEventListener('DOMContentLoaded', () => {
     switch (section) {
       case 'cola-contenedores':
         ContendedoresSection.init(content);
+        break;
+      case 'llegadas':
+        LlegadasSection.render(content);
         break;
       case 'descargas':
         DescargasSection.render(content);

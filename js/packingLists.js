@@ -1,7 +1,9 @@
 // =====================================================
-// SECCIÓN: PACKING LISTS — v3 (importar Excel: asigna cada bloque a su contenedor)
+// SECCIÓN: PACKING LISTS — v3.2 (cruce tolera N° sin dígito verificador)
 // Fuente: planilla "Packing Lists" (PL_Cabecera + PL_Detalle) vía /api/packing-lists
 // Cruza con Importaciones para proveedor, orden, llegada, estado, GE y bodega
+// Regla: GE y Bodega destino se toman SIEMPRE de Importaciones (hoja espejo).
+//        Lo guardado en el PL solo se usa si el contenedor no aparece en Importaciones.
 // =====================================================
 
 // Lee un Excel con el formato de planilla de packing lists (bloques por contenedor)
@@ -146,22 +148,30 @@ const PackingLists = (() => {
   const cap = s => s ? s.charAt(0) + s.slice(1).toLowerCase() : '';
   const bodLbl = b => sinBodega(b) ? 'Por asignar' : cap(b);
   const norm = c => String(c || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  // Llave de cruce: 4 letras + 6 dígitos (sin dígito verificador), así TIIU594649 calza con TIIU5946490
+  const key = c => norm(c).slice(0, 10);
   const bodCls = b => { const u = String(b || '').toUpperCase(); return u.includes('ALDUNATE') ? 'ald' : u.includes('VIEL') ? 'viel' : ''; };
   const sinBodega = b => !b || String(b).toUpperCase().includes('POR ASIGNAR');
   const has = (pl, i) => pl.l.some(l => l[i] !== null && l[i] !== '' && l[i] !== undefined && l[i] !== 0);
+  // GE y bodega tal como vienen de una fila de Importaciones
+  const geDe = r => r && r.ge ? String(r.ge).split(/[,/]/).map(s => s.trim()).filter(Boolean) : [];
+  const bodDe = r => r && !sinBodega(r.bodega) ? r.bodega : 'POR ASIGNAR';
 
-  // Datos del contenedor combinando packing list + Importaciones
+  // Datos del contenedor: GE y bodega mandan desde Importaciones.
+  // Lo guardado en el PL solo se usa si el contenedor no está en Importaciones (ej. migrados antiguos)
   function info(pl) {
-    const r = imp.get(norm(pl.c)) || {};
-    const bodega = sinBodega(pl.b) && r.bodega ? r.bodega : (pl.b || 'POR ASIGNAR');
-    const guias = pl.g.length ? pl.g : (r.ge ? String(r.ge).split(/[,/]/).map(s => s.trim()).filter(Boolean) : []);
-    return { r, bodega, guias, bodegaImp: sinBodega(pl.b) && !!r.bodega, geImp: !pl.g.length && guias.length > 0, fecha: r.llegada || r.eta || String(pl.creado || '').slice(0, 10) };
+    const r = imp.get(key(pl.c));
+    const fecha = (r && (r.llegada || r.eta)) || String(pl.creado || '').slice(0, 10);
+    if (r) return { r, bodega: bodDe(r), guias: geDe(r), fecha };
+    return { r: {}, bodega: pl.b || 'POR ASIGNAR', guias: pl.g, fecha };
   }
   function alertas(pl) {
     const a = [];
     if (!pl.c) a.push('Falta el N° de contenedor');
     if (pl.l.some(l => !l[0] || l[0].toUpperCase() === 'SIN CÓDIGO')) a.push('Hay líneas sin código asignado');
-    if (pl.c && !imp.has(norm(pl.c))) a.push('El contenedor no aparece en Importaciones');
+    const r = pl.c ? imp.get(key(pl.c)) : null;
+    if (pl.c && !r) a.push('El contenedor no aparece en Importaciones');
+    if (r && norm(r.contenedor) !== norm(pl.c)) a.push(`En Importaciones figura como ${r.contenedor} (revisa el N° en el Excel)`);
     return a;
   }
 
@@ -175,7 +185,7 @@ const PackingLists = (() => {
         const d = await r.json();
         if (!d.ok) throw new Error(d.error || 'Respuesta inválida');
         items = d.items.map(x => ({ ...x, g: x.g || [], l: x.l || [] }));
-        porCont = new Map(items.filter(x => x.c).map(x => [norm(x.c), x]));
+        porCont = new Map(items.filter(x => x.c).map(x => [key(x.c), x]));
         cat = {};
         items.forEach(pl => pl.l.forEach(l => { if (l[0] && l[0].toUpperCase() !== 'SIN CÓDIGO') cat[l[0]] = { p: l[1], u: l[5] }; }));
         cargado = true; errorCarga = '';
@@ -210,7 +220,7 @@ const PackingLists = (() => {
     render(b, filas);
     const a = accion; accion = null;
     if (a && a.tipo === 'ver') {
-      const pl = porCont.get(a.c);
+      const pl = porCont.get(key(a.c));
       if (pl) { st.sel = pl.id; st.q = ''; st.bod = 'Todas'; const q = body.querySelector('#pl-q'); if (q) q.value = ''; body.querySelector('.pl-wrap').classList.add('pl-show'); renderFilters(); renderList(); renderDetail(); scrollAlSel(); }
     } else if (a && a.tipo === 'nuevo') {
       abrirForm(null, a.c);
@@ -226,13 +236,13 @@ const PackingLists = (() => {
   }
 
   // ============ API PARA CONTROL IMPORTACIONES ============
-  const tiene = c => porCont.has(norm(c));
+  const tiene = c => porCont.has(key(c));
   const firma = () => items.map(x => x.id + ':' + (x.c || '') + ':' + x.l.length).join('|');
   function abrir(c) { accion = { tipo: 'ver', c: norm(c) }; irSeccion(); }
   function nuevo(c) { accion = { tipo: 'nuevo', c: norm(c) }; irSeccion(); }
   // Usados desde la pestaña Packing lists de Control Importaciones
   function seleccionar(cont) {
-    const pl = porCont.get(norm(cont));
+    const pl = porCont.get(key(cont));
     if (!pl) return;
     st.sel = pl.id; st.q = ''; st.bod = 'Todas';
     setTimeout(() => {
@@ -244,7 +254,7 @@ const PackingLists = (() => {
   function formNuevo(cont) { abrirForm(null, norm(cont)); }
 
   function pdfContenedores(conts) {
-    const lista = conts.map(c => porCont.get(norm(c))).filter(Boolean);
+    const lista = [...new Set(conts.map(key))].map(c => porCont.get(c)).filter(Boolean);
     if (!lista.length) { toast('Ninguno de esos contenedores tiene packing list', true); return; }
     pdf(lista);
   }
@@ -254,7 +264,7 @@ const PackingLists = (() => {
   function render(container, rowsImportaciones) {
     injectStyles();
     imp = new Map();
-    (rowsImportaciones || []).forEach(r => { const k = norm(r.contenedor); if (k && !imp.has(k)) imp.set(k, r); });
+    (rowsImportaciones || []).forEach(r => { const k = key(r.contenedor); if (k && !imp.has(k)) imp.set(k, r); });
     const yaMontado = body === container && container.querySelector('.pl-wrap');
     body = container;
     if (!yaMontado) {
@@ -306,7 +316,7 @@ const PackingLists = (() => {
       if (e.target.closest('[data-importar]')) elegirArchivo();
       if (e.target.closest('[data-edit]')) abrirForm(items.find(x => x.id === st.sel));
       if (e.target.closest('[data-pdf1]')) pdf(items.filter(x => x.id === st.sel));
-      if (e.target.closest('[data-imp]')) { const pl = items.find(x => x.id === st.sel); if (pl && pl.c) ContendedoresSection.abrir(pl.c); }
+      if (e.target.closest('[data-imp]')) { const pl = items.find(x => x.id === st.sel); if (pl && pl.c) ContendedoresSection.abrir(info(pl).r.contenedor || pl.c); }
       if (e.target.closest('[data-retry]')) { errorCarga = ''; cargar(true).then(() => { renderList(); renderDetail(); }); }
     });
   }
@@ -381,14 +391,14 @@ const PackingLists = (() => {
     const i = info(pl), C = cols(pl), sum = k => pl.l.reduce((s, l) => s + (Number(l[k]) || 0), 0);
     const bc = bodCls(i.bodega), al = alertas(pl);
     const c = pl.c || '';
-    el.innerHTML = bar(`${c && imp.has(norm(c)) ? '<button class="pl-b" data-imp>🚢 Ver en Importaciones</button>' : ''}<button class="pl-b" data-edit>✏️ Editar</button><button class="pl-b" data-pdf1>📄 PDF</button>`) + `
+    el.innerHTML = bar(`${c && imp.has(key(c)) ? '<button class="pl-b" data-imp>🚢 Ver en Importaciones</button>' : ''}<button class="pl-b" data-edit>✏️ Editar</button><button class="pl-b" data-pdf1>📄 PDF</button>`) + `
       <div class="pl-headline">
         ${c ? `<div class="pl-plate"><span>${esc(c.slice(0, 4))}</span><span>${esc(c.slice(4, 10))}</span><span class="pl-chk">${esc(c.slice(10))}</span></div>` : '<div class="pl-plate pl-plate-none">Sin N° contenedor</div>'}
         <div><strong>${esc(i.r.proveedor || 'No aparece en Importaciones')}</strong><small>${esc(i.r.material || '')}${i.r.orden ? ' · Orden ' + esc(i.r.orden) : ''}</small></div>
       </div>
       <div class="pl-facts">
-        <div><span>Bodega destino</span><b><span class="ci-bod${bc ? ' ci-bod-' + bc : ''}">${esc(bodLbl(i.bodega))}</span>${i.bodegaImp ? '<small>según Importaciones</small>' : ''}</b></div>
-        <div><span>${i.guias.length > 1 ? 'Guías de entrada' : 'Guía de entrada'}</span><b>${i.guias.length ? i.guias.map(esc).join(', ') : '—'}${i.geImp ? '<small>según Importaciones</small>' : ''}</b></div>
+        <div><span>Bodega destino</span><b><span class="ci-bod${bc ? ' ci-bod-' + bc : ''}">${esc(bodLbl(i.bodega))}</span></b></div>
+        <div><span>${i.guias.length > 1 ? 'Guías de entrada' : 'Guía de entrada'}</span><b>${i.guias.length ? i.guias.map(esc).join(', ') : '—'}</b></div>
         <div><span>Llegada</span><b>${i.r.llegada ? fLarga(i.r.llegada) : i.r.eta ? fLarga(i.r.eta) + ' (ETA)' : '—'}</b></div>
         <div><span>Estado</span><b>${esc(cap(i.r.estado || '')) || '—'}</b></div>
         ${has(pl, 3) ? `<div><span>Total kg</span><b>${nf(sum(3), 1)}</b></div>` : ''}
@@ -401,7 +411,7 @@ const PackingLists = (() => {
         <tbody>${pl.l.map(l => `<tr><td class="${!l[0] || l[0].toUpperCase() === 'SIN CÓDIGO' ? 'pl-nocode' : ''}">${esc(l[0] || 'Sin código')}</td><td class="pl-prod">${esc(l[1])}</td>${C.map(x => `<td class="${x.n ? 'num' : ''}${x.calc ? ' pl-calc' : ''}">${x.v(l)}</td>`).join('')}</tr>`).join('')}</tbody>
         <tfoot><tr><td>Total</td><td></td>${C.map(x => `<td class="${x.n ? 'num' : ''}">${x.s ? nf(sum(x.s), x.sd || 0) : ''}</td>`).join('')}</tr></tfoot>
       </table></div>
-      <p class="pl-hint">Totales y kg por unidad calculados desde las líneas · ${esc(pl.id)}${pl.origen && pl.origen !== 'web' ? ' · migrado de ' + esc(pl.origen) : ''}</p>`;
+      <p class="pl-hint">Totales y kg por unidad calculados desde las líneas · GE y bodega desde Importaciones · ${esc(pl.id)}${pl.origen && pl.origen !== 'web' ? ' · migrado de ' + esc(pl.origen) : ''}</p>`;
   }
 
   // ============ PDF (formato planilla de descarga, sin costos) ============
@@ -558,12 +568,15 @@ const PackingLists = (() => {
     const L = LBL[fmt()];
     dlg.querySelector('#pl-fsum').textContent = `${n} ${n === 1 ? 'línea' : 'líneas'} · ${nf(kg, 1)} kg${L[0] ? ' · ' + nf(bu) + ' ' + L[0].toLowerCase() : ''} · ${nf(ca)} ${L[2].toLowerCase()}`;
   }
+  // Si el contenedor está en Importaciones: GE y bodega se llenan desde ahí y quedan bloqueados
   function infoImp() {
-    const c = dlg.querySelector('#pl-fc').value, r = imp.get(c), el = dlg.querySelector('#pl-fimp');
-    el.textContent = c.length === 11 ? (r ? `En Importaciones: ${r.proveedor || ''} · ${r.material || ''}${r.ge ? ' · GE ' + r.ge : ''}${r.bodega ? ' · ' + r.bodega : ''}` : 'Este contenedor todavía no aparece en Importaciones.') : '';
-    if (r && !dlg.querySelector('#pl-fg').value && r.ge) dlg.querySelector('#pl-fg').value = r.ge;
-    if (r && r.bodega && dlg.querySelector('#pl-fb').value === 'POR ASIGNAR') {
-      const b = BODEGAS.find(x => String(r.bodega).toUpperCase().includes(x)); if (b) dlg.querySelector('#pl-fb').value = b;
+    const c = norm(dlg.querySelector('#pl-fc').value), r = c.length >= 10 ? imp.get(key(c)) : null, el = dlg.querySelector('#pl-fimp');
+    const fg = dlg.querySelector('#pl-fg'), fb = dlg.querySelector('#pl-fb');
+    el.textContent = c.length === 11 ? (r ? `En Importaciones: ${r.proveedor || ''} · ${r.material || ''} · GE y bodega se toman de ahí` : 'Este contenedor todavía no aparece en Importaciones.') : '';
+    fg.disabled = fb.disabled = !!r;
+    if (r) {
+      fg.value = geDe(r).join(', ');
+      fb.value = BODEGAS.find(x => String(bodDe(r)).toUpperCase().includes(x)) || 'POR ASIGNAR';
     }
   }
   function abrirForm(pl, contSugerido) {
@@ -582,7 +595,7 @@ const PackingLists = (() => {
     dlg.querySelector('#pl-lb').innerHTML = '';
     (pl ? pl.l : [[], []]).forEach(l => linea(l));
     recalc();
-    if (!pl && contSugerido) infoImp();
+    infoImp(); // siempre: al editar también toma GE y bodega de Importaciones
     dlg.showModal();
     dlg.querySelector('#pl-fc').focus();
   }
@@ -591,7 +604,7 @@ const PackingLists = (() => {
     const c = dlg.querySelector('#pl-fc').value;
     err.textContent = '';
     if (c && !/^[A-Z]{4}\d{7}$/.test(c)) { err.textContent = 'El N° de contenedor debe tener 4 letras y 7 dígitos.'; return; }
-    if (c && items.some(x => x.c === c && x.id !== editId)) { err.textContent = `${c} ya tiene packing list.`; return; }
+    if (c && items.some(x => x.c && key(x.c) === key(c) && x.id !== editId)) { err.textContent = `${c} ya tiene packing list.`; return; }
     const l = leerLineas();
     if (!l.length) { err.textContent = 'Agrega al menos una línea con código o producto.'; return; }
     const f = fmt(), prev = items.find(x => x.id === editId);
@@ -649,11 +662,11 @@ const PackingLists = (() => {
   }
   // Compara un bloque del Excel con lo que hay en la web
   function clasificar(x) {
-    let prev = x.c ? porCont.get(x.c) : null;
+    let prev = x.c ? porCont.get(key(x.c)) : null;
     // sin N° de contenedor: lo reconoce por sus líneas (así, cuando le pongas el N° en el Excel, se actualiza el mismo)
     const fx = PLImportParser.firma(x);
     if (!prev) prev = items.find(p => !p.c && PLImportParser.firma(p) === fx) || null;
-    const r = x.c ? imp.get(x.c) : null;
+    const r = x.c ? imp.get(key(x.c)) : null;
     const av = [];
     if (x.nota) av.push(x.nota);
     if (x.c && !r) av.push('No está en Importaciones');
@@ -661,15 +674,19 @@ const PackingLists = (() => {
     if (sinCod) av.push(`${sinCod} ${sinCod === 1 ? 'línea' : 'líneas'} sin código`);
     const nuevos = [...new Set(x.l.map(l => l[0]).filter(c => c && K_(c) !== 'SIN CODIGO' && !cat[c]))];
     if (nuevos.length) av.push(`Código${nuevos.length > 1 ? 's' : ''} que no estaba${nuevos.length > 1 ? 'n' : ''} en la web: ${nuevos.slice(0, 4).join(', ')}${nuevos.length > 4 ? '…' : ''}`);
-    // GE y bodega: se usa lo del Excel; si el Excel no tiene, se mantiene lo de la web
-    const g = x.g.length ? x.g : (prev ? prev.g : []);
-    const b = !sinBodega(x.b) ? x.b : (prev && !sinBodega(prev.b) ? prev.b : 'POR ASIGNAR');
+    // GE y bodega: si el contenedor está en Importaciones, se guardan los de ahí (son los que mandan).
+    // Si no está, se usa lo del Excel; si el Excel no tiene, se mantiene lo de la web
+    const g = r ? geDe(r) : (x.g.length ? x.g : (prev ? prev.g : []));
+    const b = r ? bodDe(r) : (!sinBodega(x.b) ? x.b : (prev && !sinBodega(prev.b) ? prev.b : 'POR ASIGNAR'));
     const cambios = [];
     if (prev) {
       if (PLImportParser.firma(prev) !== fx) cambios.push(resumenLineas(prev, x));
       if (!prev.c && x.c) cambios.push('N° de contenedor ' + x.c);
-      if (g.join(',') !== prev.g.join(',')) cambios.push('GE ' + (g.join(', ') || '—'));
-      if (String(b).toUpperCase() !== String(prev.b || 'POR ASIGNAR').toUpperCase()) cambios.push('bodega ' + bodLbl(b));
+      // con Importaciones, GE y bodega no cuentan como cambio (se muestran siempre desde ahí)
+      if (!r) {
+        if (g.join(',') !== prev.g.join(',')) cambios.push('GE ' + (g.join(', ') || '—'));
+        if (String(b).toUpperCase() !== String(prev.b || 'POR ASIGNAR').toUpperCase()) cambios.push('bodega ' + bodLbl(b));
+      }
     }
     const estado = !prev ? 'nuevo' : cambios.length ? 'cambio' : 'igual';
     const pl = { id: prev ? prev.id : null, c: x.c, g, b, f: x.f, lb: x.lb, lc: x.lc, l: x.l };
@@ -729,7 +746,7 @@ const PackingLists = (() => {
     const grupos = ['nuevo', 'cambio', 'igual'].map(est => ({ est, l: imp_.map((o, i) => [o, i]).filter(([o]) => o.estado === est) }));
     const tit = { nuevo: 'Nuevos', cambio: 'Ya están en la web, pero cambiaron', igual: 'Sin cambios (no se tocan)' };
     const head = '<thead><tr><th style="width:28px"></th><th>Contenedor</th><th class="num">Líneas</th><th class="num">Total kg</th><th class="num">Cantidad</th><th>GE</th><th>Bodega</th></tr></thead>';
-    idlg.querySelector('#pl-ibody').innerHTML = `<p class="pl-hint" style="margin:0 0 12px">Leí ${imp_.length} contenedores de ${esc(idlg.dataset.hojas || '')}. Si un contenedor está en las dos hojas, se usa el de Impresión. GE y bodega se toman del Excel; si allí están vacías, se mantiene lo que tenga la web.</p>` +
+    idlg.querySelector('#pl-ibody').innerHTML = `<p class="pl-hint" style="margin:0 0 12px">Leí ${imp_.length} contenedores de ${esc(idlg.dataset.hojas || '')}. Si un contenedor está en las dos hojas, se usa el de Impresión. GE y bodega se toman de Importaciones; lo del Excel solo se usa si el contenedor no aparece ahí.</p>` +
       grupos.map(gr => !gr.l.length ? '' : gr.est === 'igual'
         ? `<p class="pl-igh">✓ ${gr.l.length} ${tit.igual} <a href="#" data-ver onclick="return false">ver</a></p><div id="pl-igual" hidden><div class="ci-table-wrap"><table class="ci-table pl-itable">${head}<tbody>${gr.l.map(([o, i]) => filaImp(o, i)).join('')}</tbody></table></div></div>`
         : `<h3 class="pl-ih"><label><input type="checkbox" data-all="${gr.est}" ${gr.l.every(([o]) => o.on) ? 'checked' : ''}> ${tit[gr.est]} (${gr.l.length})</label></h3>
@@ -842,6 +859,7 @@ const PackingLists = (() => {
       .pl-grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
       .pl-grid4 label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:#4b5563;font-weight:600}
       .pl-grid4 input,.pl-grid4 select,.pl-lines input{border:1px solid #d1d5db;border-radius:6px;padding:8px 10px;font:inherit;font-size:14px;font-weight:400;width:100%;box-sizing:border-box}
+      .pl-grid4 input:disabled,.pl-grid4 select:disabled{background:#f3f4f6;color:#4b5563;cursor:not-allowed}
       .pl-lines{width:100%;border-collapse:collapse;font-size:13px}
       .pl-lines th{background:#f5f7fa;text-align:left;padding:8px 6px;white-space:nowrap}
       .pl-lines th.num,.pl-lines input.num{text-align:right}

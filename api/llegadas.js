@@ -1,6 +1,6 @@
 // api/llegadas.js
 //
-// Próximas llegadas (área comercial) — SOLO LECTURA.
+// Próximas llegadas (área comercial) — SOLO LECTURA. v1.1: sin caché + fase por fecha
 // Junta Importaciones (hoja espejo) + Packing Lists y devuelve solo lo pendiente de recepción.
 // Se filtra aquí, en el servidor, para que el link público NUNCA reciba costos, GE ni órdenes.
 
@@ -15,8 +15,9 @@ const numero = v => (v === null || v === '' || v === undefined || isNaN(v)) ? nu
 
 function fase(r, hoy) {
   if (r.llegada) return 'confirmada';
+  // Igual que Control Importaciones: manda la fecha. ETA vencida sin Fecha de Llegada = ya está en puerto
   const est = String(r.estado || '').toUpperCase();
-  if (/PUERTO|GUARDADO|PREINGRES/.test(est) || (r.eta && r.eta <= hoy)) return 'puerto';
+  if (est === 'EN PUERTO' || (r.eta && r.eta <= hoy)) return 'puerto';
   return r.eta ? 'transito' : 'sinfecha';
 }
 
@@ -57,7 +58,7 @@ module.exports = async (req, res) => {
         };
       });
 
-    res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=300');
+    res.setHeader('Cache-Control', 'no-store'); // siempre datos frescos (antes el CDN de Vercel guardaba una copia)
     res.status(200).json({ ok: true, hoy, sync: imp.sync || '', conts });
   } catch (err) {
     console.error('Error en api/llegadas:', err);

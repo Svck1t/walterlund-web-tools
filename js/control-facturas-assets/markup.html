@@ -1,151 +1,142 @@
-<header>
-  <div class="header-inner">
-    <div class="brand">
-      <span class="wl">WL</span>
-      <span class="name">Control Facturas</span>
-    </div>
-    <nav>
-      <button class="tab-btn active" data-tab="ingresar">Ingresar</button>
-      <button class="tab-btn" data-tab="buscar">Buscar</button>
-      <button class="tab-btn" data-tab="dashboard">Dashboard</button>
-      <button class="tab-btn" data-tab="transporte">Transporte</button>
-    </nav>
-  </div>
-</header>
+<div class="cf-tabs">
+  <nav role="tablist" aria-label="Control de Despachos">
+    <button class="tab-btn active" data-tab="ingresar" role="tab">Ingresar</button>
+    <button class="tab-btn" data-tab="buscar" role="tab">Facturas</button>
+    <button class="tab-btn" data-tab="dashboard" role="tab">Dashboard</button>
+    <button class="tab-btn" data-tab="transporte" role="tab">Guía de transporte</button>
+  </nav>
+</div>
 
 <main>
 
   <!-- INGRESAR -->
   <section id="tab-ingresar" class="tab active">
-    <h1>Ingresar factura</h1>
-    <p class="sub">Día, mes y año se calculan solos a partir de la fecha.</p>
-
     <div class="ingresar-layout">
-      <div class="ingresar-form-col">
-        <form id="form-ingresar" class="card">
-          <label for="numero">N° Factura</label>
-          <input id="numero" type="text" inputmode="numeric" required placeholder="Ej: 548025" />
+      <form id="form-ingresar" class="card form-card">
+        <div class="card-head">
+          <h2>Nueva factura</h2>
+          <p class="sub">Día, mes y año se calculan solos a partir de la fecha.</p>
+        </div>
 
-          <label for="fecha">Fecha</label>
-          <input id="fecha" type="date" required />
+        <div class="row2">
+          <div class="field">
+            <label for="numero">N° Factura</label>
+            <input id="numero" type="text" inputmode="numeric" required placeholder="Ej: 548025" autocomplete="off" />
+          </div>
+          <div class="field">
+            <label for="fecha">Fecha</label>
+            <input id="fecha" type="date" required />
+          </div>
+        </div>
 
-          <label class="check-prioritario">
-            <input id="prioritario" type="checkbox" />
-            ⚠️ Marcar como Prioritario
-          </label>
+        <label class="check-prioritario">
+          <input id="prioritario" type="checkbox" />
+          <span class="cp-text"><b>Prioritario</b><small>Se destaca con * en el listado</small></span>
+        </label>
 
-          <label style="margin-top:12px;">Bodega <span style="font-weight:400; color:var(--ink-dim);">(vacío = Aldunate, la principal)</span></label>
+        <div class="grupo">
+          <div class="grupo-head"><span>Bodega</span><small>Si no marcas ninguna, queda en Aldunate</small></div>
           <div class="tags-grid" id="tags-ingresar-bodega">
             <label class="tag-check"><input type="checkbox" value="VIEL" /> Viel</label>
             <label class="tag-check"><input type="checkbox" value="SAN IGNACIO" /> San Ignacio</label>
             <label class="tag-check"><input type="checkbox" value="SAN FRANCISCO" /> San Francisco</label>
           </div>
+        </div>
 
-          <label style="margin-top:12px;">Proceso</label>
+        <div class="grupo">
+          <div class="grupo-head"><span>Proceso</span></div>
           <div class="tags-grid" id="tags-ingresar-proceso">
             <label class="tag-check"><input type="checkbox" value="CORTE" /> Corte</label>
             <label class="tag-check"><input type="checkbox" value="RETIRO" /> Retiro</label>
             <label class="tag-check"><input type="checkbox" value="TRANSPORTE" /> Transporte</label>
             <label class="tag-check"><input type="checkbox" value="VALPARAISO" /> Valparaíso</label>
           </div>
+        </div>
 
-          <label style="margin-top:12px;">Documento relacionado</label>
+        <div class="grupo">
+          <div class="grupo-head"><span>Documento relacionado</span></div>
           <div class="tags-grid" id="tags-ingresar-doc">
             <label class="tag-check"><input type="checkbox" value="GUIA" /> Guía</label>
             <label class="tag-check"><input type="checkbox" value="BOLETA" /> Boleta</label>
           </div>
-
-          <label for="observacion">Observación específica (opcional)</label>
-          <input id="observacion" type="text" placeholder="Ej: cliente pide vehículo con rampla..." />
-
-          <button id="btn-ingresar" class="primary" type="submit">Registrar factura</button>
-          <div id="msg-ingresar" class="msg"></div>
-        </form>
-      </div>
-
-      <div class="ingresar-recientes-col">
-        <div class="card">
-          <h2 style="font-size:14px; margin:0 0 4px;">Últimos movimientos</h2>
-          <p class="sub" style="margin-bottom:8px; font-size:12px;">Se actualiza solo cada 45s.</p>
-          <div id="recientes-content" class="loading" style="font-size:13px;">Cargando...</div>
         </div>
-      </div>
+
+        <div class="field">
+          <label for="observacion">Observación <span class="opt">(opcional)</span></label>
+          <input id="observacion" type="text" placeholder="Ej: cliente pide vehículo con rampla..." />
+        </div>
+
+        <button id="btn-ingresar" class="primary" type="submit">Registrar factura</button>
+        <div id="msg-ingresar" class="msg"></div>
+      </form>
+
+      <aside class="card recientes-card">
+        <div class="card-head">
+          <h2>Últimos movimientos</h2>
+          <p class="sub">Se actualiza solo cada 45 s</p>
+        </div>
+        <div id="recientes-content" class="loading">Cargando...</div>
+      </aside>
     </div>
   </section>
 
   <!-- BUSCAR + LISTADO -->
   <section id="tab-buscar" class="tab">
-    <h1>Facturas</h1>
-    <p class="sub">Filtra por fecha, número u observación, o revisa el listado completo.</p>
-
     <div class="filtros-bar">
-      <div class="campo">
+      <div class="campo campo-fecha">
         <label for="filtro-fecha">Fecha</label>
         <input id="filtro-fecha" type="date" />
       </div>
-      <div class="campo" style="flex: 2;">
-        <label for="filtro-texto">N° Factura / Observación</label>
+      <div class="campo campo-texto">
+        <label for="filtro-texto">N° factura u observación</label>
         <input id="filtro-texto" type="text" placeholder="Ej: 548025 o CORTE..." />
       </div>
-      <button id="btn-filtrar" type="button">Buscar</button>
-      <button id="btn-limpiar-filtro" class="limpiar" type="button">Limpiar</button>
-      <button id="btn-refrescar-listado" class="limpiar" type="button" title="Actualizar ahora">⟳ Actualizar</button>
+      <div class="filtros-btns">
+        <button id="btn-filtrar" type="button">Buscar</button>
+        <button id="btn-limpiar-filtro" class="limpiar" type="button">Limpiar</button>
+        <button id="btn-refrescar-listado" class="limpiar" type="button" title="Actualizar ahora">⟳ Actualizar</button>
+      </div>
     </div>
 
     <div class="tabla-wrap">
-      <div id="listado-content" class="loading" style="padding:16px;">Cargando...</div>
+      <div id="listado-content" class="loading">Cargando...</div>
     </div>
   </section>
 
   <!-- DASHBOARD -->
   <section id="tab-dashboard" class="tab">
-    <div style="display:flex; justify-content:space-between; align-items:flex-start;">
-      <div>
-        <h1>Dashboard</h1>
-        <p class="sub">Resumen general de facturas registradas.</p>
-      </div>
-      <button id="btn-refrescar-dashboard" class="limpiar" type="button" style="border:1px solid var(--panel-border); border-radius:6px; padding:8px 14px; cursor:pointer; background:var(--panel); color:var(--ink-dim); font-family:inherit;">⟳ Actualizar</button>
+    <div class="tab-head">
+      <p class="sub">Resumen general de facturas registradas.</p>
+      <button id="btn-refrescar-dashboard" class="btn-sec" type="button">⟳ Actualizar</button>
     </div>
     <div id="dashboard-content" class="loading">Cargando...</div>
   </section>
 
   <!-- TRANSPORTE -->
   <section id="tab-transporte" class="tab">
-    <h1>Guía de envío por transporte</h1>
-    <p class="sub">Completa los datos y luego imprime. La información se rellena a mano, no se guarda en la planilla.</p>
+    <p class="sub">Completa los datos y luego imprime. La información no se guarda en la planilla.</p>
 
     <div class="transporte-layout">
       <div class="transporte-form-col">
-        <form id="form-transporte" class="card" onsubmit="return false;">
-          <label for="t-fecha">Fecha</label>
-          <input id="t-fecha" type="date" />
+        <form id="form-transporte" class="card form-card" onsubmit="return false;">
+          <div class="row2">
+            <div class="field"><label for="t-fecha">Fecha</label><input id="t-fecha" type="date" /></div>
+            <div class="field"><label for="t-factura">N° de Factura</label><input id="t-factura" type="text" inputmode="numeric" placeholder="Ej: 550757" /></div>
+          </div>
+          <div class="field"><label for="t-nombre">Nombre</label><input id="t-nombre" type="text" placeholder="Nombre del cliente" /></div>
+          <div class="row2">
+            <div class="field"><label for="t-rut">Rut</label><input id="t-rut" type="text" placeholder="Ej: 13.131.543-0" /></div>
+            <div class="field"><label for="t-fono">Fono</label><input id="t-fono" type="text" placeholder="Ej: 951389250" /></div>
+          </div>
+          <div class="field"><label for="t-direccion">Dirección</label><input id="t-direccion" type="text" placeholder="Ej: RETIRA EN OFICINA" /></div>
+          <div class="row2">
+            <div class="field"><label for="t-ciudad">Ciudad</label><input id="t-ciudad" type="text" placeholder="Ej: Los Ángeles" /></div>
+            <div class="field"><label for="t-transporte">Transporte</label><input id="t-transporte" type="text" placeholder="Ej: Cruz del Sur" /></div>
+          </div>
+          <div class="field"><label for="t-paquetes">N° Paquetes</label><input id="t-paquetes" type="text" placeholder="Ej: 2" /></div>
 
-          <label for="t-factura">N° de Factura</label>
-          <input id="t-factura" type="text" inputmode="numeric" placeholder="Ej: 550757" />
-
-          <label for="t-nombre">Nombre</label>
-          <input id="t-nombre" type="text" placeholder="Nombre del cliente" />
-
-          <label for="t-rut">Rut</label>
-          <input id="t-rut" type="text" placeholder="Ej: 13.131.543-0" />
-
-          <label for="t-direccion">Dirección</label>
-          <input id="t-direccion" type="text" placeholder="Ej: RETIRA EN OFICINA" />
-
-          <label for="t-ciudad">Ciudad</label>
-          <input id="t-ciudad" type="text" placeholder="Ej: Los Ángeles" />
-
-          <label for="t-fono">Fono</label>
-          <input id="t-fono" type="text" placeholder="Ej: 951389250" />
-
-          <label for="t-transporte">Transporte</label>
-          <input id="t-transporte" type="text" placeholder="Ej: Cruz del Sur" />
-
-          <label for="t-paquetes">N° Paquetes</label>
-          <input id="t-paquetes" type="text" placeholder="Ej: 2" />
-
-          <button id="btn-imprimir-transporte" class="primary" type="button" style="margin-top:16px;">🖨️ Imprimir guía</button>
-          <button id="btn-limpiar-transporte" class="limpiar" type="button" style="margin-top:8px; width:100%; padding:11px; border:1px solid var(--panel-border); border-radius:6px; background:var(--panel); color:var(--ink-dim); cursor:pointer; font-family:inherit;">Limpiar formulario</button>
+          <button id="btn-imprimir-transporte" class="primary" type="button">🖨️ Imprimir guía</button>
+          <button id="btn-limpiar-transporte" class="btn-sec btn-block" type="button">Limpiar formulario</button>
         </form>
       </div>
 
@@ -182,16 +173,16 @@
 
 <!-- MODAL EDITAR -->
 <div id="modal-overlay" class="modal-overlay">
-  <div class="modal-box">
-    <h2>Editar factura</h2>
+  <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="modal-titulo">
+    <h2 id="modal-titulo">Editar factura</h2>
     <p class="sub">N° <span id="modal-numero"></span></p>
     <form id="form-editar">
       <div class="row2">
-        <div>
+        <div class="field">
           <label for="modal-fecha">Fecha</label>
           <input id="modal-fecha" type="date" required />
         </div>
-        <div>
+        <div class="field">
           <label for="modal-hora">Hora</label>
           <input id="modal-hora" type="time" />
         </div>
@@ -199,39 +190,47 @@
 
       <label class="check-prioritario">
         <input id="modal-prioritario" type="checkbox" />
-        ⚠️ Marcar como Prioritario
+        <span class="cp-text"><b>Prioritario</b><small>Se destaca con * en el listado</small></span>
       </label>
 
-      <label>Bodega <span style="font-weight:400; color:var(--ink-dim);">(vacío = Aldunate)</span></label>
-      <div class="tags-grid" id="tags-modal-bodega">
-        <label class="tag-check"><input type="checkbox" value="VIEL" /> Viel</label>
-        <label class="tag-check"><input type="checkbox" value="SAN IGNACIO" /> San Ignacio</label>
-        <label class="tag-check"><input type="checkbox" value="SAN FRANCISCO" /> San Francisco</label>
+      <div class="grupo">
+        <div class="grupo-head"><span>Bodega</span><small>Si no marcas ninguna, queda en Aldunate</small></div>
+        <div class="tags-grid" id="tags-modal-bodega">
+          <label class="tag-check"><input type="checkbox" value="VIEL" /> Viel</label>
+          <label class="tag-check"><input type="checkbox" value="SAN IGNACIO" /> San Ignacio</label>
+          <label class="tag-check"><input type="checkbox" value="SAN FRANCISCO" /> San Francisco</label>
+        </div>
       </div>
 
-      <label>Proceso</label>
-      <div class="tags-grid" id="tags-modal-proceso">
-        <label class="tag-check"><input type="checkbox" value="CORTE" /> Corte</label>
-        <label class="tag-check"><input type="checkbox" value="RETIRO" /> Retiro</label>
-        <label class="tag-check"><input type="checkbox" value="TRANSPORTE" /> Transporte</label>
-        <label class="tag-check"><input type="checkbox" value="VALPARAISO" /> Valparaíso</label>
+      <div class="grupo">
+        <div class="grupo-head"><span>Proceso</span></div>
+        <div class="tags-grid" id="tags-modal-proceso">
+          <label class="tag-check"><input type="checkbox" value="CORTE" /> Corte</label>
+          <label class="tag-check"><input type="checkbox" value="RETIRO" /> Retiro</label>
+          <label class="tag-check"><input type="checkbox" value="TRANSPORTE" /> Transporte</label>
+          <label class="tag-check"><input type="checkbox" value="VALPARAISO" /> Valparaíso</label>
+        </div>
       </div>
 
-      <label>Documento relacionado</label>
-      <div class="tags-grid" id="tags-modal-doc">
-        <label class="tag-check"><input type="checkbox" value="GUIA" /> Guía</label>
-        <label class="tag-check"><input type="checkbox" value="BOLETA" /> Boleta</label>
+      <div class="grupo">
+        <div class="grupo-head"><span>Documento relacionado</span></div>
+        <div class="tags-grid" id="tags-modal-doc">
+          <label class="tag-check"><input type="checkbox" value="GUIA" /> Guía</label>
+          <label class="tag-check"><input type="checkbox" value="BOLETA" /> Boleta</label>
+        </div>
       </div>
 
       <div class="seccion-nc" id="seccion-nc">
-        <label style="margin-top:0;">Nota de Crédito</label>
-        <select id="modal-nc">
-          <option value="">Sin Nota de Crédito</option>
-          <option value="Completa">Nota de Crédito Total</option>
-          <option value="Parcial">Nota de Crédito Parcial</option>
-        </select>
+        <div class="field">
+          <label for="modal-nc">Nota de Crédito</label>
+          <select id="modal-nc">
+            <option value="">Sin Nota de Crédito</option>
+            <option value="Completa">Nota de Crédito Total</option>
+            <option value="Parcial">Nota de Crédito Parcial</option>
+          </select>
+        </div>
 
-        <div id="modal-nc-motivo-wrap" style="display:none;">
+        <div id="modal-nc-motivo-wrap" class="field" style="display:none;">
           <label for="modal-nc-motivo">Motivo (obligatorio)</label>
           <select id="modal-nc-motivo">
             <option value="">Selecciona un motivo...</option>
@@ -250,8 +249,10 @@
         </div>
       </div>
 
-      <label for="modal-observacion">Observación específica (opcional)</label>
-      <input id="modal-observacion" type="text" />
+      <div class="field">
+        <label for="modal-observacion">Observación <span class="opt">(opcional)</span></label>
+        <input id="modal-observacion" type="text" />
+      </div>
 
       <div id="modal-msg" class="msg"></div>
 

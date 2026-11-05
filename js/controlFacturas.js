@@ -73,8 +73,8 @@ const ControlFacturasSection = (() => {
     return `
       <div class="section-header">
         <div>
-          <h1>Control de Facturas</h1>
-          <p>Registro y consulta de facturas.</p>
+          <h1>Control de Despachos</h1>
+          <p>Registro y seguimiento de facturas por bodega, proceso y documento.</p>
         </div>
       </div>
       <div id="controlFacturasMount"></div>

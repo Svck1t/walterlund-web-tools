@@ -1,5 +1,5 @@
 // =====================================================
-// SECCIÓN: PRÓXIMAS LLEGADAS — v1 (área comercial, solo lectura)
+// SECCIÓN: PRÓXIMAS LLEGADAS — v1.1 (área comercial, solo lectura)
 // Fuente: /api/llegadas (Importaciones pendientes + Packing Lists, sin costos ni GE)
 // Se usa dentro de web tools (LlegadasSection.render(content)) y en el link aparte llegadas.html
 // =====================================================
@@ -52,7 +52,7 @@ const LlegadasSection = (() => {
       if (!d.ok) throw new Error(d.error || 'Respuesta inválida');
       data = d;
       data.conts.sort(ordenC);
-      meta.textContent = `Actualizado ${d.sync || new Date().toLocaleString('es-CL')} · fechas sujetas a cambio`;
+      meta.textContent = `${d.sync || 'Actualizado ' + new Date().toLocaleString('es-CL')} · fechas sujetas a cambio`;
       dibujar();
     } catch (err) {
       console.error('Próximas llegadas:', err);

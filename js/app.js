@@ -50,6 +50,7 @@ document.addEventListener('DOMContentLoaded', () => {
     'cola-contenedores': 'Control Importaciones',
     llegadas: 'Próximas llegadas',
     'control-facturas': 'Control de Despachos',
+    parciales: 'Despachos Parciales',
     traslados: 'Control de Traslados',
     compras: 'Compras Nacionales',
     stock: 'Stock',
@@ -102,6 +103,9 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'bodega':
         content.innerHTML = '<iframe src="bodega/index.html" title="Bodega y Logística WL" style="display:block;width:100%;height:calc(100vh - 120px);min-height:520px;border:0;border-radius:10px;background:#fff"></iframe>';
+        break;
+      case 'parciales':
+        ParcialesSection.render(content);
         break;
       case 'control-facturas':
         ControlFacturasSection.render(content);

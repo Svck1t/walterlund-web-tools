@@ -29,6 +29,7 @@ document.addEventListener('DOMContentLoaded', () => {
     users: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7"/><path d="M18 14.5a6.5 6.5 0 0 1 3.5 5.5"/>',
     cart: '<circle cx="9" cy="20" r="1.5"/><circle cx="18" cy="20" r="1.5"/><path d="M2 3h3l2.7 12.4a1 1 0 0 0 1 .8h9.6a1 1 0 0 0 1-.8L21 7H6"/>',
     ship: '<path d="M3 15l1.5 4.5a1 1 0 0 0 1 .5h13a1 1 0 0 0 1-.5L21 15H3z"/><path d="M5 15V9h14v6"/><path d="M9 9V5h6v4"/><path d="M12 2v3"/>',
+    'receipt-x': '<path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1Z"/><path d="m9.5 9.5 5 5"/><path d="m14.5 9.5-5 5"/>',
     chevron: '<path d="m6 9 6 6 6-6"/>'
   };
   document.querySelectorAll('[data-icon]').forEach(el => {
@@ -51,6 +52,7 @@ document.addEventListener('DOMContentLoaded', () => {
     llegadas: 'Próximas llegadas',
     'control-facturas': 'Control de Despachos',
     parciales: 'Despachos Parciales',
+    'notas-credito': 'Notas de Crédito',
     traslados: 'Control de Traslados',
     compras: 'Compras Nacionales',
     stock: 'Stock',
@@ -103,6 +105,9 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'bodega':
         content.innerHTML = '<iframe src="bodega/index.html" title="Bodega y Logística WL" style="display:block;width:100%;height:calc(100vh - 120px);min-height:520px;border:0;border-radius:10px;background:#fff"></iframe>';
+        break;
+      case 'notas-credito':
+        NotasCreditoSection.render(content);
         break;
       case 'parciales':
         ParcialesSection.render(content);

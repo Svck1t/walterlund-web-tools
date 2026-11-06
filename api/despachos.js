@@ -41,5 +41,8 @@ module.exports = async (req, res) => {
   }
 };
 
+// La usa también api/telegram.js
+module.exports.APPS_SCRIPT_URL = APPS_SCRIPT_URL;
+
 // Fotos y PDF se suben como base64 dentro del JSON (las fotos se comprimen en el navegador)
 module.exports.config = { api: { bodyParser: { sizeLimit: '4mb' } } };

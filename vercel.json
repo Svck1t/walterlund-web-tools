@@ -60,5 +60,10 @@
       "source": "/llegadas",
       "destination": "/llegadas.html"
     }
-  ]
+  ],
+  "functions": {
+    "api/telegram.js": {
+      "maxDuration": 60
+    }
+  }
 }

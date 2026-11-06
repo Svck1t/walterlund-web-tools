@@ -7,7 +7,7 @@
 // =====================================================
 
 const ParcialesSection = (() => {
-  const API = '/api/parciales';
+  const API = '/api/despachos';
   const STOCK_URL = '/api/stock-live';
   const BODEGAS = ['ALDUNATE', 'VIEL', 'SAN IGNACIO', 'SAN FRANCISCO', 'STGO CONCHA'];
   const MOTIVOS = ['Sin stock', 'En corte / producción', 'Esperando contenedor', 'Cliente pidió por partes', 'Falta transporte', 'Otro'];

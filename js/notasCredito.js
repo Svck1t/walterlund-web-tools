@@ -1,5 +1,5 @@
 // =====================================================
-// SECCIÓN: NOTAS DE CRÉDITO — v1
+// SECCIÓN: NOTAS DE CRÉDITO — v2 (+ bot de Telegram: pestaña Telegram con mensajes sin asignar)
 // Reemplaza el grupo de Telegram: solicitud → devolución en bodega → NC emitida (timbrada),
 // con respaldos en Drive (solicitud, foto de bodega, PDF timbrado) e historial de quién hizo qué.
 // Cruza con Control de Despachos (factura registrada / N/C marcada).
@@ -23,8 +23,8 @@ const NotasCreditoSection = (() => {
   const MAX_ARCHIVO = 3 * 1024 * 1024;
   const KEY_QUIEN = 'wl_nc_quien';
 
-  let notas = [], hoy = '', cargado = false, errorCarga = '', root = null;
-  const st = { tab: 'bandeja', filtro: 'emitir', bod: '', q: '', sel: null, periodo: 'mes' };
+  let notas = [], tgs = [], hoy = '', cargado = false, errorCarga = '', root = null;
+  const st = { tab: 'bandeja', filtro: 'emitir', bod: '', q: '', sel: null, periodo: 'mes', tgFiltro: 'SIN_ASIGNAR' };
   let cf = null, cfEstado = 'sin cargar'; // Control de Despachos: Map numero -> registro
   let dlg = null;
 
@@ -54,7 +54,7 @@ const NotasCreditoSection = (() => {
       const r = await fetch(`${API}?m=nc`, { cache: 'no-store' });
       const d = await r.json();
       if (!d.ok) throw new Error(d.error || 'Respuesta inválida');
-      notas = d.notas; hoy = d.hoy || hoyLocal(); cargado = true; errorCarga = '';
+      notas = d.notas; tgs = d.tg || []; hoy = d.hoy || hoyLocal(); cargado = true; errorCarga = '';
     } catch (err) { console.error('NC:', err); errorCarga = err.message; hoy = hoy || hoyLocal(); }
     dibujar();
   }
@@ -95,7 +95,7 @@ const NotasCreditoSection = (() => {
       </div>
       <datalist id="nc-nombres"></datalist>
       <div class="nc-kpis" id="nc-kpis"></div>
-      <div class="nc-tabs"><button data-tab="bandeja">Bandeja</button><button data-tab="resumen">Resumen</button></div>
+      <div class="nc-tabs"><button data-tab="bandeja">Bandeja</button><button data-tab="telegram">Telegram <span class="nc-badge" id="nc-tgn"></span></button><button data-tab="resumen">Resumen</button></div>
       <div id="nc-bandeja">
         <div class="nc-wrap">
           <aside class="nc-list">
@@ -110,6 +110,7 @@ const NotasCreditoSection = (() => {
         </div>
       </div>
       <div id="nc-resumen" hidden></div>
+      <div id="nc-telegram" hidden></div>
     </div>`;
     const $ = s => root.querySelector(s);
     $('#nc-quien').addEventListener('change', e => setQuien(e.target.value.trim()));
@@ -123,6 +124,7 @@ const NotasCreditoSection = (() => {
     $('#nc-items').addEventListener('click', e => { const t = e.target.closest('[data-id]'); if (t) { st.sel = t.dataset.id; $('.nc-wrap').classList.add('nc-show'); dibujarLista(); dibujarDetalle(); } });
     $('#nc-detail').addEventListener('click', accion);
     $('#nc-detail').addEventListener('change', adjuntarSuelto);
+    $('#nc-telegram').addEventListener('click', accionTg);
     $('#nc-resumen').addEventListener('click', e => {
       const p = e.target.closest('[data-per]'); if (p) { st.periodo = p.dataset.per; dibujarResumen(); }
       const c = e.target.closest('[data-crear]'); if (c) abrirForm(null, c.dataset.crear);
@@ -153,6 +155,9 @@ const NotasCreditoSection = (() => {
     root.querySelectorAll('.nc-tabs [data-tab]').forEach(b => b.classList.toggle('on', b.dataset.tab === st.tab));
     root.querySelector('#nc-bandeja').hidden = st.tab !== 'bandeja';
     root.querySelector('#nc-resumen').hidden = st.tab !== 'resumen';
+    root.querySelector('#nc-telegram').hidden = st.tab !== 'telegram';
+    const sinAsig = tgs.filter(t => t.estado === 'SIN_ASIGNAR').length;
+    root.querySelector('#nc-tgn').textContent = sinAsig || '';
     root.querySelector('#nc-nombres').innerHTML = nombres().map(n => `<option value="${esc(n)}">`).join('');
     const mes = (hoy || hoyLocal()).slice(0, 7);
     const pend = notas.filter(n => POR_EMITIR.includes(n.estado));
@@ -167,7 +172,7 @@ const NotasCreditoSection = (() => {
     ].map(([l, v, s, c]) => `<div class="nc-kpi ${c}"><span>${l}</span><strong>${v}</strong>${s ? `<small>${s}</small>` : ''}</div>`).join('');
     const cnt = k => notas.filter(n => k === 'emitir' ? POR_EMITIR.includes(n.estado) : k === 'todas' ? true : n.estado === k).length;
     root.querySelector('#nc-chips').innerHTML = FILTROS.map(([k, l]) => `<button class="nc-chip${st.filtro === k ? ' on' : ''}" data-f="${k}">${l} <b>${cnt(k)}</b></button>`).join('');
-    if (st.tab === 'bandeja') { dibujarLista(); dibujarDetalle(); } else dibujarResumen();
+    if (st.tab === 'bandeja') { dibujarLista(); dibujarDetalle(); } else if (st.tab === 'telegram') dibujarTelegram(); else dibujarResumen();
   }
 
   function dibujarLista() {
@@ -481,6 +486,50 @@ const NotasCreditoSection = (() => {
       </div>`;
   }
 
+  // ============ TELEGRAM (mensajes que llegaron del bot) ============
+  const COMO = { bodega: 'Registrada en bodega', solicitud: 'Solicitud', emitida: 'Emitida (PDF timbrado)', comentario: 'Comentario' };
+  function dibujarTelegram() {
+    const el = root && root.querySelector('#nc-telegram'); if (!el) return;
+    const sinAsig = tgs.filter(t => t.estado === 'SIN_ASIGNAR');
+    const lista = st.tgFiltro === 'SIN_ASIGNAR' ? sinAsig : tgs;
+    const porId = new Map(notas.map(n => [n.id, n]));
+    el.innerHTML = `
+      <div class="nc-per">${[['SIN_ASIGNAR', `Sin asignar`, sinAsig.length], ['todos', 'Todos los mensajes', null]].map(([k, l, c]) => `<button class="nc-chip${st.tgFiltro === k ? ' on' : ''}" data-tgf="${k}">${l}${c !== null ? ` <b>${c}</b>` : ''}</button>`).join('')}
+        <span class="nc-dim">El bot lee el grupo de NC sin escribir nada. Lo que no logra vincular a un documento queda aquí.</span></div>
+      ${!tgs.length ? '<div class="nc-card nc-empty">Aún no llegan mensajes del bot. Revisa que esté en el grupo y que el webhook esté activo.</div>'
+        : !lista.length ? '<div class="nc-card nc-empty">Nada pendiente ✓</div>'
+        : `<div class="nc-tglist">${lista.map(t => {
+          const n = porId.get(t.ncId);
+          const ico = t.archivoTipo === 'foto' ? '📷' : t.archivoTipo === 'pdf' ? '📄' : t.archivoTipo ? '📎' : '💬';
+          const defComo = t.archivoTipo === 'foto' ? 'bodega' : t.archivoTipo === 'pdf' ? 'solicitud' : 'comentario';
+          return `<div class="nc-card nc-tg ${t.estado === 'SIN_ASIGNAR' ? 'pend' : ''}">
+            <div class="nc-tg-head"><b>${ico} ${esc(t.autor || '—')}</b><span>${fCorta(t.fecha)} ${esc(t.hora)}</span></div>
+            ${t.texto ? `<p class="nc-tg-txt">${esc(t.texto)}</p>` : ''}
+            <div class="nc-tg-foot">
+              ${t.archivo ? `<a class="nc-b nc-sm" href="${esc(t.archivo)}" target="_blank" rel="noopener">Ver archivo</a>` : ''}
+              ${t.estado === 'ASIGNADO' ? `<button class="nc-b nc-sm" data-ver="${esc(t.ncId)}">${n ? esc(docCorto(n)) : esc((t.docTipo === 'Boleta' ? 'B ' : 'F ') + t.docNum)} →</button><span class="nc-dim">${esc(String(t.accion).replace(/^(\w+)/, x => COMO[x] || x))}</span>` : ''}
+              ${t.estado === 'IGNORADO' ? '<span class="nc-dim">Conversación / ignorado</span>' : ''}
+              ${t.estado === 'SIN_ASIGNAR' ? `<span class="nc-asig" data-msg="${esc(t.msgId)}">
+                <select class="nc-in" data-k="tipo"><option>Factura</option><option>Boleta</option></select>
+                <input class="nc-in" data-k="num" inputmode="numeric" placeholder="N°">
+                <select class="nc-in" data-k="como">${Object.entries(COMO).map(([k, l]) => `<option value="${k}"${k === defComo ? ' selected' : ''}>${l}</option>`).join('')}</select>
+                <button class="nc-b nc-sm nc-pri" data-asignar>Asignar</button><button class="nc-b nc-sm" data-ignorar>Ignorar</button></span>` : ''}
+            </div></div>`;
+        }).join('')}</div>`}`;
+  }
+  async function accionTg(e) {
+    const f = e.target.closest('[data-tgf]'); if (f) { st.tgFiltro = f.dataset.tgf; dibujarTelegram(); return; }
+    const ver = e.target.closest('[data-ver]');
+    if (ver) { st.tab = 'bandeja'; st.filtro = 'todas'; st.q = ''; st.sel = ver.dataset.ver; const q = root.querySelector('#nc-q'); if (q) q.value = ''; dibujar(); return; }
+    const box = e.target.closest('[data-msg]'); if (!box) return;
+    if (e.target.closest('[data-ignorar]')) return ejecutar({ action: 'tg_ignorar', msgId: box.dataset.msg }, 'Mensaje ignorado');
+    if (e.target.closest('[data-asignar]')) {
+      const g = k => box.querySelector(`[data-k="${k}"]`).value.trim();
+      if (!g('num')) { toast('Escribe el N° de documento', true); return; }
+      return ejecutar({ action: 'tg_asignar', msgId: box.dataset.msg, docTipo: g('tipo'), docNum: g('num'), como: g('como') }, 'Mensaje asignado');
+    }
+  }
+
   // ============ IMPORTAR HISTORIAL DE TELEGRAM ============
   // Lee la hoja "Resumen por factura" del Excel exportado del grupo y, si se eligen, sube las fotos (F_<n°>_msg<id>.jpg)
   function abrirImport() {
@@ -591,6 +640,15 @@ const NotasCreditoSection = (() => {
       .nc-tabs{display:inline-flex;gap:2px;padding:4px;background:#fff;border:1px solid #e1e5ea;border-radius:10px;margin-bottom:14px}
       .nc-tabs button{border:0;background:none;padding:8px 16px;border-radius:7px;font:inherit;font-size:14px;font-weight:600;color:#5b6b7a;cursor:pointer}
       .nc-tabs button.on{background:#1565c0;color:#fff}
+      .nc-badge{display:inline-block;min-width:18px;border-radius:999px;background:#ea580c;color:#fff;font-size:11px;padding:0 5px;margin-left:2px}
+      .nc-badge:empty{display:none}
+      .nc-tglist{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:12px}
+      .nc-tg{margin:0;padding:14px}.nc-tg.pend{border-left:4px solid #ea580c}
+      .nc-tg-head{display:flex;justify-content:space-between;gap:8px;font-size:14px}.nc-tg-head span{color:#5b6b7a;font-size:12px}
+      .nc-tg-txt{margin:8px 0 0;font-size:13px;color:#374151;white-space:pre-wrap}
+      .nc-tg-foot{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:10px;font-size:12px}
+      .nc-asig{display:flex;flex-wrap:wrap;gap:6px;width:100%}
+      .nc-asig .nc-in{width:auto;padding:6px 8px;font-size:13px}.nc-asig [data-k=num]{width:100px}
       .nc-wrap{display:grid;grid-template-columns:350px minmax(0,1fr);gap:18px;align-items:start}
       .nc-list{background:#fff;border:1px solid #e1e5ea;border-radius:10px;display:flex;flex-direction:column;max-height:calc(100vh - 300px);min-height:420px;position:sticky;top:12px;overflow:hidden}
       .nc-list-head{padding:12px;border-bottom:1px solid #eef0f3}

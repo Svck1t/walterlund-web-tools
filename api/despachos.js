@@ -7,7 +7,7 @@
 //   GET  /api/despachos?m=nc    -> notas de crédito
 //   POST /api/despachos         -> { action, ... } (la acción decide el módulo)
 
-const APPS_SCRIPT_URL = 'PEGAR_AQUI_URL_DEL_WEB_APP'; // termina en /exec
+const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbyQNbwJAgl_wY5O5lh1jp7ouTvjyFlq4MLNPwbV0F-UXCRbuNSR3cHDj4mqfrRdMREPdQ/exec'; // termina en /exec
 
 module.exports = async (req, res) => {
   try {

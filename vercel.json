@@ -64,6 +64,9 @@
   "functions": {
     "api/telegram.js": {
       "maxDuration": 60
+    },
+    "api/despachos.js": {
+      "maxDuration": 60
     }
   }
 }

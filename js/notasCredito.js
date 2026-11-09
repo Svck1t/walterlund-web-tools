@@ -1,5 +1,5 @@
 // =====================================================
-// SECCIÓN: NOTAS DE CRÉDITO — v2 (+ bot de Telegram: pestaña Telegram con mensajes sin asignar)
+// SECCIÓN: NOTAS DE CRÉDITO — v3 (+ bot de Telegram + datos leídos de la factura con Gemini)
 // Reemplaza el grupo de Telegram: solicitud → devolución en bodega → NC emitida (timbrada),
 // con respaldos en Drive (solicitud, foto de bodega, PDF timbrado) e historial de quién hizo qué.
 // Cruza con Control de Despachos (factura registrada / N/C marcada).
@@ -46,6 +46,9 @@ const NotasCreditoSection = (() => {
   const diasDesde = iso => iso ? dia(hoy || hoyLocal()) - dia(iso) : null;
   // Bodega de Control de Despachos ("" = Aldunate, "SAN FRANCISCO", "VIEL, SAN IGNACIO"…) -> nombre de esta sección
   const bodegaDeCF = b => { const u = txt(String(b || '').split(',')[0]); return !u ? 'Aldunate' : u.includes('FRANCISCO') ? 'SF 918' : u.includes('VIEL') ? 'Viel' : u.includes('IGNACIO') ? 'San Ignacio' : u.includes('CONCHA') ? 'Stgo Concha' : ''; };
+  const lec = s => { try { return s ? JSON.parse(s) : null; } catch (e) { return null; } };
+  const urlDoc = n => n.fotoUrl || n.solicitudUrl || '';
+  const lecturaPendiente = n => { const d = lec(n.lecturaDoc), c = lec(n.lecturaNc); return (urlDoc(n) && (!d || d.url !== urlDoc(n))) || (n.ncUrl && (!c || c.url !== n.ncUrl)); };
   const nombres = () => [...new Set(notas.flatMap(n => [n.solicitadoPor, n.registradoPor, n.emitidoPor]).filter(Boolean))].sort();
 
   // ============ CARGA ============
@@ -143,7 +146,8 @@ const NotasCreditoSection = (() => {
     const q = txt(st.q.trim());
     return notas.filter(pasaFiltro)
       .filter(n => !st.bod || n.bodega === st.bod)
-      .filter(n => !q || txt([n.docNum, n.cliente, n.folioNc, n.motivo, n.solicitadoPor, n.facturaSustituta, n.obs].join(' ')).includes(q))
+      .filter(n => { if (!q) return true; const d = lec(n.lecturaDoc) || {};
+        return txt([n.docNum, n.cliente, n.folioNc, n.motivo, n.solicitadoPor, n.facturaSustituta, n.obs, d.rut, d.vendedor, ...(d.productos || []).map(p => p.codigo + ' ' + p.descripcion)].join(' ')).includes(q); })
       .sort((a, b) => POR_EMITIR.includes(a.estado) && POR_EMITIR.includes(b.estado)
         ? String(a.fechaSolicitud).localeCompare(String(b.fechaSolicitud))           // por emitir: lo más antiguo primero
         : String(b.fechaEmision || b.fechaSolicitud).localeCompare(String(a.fechaEmision || a.fechaSolicitud)));
@@ -244,6 +248,7 @@ const NotasCreditoSection = (() => {
         ${n.anulacion ? `<div class="nc-note anu">Anulada: ${esc(n.anulacion)}</div>` : ''}
         ${n.obs ? `<div class="nc-note">${esc(n.obs)}</div>` : ''}
       </div>
+      ${datosLeidos(n)}
       <div class="nc-card"><h3 class="nc-h3">Respaldos</h3>
         <div class="nc-files">${arch('solicitudUrl', 'Solicitud', '📝')}${arch('fotoUrl', 'Foto bodega', '📷')}${arch('ncUrl', 'NC timbrada', '🧾')}</div>
       </div>
@@ -262,6 +267,8 @@ const NotasCreditoSection = (() => {
     if (e.target.closest('[data-back]')) { root.querySelector('.nc-wrap').classList.remove('nc-show'); return; }
     const n = notas.find(x => x.id === st.sel); if (!n) return;
     if (e.target.closest('[data-edit]')) return abrirForm(n);
+    const lb = e.target.closest('[data-leer]');
+    if (lb) { lb.disabled = true; lb.textContent = 'Leyendo… (10–30 s)'; return ejecutar({ action: 'nc_leer', id: n.id, forzar: lb.dataset.leer === 'forzar' }, 'Factura leída'); }
     if (e.target.closest('[data-bodega]')) return abrirPaso(n, 'bodega');
     if (e.target.closest('[data-emitir]')) return abrirPaso(n, 'emitir');
     if (e.target.closest('[data-anular]')) {
@@ -451,6 +458,37 @@ const NotasCreditoSection = (() => {
     }
   }
 
+  // ============ DATOS LEÍDOS DE LA FACTURA (Gemini) ============
+  function datosLeidos(n) {
+    const d = lec(n.lecturaDoc), c = lec(n.lecturaNc);
+    if (!urlDoc(n) && !n.ncUrl) return '';
+    const pend = lecturaPendiente(n);
+    const btn = `<button class="nc-b nc-sm" data-leer="${pend ? '' : 'forzar'}">${pend ? '🔎 Leer ahora' : '↻ Volver a leer'}</button>`;
+    if (!d && !c) return `<div class="nc-card"><div class="nc-h3row"><h3 class="nc-h3">Datos de la factura</h3>${btn}</div>
+      <p class="nc-dim" style="margin:0">En cola: el lector revisa cada 10 minutos las fotos y PDF nuevos.</p></div>`;
+    const m = v => v === null || v === undefined || v === '' || Number(v) === 0 ? '' : plata(v);
+    const dato = (l, v) => v ? `<div><span>${l}</span><b>${esc(v)}</b></div>` : '';
+    let html = '';
+    if (d && d.error) html += `<p class="nc-err" style="margin:0 0 8px">No se pudo leer la factura: ${esc(d.error)}</p>`;
+    else if (d) {
+      const nc = d.nc || {};
+      const otroN = d.numero && String(d.numero).replace(/\D/g, '') !== String(n.docNum);
+      html += `${otroN ? `<div class="nc-note anu" style="margin:0 0 10px">⚠ El documento dice N° <b>${esc(d.numero)}</b> y la NC está como ${esc(n.docNum)}. Revisa cuál es el correcto.</div>` : ''}
+        <div class="nc-facts">${dato('Cliente', d.cliente)}${dato('RUT', d.rut)}${dato('Vendedor', d.vendedor)}${dato('Bodega', d.bodega)}${dato('Fecha', d.fecha && fCorta(d.fecha))}${dato('Entrega', d.tipoEntrega)}${dato('Orden de compra', d.ordenCompra)}${dato('Digitado por', d.digitador)}</div>
+        ${(d.productos || []).length ? `<div class="nc-tw nc-mt"><table class="nc-t"><thead><tr><th>Código</th><th>Producto</th><th class="num">Cant.</th><th>Un.</th><th class="num">Precio unit.</th><th class="num">Total</th></tr></thead>
+          <tbody>${d.productos.map(p => `<tr><td><b>${esc(p.codigo || '—')}</b></td><td>${esc(p.descripcion)}</td><td class="num">${nf(p.cantidad)}</td><td>${esc(p.unidad || '')}</td><td class="num">${m(p.precioUnitario)}</td><td class="num">${m(p.total)}</td></tr>`).join('')}</tbody>
+          <tfoot>${[['Neto', d.neto], ['IVA', d.iva], ['Total', d.total]].filter(x => Number(x[1]) > 0).map(([l, v]) => `<tr><td colspan="5" class="num">${l}</td><td class="num"><b>${plata(v)}</b></td></tr>`).join('')}</tfoot></table></div>` : ''}
+        ${nc.marcada || nc.motivoManuscrito ? `<div class="nc-note nc-mt">🖊 Timbre NC: <b>${esc(nc.marcada ? (/parcial/i.test(nc.marcada) ? 'Parcial' : 'Completa') : '—')}</b>${nc.motivoManuscrito ? ` · motivo escrito: <i>"${esc(nc.motivoManuscrito)}"</i>` : ''}${nc.revisadoPor ? ` · revisó ${esc(nc.revisadoPor)}` : ''}</div>` : ''}`;
+    }
+    if (c && !c.error) {
+      const ncd = c.nc || {};
+      html += `<div class="nc-note nc-mt">🧾 NC timbrada: folio <b>${esc(ncd.folioNc || (c.tipo === 'nota_credito' ? c.numero : '') || '—')}</b>${(ncd.montoNc || c.total) ? ` · ${plata(ncd.montoNc || c.total)}` : ''}${ncd.documentoReferencia ? ` · referencia F ${esc(ncd.documentoReferencia)}` : ''}</div>`;
+    } else if (c && c.error) html += `<p class="nc-err">No se pudo leer la NC timbrada: ${esc(c.error)}</p>`;
+    const ref = d && !d.error ? d : c;
+    return `<div class="nc-card"><div class="nc-h3row"><h3 class="nc-h3">Datos de la factura <span class="nc-dim">· leído automáticamente${ref && ref.confianza ? ', confianza ' + esc(ref.confianza) : ''}</span></h3>${btn}</div>${html}
+      <p class="nc-hint">Los datos leídos completan los campos vacíos de la NC; lo que ya estaba escrito no se pisa.</p></div>`;
+  }
+
   // ============ RESUMEN ============
   function dibujarResumen() {
     const el = root && root.querySelector('#nc-resumen'); if (!el) return;
@@ -467,6 +505,20 @@ const NotasCreditoSection = (() => {
       const max = Math.max(1, ...arr.map(a => a[1].n));
       return arr.map(([k, x]) => `<div class="nc-barrow"><span>${esc(k)}</span><div class="nc-bar"><i style="width:${x.n / max * 100}%"></i></div><b>${x.n}</b><em>${x.$ ? plata(x.$) : ''}</em></div>`).join('') || '<p class="nc-empty">Sin datos en el período</p>';
     };
+    const grupoLec = (lista, fn) => {
+      const g = new Map();
+      lista.forEach(n => { const d = lec(n.lecturaDoc); const k = d && !d.error ? (fn(d) || 'Sin dato') : null; if (!k) return; const x = g.get(k) || { n: 0, $: 0 }; x.n++; x.$ += monto(n); g.set(k, x); });
+      const arr = [...g.entries()].sort((a, b) => b[1].n - a[1].n).slice(0, 12);
+      const max = Math.max(1, ...arr.map(a => a[1].n));
+      return arr.map(([k, x]) => `<div class="nc-barrow"><span>${esc(k)}</span><div class="nc-bar"><i style="width:${x.n / max * 100}%"></i></div><b>${x.n}</b><em>${x.$ ? plata(x.$) : ''}</em></div>`).join('') || '<p class="nc-empty">Aún no hay facturas leídas en el período</p>';
+    };
+    const productosNC = lista => {
+      const g = new Map();
+      lista.forEach(n => { const d = lec(n.lecturaDoc); if (!d || d.error) return; (d.productos || []).forEach(p => { const k = p.codigo || p.descripcion; if (!k) return; const x = g.get(k) || { d: p.descripcion, n: 0, $: 0 }; x.n++; x.$ += Number(p.total) || 0; g.set(k, x); }); });
+      const arr = [...g.entries()].sort((a, b) => b[1].n - a[1].n).slice(0, 12);
+      const max = Math.max(1, ...arr.map(a => a[1].n));
+      return arr.map(([k, x]) => `<div class="nc-barrow"><span title="${esc(x.d)}">${esc(k)} <small class="nc-dim">${esc(x.d || '')}</small></span><div class="nc-bar"><i style="width:${x.n / max * 100}%"></i></div><b>${x.n}</b><em>${x.$ ? plata(x.$) : ''}</em></div>`).join('') || '<p class="nc-empty">Aún no hay facturas leídas en el período</p>';
+    };
     // Facturas con N/C marcada en Control de Despachos que no tienen ficha aquí
     const fichas = new Set(notas.map(n => String(n.docNum)));
     const sinFicha = cf ? [...cf.values()].filter(r => r.nc && !fichas.has(String(r.numero).trim())) : [];
@@ -478,7 +530,10 @@ const NotasCreditoSection = (() => {
         <div class="nc-card"><h3 class="nc-h3">Por bodega</h3>${grupo('bodega')}<h3 class="nc-h3 nc-mt">Completa / Parcial</h3>${grupo('tipo')}</div>
         <div class="nc-card"><h3 class="nc-h3">Por quién solicita</h3>${grupo('solicitadoPor')}</div>
         <div class="nc-card"><h3 class="nc-h3">Clientes con más NC</h3>${grupo('cliente', 10)}</div>
+        <div class="nc-card"><h3 class="nc-h3">Por vendedor <span class="nc-dim">(de la factura leída)</span></h3>${grupoLec(base, d => d.vendedor)}</div>
+        <div class="nc-card"><h3 class="nc-h3">Productos en facturas con NC <span class="nc-dim">(de la factura leída)</span></h3>${productosNC(base)}</div>
       </div>
+      <p class="nc-dim" style="margin:12px 0">${notas.filter(n => lec(n.lecturaDoc) && !lec(n.lecturaDoc).error).length} de ${notas.filter(n => urlDoc(n)).length} NC con foto o PDF ya tienen la factura leída${notas.filter(lecturaPendiente).length ? ` · ${notas.filter(lecturaPendiente).length} en cola` : ''}.</p>
       <div class="nc-card"><h3 class="nc-h3">En Control de Despachos con N/C marcada, sin ficha aquí <span class="nc-dim">(${cf ? sinFicha.length : '…'})</span></h3>
         ${!cf ? `<p class="nc-dim">${cfEstado === 'error' ? 'No se pudo consultar Control de Despachos' : 'Cargando…'}</p>` : sinFicha.length
           ? `<div class="nc-tw"><table class="nc-t"><thead><tr><th>Factura</th><th>Fecha</th><th>Bodega</th><th>N/C</th><th>Motivo</th><th></th></tr></thead><tbody>${sinFicha.slice(0, 60).map(r => `<tr><td><b>${esc(r.numero)}</b></td><td>${esc(r.fecha)}</td><td>${esc(r.bodega || 'Aldunate')}</td><td>${esc(r.nc)}</td><td>${esc(r.motivoNc || '—')}</td><td><button class="nc-b nc-sm" data-crear="${esc(r.numero)}">Crear ficha</button></td></tr>`).join('')}</tbody></table></div>`
@@ -729,6 +784,7 @@ const NotasCreditoSection = (() => {
       .nc-check input{width:16px;height:16px;accent-color:#1565c0}
       .nc-drop{border:1.5px dashed #c7d0db;border-radius:10px;padding:14px;margin-top:14px;background:#fafbfc}
       .nc-drop input{font-weight:400;font-size:13px}.nc-drop small{font-weight:400;color:#8a97a5;font-size:12px}
+      .nc-hint{font-size:12px;color:#8a97a5;margin:10px 0 0}
       .nc-cfhint{font-size:12px;color:#15803d;margin:10px 0 0;min-height:1em}
       .nc-p{font-size:13px;color:#4b5563;margin:10px 0 6px}
       .nc-x{background:none;border:0;color:#9ca3af;font-size:16px;cursor:pointer;padding:6px 8px}

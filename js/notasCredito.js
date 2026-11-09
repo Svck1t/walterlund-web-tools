@@ -125,6 +125,8 @@ const NotasCreditoSection = (() => {
     $('#nc-bod').addEventListener('change', e => { st.bod = e.target.value; dibujarLista(); });
     $('#nc-chips').addEventListener('click', e => { const t = e.target.closest('[data-f]'); if (t) { st.filtro = t.dataset.f; st.sel = null; dibujar(); } });
     $('#nc-items').addEventListener('click', e => { const t = e.target.closest('[data-id]'); if (t) { st.sel = t.dataset.id; $('.nc-wrap').classList.add('nc-show'); dibujarLista(); dibujarDetalle(); } });
+    // visor de archivos (respaldos y mensajes de Telegram): se abre en la misma página
+    root.querySelector('.nc').addEventListener('click', e => { const f = e.target.closest('[data-file]'); if (f) { e.stopPropagation(); verArchivo(f.dataset.file, f.dataset.titulo); } }, true);
     $('#nc-detail').addEventListener('click', accion);
     $('#nc-detail').addEventListener('change', adjuntarSuelto);
     $('#nc-telegram').addEventListener('click', accionTg);
@@ -218,7 +220,7 @@ const NotasCreditoSection = (() => {
     const arch = (campo, titulo, icono) => {
       const url = n[campo];
       return `<div class="nc-file${url ? ' has' : ''}"><span>${icono} ${titulo}</span>
-        ${url ? `<a class="nc-b nc-sm" href="${esc(url)}" target="_blank" rel="noopener">Ver</a>` : '<em>Sin archivo</em>'}
+        ${url ? `<button class="nc-b nc-sm" data-file="${esc(url)}" data-titulo="${esc(titulo + ' · ' + docLbl(n))}">Ver</button>` : '<em>Sin archivo</em>'}
         <label class="nc-b nc-sm">${url ? 'Reemplazar' : 'Adjuntar'}<input type="file" accept="image/*,application/pdf" data-campo="${campo}" hidden></label></div>`;
     };
     el.innerHTML = `
@@ -301,6 +303,34 @@ const NotasCreditoSection = (() => {
   async function ejecutar(body, ok) {
     try { await post(body); toast(ok); await cargar(); }
     catch (err) { toast(err.message, true); }
+  }
+
+  // Hora del mensaje: "10:05". Si viene como fecha (registros antiguos que Sheets convirtió) no se muestra.
+  const horaTg = h => /^\d{1,2}:\d{2}/.test(String(h || '')) ? String(h).slice(0, 5) : '';
+
+  // ============ VISOR DE ARCHIVOS ============
+  // Vista previa de Drive (fotos y PDF) dentro de la página, con descargar y abrir en Drive
+  let visor = null;
+  const idDrive = url => { const m = String(url || '').match(/[-\w]{25,}/); return m ? m[0] : ''; };
+  function verArchivo(url, titulo) {
+    const id = idDrive(url);
+    if (!visor) {
+      visor = document.createElement('dialog');
+      visor.className = 'nc-visor';
+      visor.addEventListener('click', e => { if (e.target === visor || e.target.closest('[data-cerrar]')) visor.close(); });
+      visor.addEventListener('close', () => { const f = visor.querySelector('iframe'); if (f) f.src = 'about:blank'; });
+      document.body.appendChild(visor);
+    }
+    visor.innerHTML = `<div class="nc-visor-in">
+      <div class="nc-visor-head"><h2>${esc(titulo || 'Archivo')}</h2>
+        <div class="nc-visor-acts">
+          ${id ? `<a class="nc-b nc-sm" href="https://drive.google.com/uc?export=download&id=${esc(id)}" target="_blank" rel="noopener">⬇ Descargar</a>` : ''}
+          <a class="nc-b nc-sm" href="${esc(url)}" target="_blank" rel="noopener">↗ Abrir en Drive</a>
+          <button class="nc-x" data-cerrar aria-label="Cerrar">✕</button>
+        </div></div>
+      <div class="nc-visor-body">${id ? `<iframe src="https://drive.google.com/file/d/${esc(id)}/preview" title="${esc(titulo || 'Archivo')}" allow="autoplay"></iframe>` : '<p class="nc-empty">No se puede mostrar este archivo aquí. Ábrelo en Drive.</p>'}</div>
+    </div>`;
+    visor.showModal();
   }
 
   // ============ ARCHIVOS ============
@@ -558,10 +588,10 @@ const NotasCreditoSection = (() => {
           const ico = t.archivoTipo === 'foto' ? '📷' : t.archivoTipo === 'pdf' ? '📄' : t.archivoTipo ? '📎' : '💬';
           const defComo = t.archivoTipo === 'foto' ? 'bodega' : t.archivoTipo === 'pdf' ? 'solicitud' : 'comentario';
           return `<div class="nc-card nc-tg ${t.estado === 'SIN_ASIGNAR' ? 'pend' : ''}">
-            <div class="nc-tg-head"><b>${ico} ${esc(t.autor || '—')}</b><span>${fCorta(t.fecha)} ${esc(t.hora)}</span></div>
+            <div class="nc-tg-head"><b>${ico} ${esc(t.autor || '—')}</b><span>${fCorta(t.fecha)} ${esc(horaTg(t.hora))}</span></div>
             ${t.texto ? `<p class="nc-tg-txt">${esc(t.texto)}</p>` : ''}
             <div class="nc-tg-foot">
-              ${t.archivo ? `<a class="nc-b nc-sm" href="${esc(t.archivo)}" target="_blank" rel="noopener">Ver archivo</a>` : ''}
+              ${t.archivo ? `<button class="nc-b nc-sm" data-file="${esc(t.archivo)}" data-titulo="${esc((t.autor || 'Telegram') + ' · ' + fCorta(t.fecha) + ' ' + horaTg(t.hora))}">Ver archivo</button>` : ''}
               ${t.estado === 'ASIGNADO' ? `<button class="nc-b nc-sm" data-ver="${esc(t.ncId)}">${n ? esc(docCorto(n)) : esc((t.docTipo === 'Boleta' ? 'B ' : 'F ') + t.docNum)} →</button><span class="nc-dim">${esc(String(t.accion).replace(/^(\w+)/, x => COMO[x] || x))}</span>` : ''}
               ${t.estado === 'IGNORADO' ? '<span class="nc-dim">Conversación / ignorado</span>' : ''}
               ${t.estado === 'SIN_ASIGNAR' ? `<span class="nc-asig" data-msg="${esc(t.msgId)}">
@@ -788,6 +818,15 @@ const NotasCreditoSection = (() => {
       .nc-cfhint{font-size:12px;color:#15803d;margin:10px 0 0;min-height:1em}
       .nc-p{font-size:13px;color:#4b5563;margin:10px 0 6px}
       .nc-x{background:none;border:0;color:#9ca3af;font-size:16px;cursor:pointer;padding:6px 8px}
+      .nc-visor{border:0;border-radius:14px;padding:0;width:min(900px,94vw);height:min(88vh,1000px);box-shadow:0 20px 60px rgba(0,0,0,.35);color:#1c2733;overflow:hidden}
+      .nc-visor::backdrop{background:rgba(17,24,39,.6)}
+      .nc-visor-in{display:flex;flex-direction:column;height:100%}
+      .nc-visor-head{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid #eef0f3;flex-wrap:wrap}
+      .nc-visor-head h2{margin:0;font-size:17px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+      .nc-visor-acts{display:flex;gap:8px;align-items:center}
+      .nc-visor-body{flex:1;background:#f3f4f6;padding:10px}
+      .nc-visor-body iframe{width:100%;height:100%;border:0;border-radius:8px;background:#fff}
+      @media (max-width:560px){.nc-visor{width:100vw;max-width:100vw;height:100%;max-height:100vh;border-radius:0}.nc-visor-head h2{flex-basis:100%}}
       .nc-toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1c2733;color:#fff;padding:11px 18px;border-radius:8px;font-size:14px;z-index:9999;box-shadow:0 6px 20px rgba(0,0,0,.2)}
       .nc-toast.err{background:#b91c1c}
       @media (max-width:900px){

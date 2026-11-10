@@ -399,7 +399,29 @@ const ContendedoresSection = (() => {
       else pend['Sin fechas']++;
     });
 
+    // ---- Comparación con el año anterior (meses cerrados: no se compara un mes a medias) ----
+    const prevY = String(Y - 1);
+    const cuenta = y => {
+      const pm = Array(12).fill(0), km = Array(12).fill(0), bm = {};
+      BODEGAS.forEach(b => bm[b.k] = Array(12).fill(0));
+      rec.filter(r => r.f.startsWith(y)).forEach(r => { const m = Number(r.f.slice(5, 7)) - 1; pm[m]++; km[m] += r.peso; bm[r.bod][m]++; });
+      const res = hist && hist.resumen && hist.resumen[y];
+      if (res) for (let m = 0; m < 12; m++) { if (pm[m]) continue; Object.entries(res).forEach(([b, arr]) => { const v = Number(arr[m]) || 0; pm[m] += v; bm[normBod(b)][m] += v; }); }
+      return { pm, km, bm };
+    };
+    const P = cuenta(prevY);
+    const cerrados = esActual ? mesHoy : 12;              // ene … mes anterior al actual
+    const suma = (a, n = cerrados) => a.slice(0, n).reduce((x, y) => x + y, 0);
+    const comp = P.pm.slice(0, cerrados).some(v => v) && cerrados > 0 ? {
+      prevY, cerrados,
+      act: suma(porMes), prev: suma(P.pm), kgAct: suma(kgMes), kgPrev: suma(P.km),
+      kgComparable: P.km.slice(0, cerrados).every((v, m) => v > 0 || !P.pm[m]),
+      porMesPrev: P.pm, kgMesPrev: P.km,
+      bod: BODEGAS.map(b => ({ ...b, act: suma(bodMes[b.k]), prev: suma(P.bm[b.k]) })).filter(b => b.act || b.prev)
+    } : null;
+
     return {
+      comp,
       years, Y, total, nDet, soloResumen, kgTotal, conPeso, porMes, kgMes, bodMes, dl, dlTrans, mesesTrans,
       antes, despues, sinHora, porHora, porDia, prov: top(prov), mat: top(mat), totBod,
       puertoProm: prom(puerto.map(x => x.d)), puertoN: puerto.length, puertoMes: puertoMes.map(prom), puertoArr: puerto.map(x => x.d),
@@ -437,6 +459,8 @@ const ContendedoresSection = (() => {
         ${kpi('Llegadas antes de ' + HORA_LIMITE, D.conHora ? nf(pctAntes, 0) + '%' : '—', `${D.conHora} con hora registrada`)}
         ${kpi('Peso promedio', D.conPeso ? nf(D.kgTotal / D.conPeso) + ' kg' : '—', 'por contenedor')}
         ${kpi('Pendientes hoy', nf(pendTot), 'todos los años')}
+        ${D.comp ? kpi('vs ' + D.comp.prevY, (D.comp.act >= D.comp.prev ? '+' : '') + nf((D.comp.act / (D.comp.prev || 1) - 1) * 100, 0) + '%',
+          `${nf(D.comp.act)} vs ${nf(D.comp.prev)} contenedores · ${D.comp.cerrados === 12 ? 'año completo' : 'ene–' + MESES_L[D.comp.cerrados - 1].slice(0, 3).toLowerCase()}`) : ''}
       </div>
 
       <div class="ci-card" style="margin-top:18px">
@@ -455,6 +479,16 @@ const ContendedoresSection = (() => {
       </div>
 
       <div class="ci-grid2">
+        ${D.comp ? `<div class="ci-card"><h3>${dashYear} vs ${D.comp.prevY}</h3><p class="ci-sub">Contenedores por mes${D.comp.cerrados < 12 ? ' (el mes en curso se compara cuando cierre)' : ''}</p><div class="ci-chart"><canvas id="ch-comp"></canvas></div></div>
+        <div class="ci-card"><h3>Comparación por bodega</h3><p class="ci-sub">${D.comp.cerrados === 12 ? 'Año completo' : 'Enero a ' + MESES_L[D.comp.cerrados - 1].toLowerCase()}, mismo período de cada año</p>
+          <div class="ci-table-wrap"><table class="ci-mtx">
+            <thead><tr><th>Bodega</th><th>${dashYear}</th><th>${D.comp.prevY}</th><th>Variación</th></tr></thead>
+            <tbody>${D.comp.bod.map(b => `<tr><td><span class="ci-sw" style="background:${b.c}"></span>${b.l}</td><td>${nf(b.act)}</td><td>${nf(b.prev)}</td><td class="${b.act >= b.prev ? 'ci-up' : 'ci-down'}">${b.prev ? (b.act >= b.prev ? '+' : '') + nf((b.act / b.prev - 1) * 100, 0) + '%' : 'nuevo'}</td></tr>`).join('')}
+              <tr class="sum"><td>Total</td><td>${nf(D.comp.act)}</td><td>${nf(D.comp.prev)}</td><td>${D.comp.prev ? (D.comp.act >= D.comp.prev ? '+' : '') + nf((D.comp.act / D.comp.prev - 1) * 100, 0) + '%' : '—'}</td></tr>
+              ${D.comp.kgComparable ? `<tr><td>Toneladas</td><td>${nf(D.comp.kgAct / 1000, 1)}</td><td>${nf(D.comp.kgPrev / 1000, 1)}</td><td class="${D.comp.kgAct >= D.comp.kgPrev ? 'ci-up' : 'ci-down'}">${D.comp.kgPrev ? (D.comp.kgAct >= D.comp.kgPrev ? '+' : '') + nf((D.comp.kgAct / D.comp.kgPrev - 1) * 100, 0) + '%' : '—'}</td></tr>` : ''}
+            </tbody></table></div>
+          ${D.comp.kgComparable ? '' : `<p class="ci-sub" style="margin-top:8px">Toneladas no comparables: ${D.comp.prevY} tiene meses solo con totales por bodega, sin peso.</p>`}
+        </div>` : ''}
         <div class="ci-card"><h3>Contenedores y toneladas por mes</h3><div class="ci-chart"><canvas id="ch-mes"></canvas></div></div>
         <div class="ci-card"><h3>Distribución por bodega</h3><div class="ci-chart"><canvas id="ch-bod"></canvas></div></div>
 
@@ -533,6 +567,15 @@ const ContendedoresSection = (() => {
         ]
       },
       options: { ...baseF(), scales: { y: { beginAtZero: true, title: { display: true, text: 'Contenedores' } }, y1: { beginAtZero: true, position: 'right', grid: { drawOnChartArea: false }, title: { display: true, text: 'Toneladas' } } } }
+    });
+
+    if (D.comp) mk('ch-comp', {
+      type: 'bar',
+      data: { labels: meses, datasets: [
+        { label: String(D.Y), data: D.porMes.map((v, m) => m < D.mesesTrans ? v : null), backgroundColor: '#2563eb' },
+        { label: D.comp.prevY, data: D.comp.porMesPrev, backgroundColor: '#cbd5e1' }
+      ] },
+      options: { ...baseF(), scales: { y: { beginAtZero: true } } }
     });
 
     const tb = D.totBod;
@@ -676,6 +719,7 @@ const ContendedoresSection = (() => {
       .ci-dash-bar select{padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;margin-left:6px}
       .ci-dash-bar small{color:#6b7280}
       .ci-mtx{width:100%;border-collapse:collapse;font-size:13px}
+      .ci-up{color:#15803d;font-weight:700}.ci-down{color:#b91c1c;font-weight:700}
       .ci-mtx th,.ci-mtx td{padding:7px 8px;border:1px solid #eef0f3;text-align:center;white-space:nowrap}
       .ci-mtx th{background:#f5f7fa}
       .ci-mtx td:first-child,.ci-mtx th:first-child{text-align:left;font-weight:600}

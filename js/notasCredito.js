@@ -1,5 +1,5 @@
 // =====================================================
-// SECCIÓN: NOTAS DE CRÉDITO — v3 (+ bot de Telegram + datos leídos de la factura con Gemini)
+// SECCIÓN: NOTAS DE CRÉDITO — v4 (+ bot de Telegram + lectura con Gemini + informe de devoluciones Softland)
 // Reemplaza el grupo de Telegram: solicitud → devolución en bodega → NC emitida (timbrada),
 // con respaldos en Drive (solicitud, foto de bodega, PDF timbrado) e historial de quién hizo qué.
 // Cruza con Control de Despachos (factura registrada / N/C marcada).
@@ -93,6 +93,7 @@ const NotasCreditoSection = (() => {
           <label class="nc-quien" title="Queda registrado en el historial de cada NC">👤 <input id="nc-quien" list="nc-nombres" placeholder="Tu nombre" value="${esc(quien())}"></label>
           <button class="nc-b" id="nc-ref">🔄</button>
           <button class="nc-b" id="nc-imp">📥 Importar Telegram</button>
+          <button class="nc-b" id="nc-soft" title="Informe de Guías de Recepción · Devolución de Cliente">📥 Informe Softland</button>
           <button class="nc-b nc-pri" id="nc-new">➕ Nueva solicitud</button>
         </div>
       </div>
@@ -120,6 +121,7 @@ const NotasCreditoSection = (() => {
     $('#nc-ref').addEventListener('click', () => { cargar(); cargarCF(); });
     $('#nc-new').addEventListener('click', () => abrirForm(null));
     $('#nc-imp').addEventListener('click', abrirImport);
+    $('#nc-soft').addEventListener('click', abrirSoftland);
     $('.nc-tabs').addEventListener('click', e => { const t = e.target.closest('[data-tab]'); if (t) { st.tab = t.dataset.tab; dibujar(); } });
     $('#nc-q').addEventListener('input', e => { st.q = e.target.value; dibujarLista(); });
     $('#nc-bod').addEventListener('change', e => { st.bod = e.target.value; dibujarLista(); });
@@ -250,6 +252,7 @@ const NotasCreditoSection = (() => {
         ${n.anulacion ? `<div class="nc-note anu">Anulada: ${esc(n.anulacion)}</div>` : ''}
         ${n.obs ? `<div class="nc-note">${esc(n.obs)}</div>` : ''}
       </div>
+      ${devolucionesHtml(n)}
       ${datosLeidos(n)}
       <div class="nc-card"><h3 class="nc-h3">Respaldos</h3>
         <div class="nc-files">${arch('solicitudUrl', 'Solicitud', '📝')}${arch('fotoUrl', 'Foto bodega', '📷')}${arch('ncUrl', 'NC timbrada', '🧾')}</div>
@@ -535,6 +538,13 @@ const NotasCreditoSection = (() => {
       const max = Math.max(1, ...arr.map(a => a[1].n));
       return arr.map(([k, x]) => `<div class="nc-barrow"><span>${esc(k)}</span><div class="nc-bar"><i style="width:${x.n / max * 100}%"></i></div><b>${x.n}</b><em>${x.$ ? plata(x.$) : ''}</em></div>`).join('') || '<p class="nc-empty">Sin datos en el período</p>';
     };
+    const devsPorBodega = () => {
+      const g = new Map();
+      notas.forEach(n => devsDe(n).forEach(v => { if (st.periodo !== 'todo' && !String(v.fecha).startsWith(st.periodo === 'mes' ? mes : mesAnt)) return; const x = g.get(v.bodega) || { n: 0, $: 0 }; x.n++; x.$ += Number(v.total) || 0; g.set(v.bodega, x); }));
+      const arr = [...g.entries()].sort((a, b) => b[1].$ - a[1].$);
+      const max = Math.max(1, ...arr.map(a => a[1].$));
+      return arr.map(([k, x]) => `<div class="nc-barrow"><span>${esc(k)}</span><div class="nc-bar"><i style="width:${x.$ / max * 100}%"></i></div><b>${x.n}</b><em>${plata(x.$)}</em></div>`).join('') || '<p class="nc-empty">Sin devoluciones cargadas en el período</p>';
+    };
     const grupoLec = (lista, fn) => {
       const g = new Map();
       lista.forEach(n => { const d = lec(n.lecturaDoc); const k = d && !d.error ? (fn(d) || 'Sin dato') : null; if (!k) return; const x = g.get(k) || { n: 0, $: 0 }; x.n++; x.$ += monto(n); g.set(k, x); });
@@ -560,6 +570,7 @@ const NotasCreditoSection = (() => {
         <div class="nc-card"><h3 class="nc-h3">Por bodega</h3>${grupo('bodega')}<h3 class="nc-h3 nc-mt">Completa / Parcial</h3>${grupo('tipo')}</div>
         <div class="nc-card"><h3 class="nc-h3">Por quién solicita</h3>${grupo('solicitadoPor')}</div>
         <div class="nc-card"><h3 class="nc-h3">Clientes con más NC</h3>${grupo('cliente', 10)}</div>
+        <div class="nc-card"><h3 class="nc-h3">Devoluciones Softland por bodega</h3>${devsPorBodega()}</div>
         <div class="nc-card"><h3 class="nc-h3">Por vendedor <span class="nc-dim">(de la factura leída)</span></h3>${grupoLec(base, d => d.vendedor)}</div>
         <div class="nc-card"><h3 class="nc-h3">Productos en facturas con NC <span class="nc-dim">(de la factura leída)</span></h3>${productosNC(base)}</div>
       </div>
@@ -613,6 +624,54 @@ const NotasCreditoSection = (() => {
       if (!g('num')) { toast('Escribe el N° de documento', true); return; }
       return ejecutar({ action: 'tg_asignar', msgId: box.dataset.msg, docTipo: g('tipo'), docNum: g('num'), como: g('como') }, 'Mensaje asignado');
     }
+  }
+
+  // ============ DEVOLUCIONES DE SOFTLAND ============
+  const devsDe = n => { try { return JSON.parse(n.devoluciones || '[]'); } catch (e) { return []; } };
+  function devolucionesHtml(n) {
+    const ds = devsDe(n);
+    if (!ds.length) return '';
+    return `<div class="nc-card"><h3 class="nc-h3">Devolución registrada en Softland <span class="nc-dim">(${ds.length === 1 ? '1 guía de recepción' : ds.length + ' guías de recepción'})</span></h3>
+      ${ds.map(g => `<p class="nc-p" style="margin:6px 0"><b>Guía de recepción N° ${esc(g.folio)}</b> · ${fCorta(g.fecha)} · ${esc(g.bodega)} · ${plata(g.total)}</p>
+        <div class="nc-tw"><table class="nc-t"><thead><tr><th>Código</th><th>Producto</th><th class="num">Cant.</th><th>Un.</th><th class="num">Precio unit.</th><th class="num">Total</th></tr></thead>
+        <tbody>${(g.lineas || []).map(l => `<tr><td><b>${esc(l.codigo)}</b></td><td>${esc(l.descripcion)}</td><td class="num">${nf(l.cantidad) || l.cantidad}</td><td>${esc(l.um)}</td><td class="num">${plata(l.precio)}</td><td class="num">${plata(l.total)}</td></tr>`).join('')}</tbody></table></div>`).join('')}
+    </div>`;
+  }
+  // Carga el "Informe de Guías de Recepción" (Devolución de Cliente) exportado de Softland
+  function abrirSoftland() {
+    if (typeof XLSX === 'undefined' || typeof SoftlandRecepciones === 'undefined') { toast('No se cargó el lector de Excel', true); return; }
+    let docs = [];
+    const d = abrirDlg('Informe de devoluciones de Softland', `
+      <p class="nc-p">Elige el <b>Informe de Guías de Recepción</b> exportado de Softland con concepto <b>Devolución de Cliente</b> (.xls).
+        Cada guía se suma a la NC de su factura o boleta. Si la NC no existe, se crea como <i>Registrada en bodega</i>. Cargar el mismo informe dos veces no duplica nada.</p>
+      <input type="file" id="s-xls" accept=".xls,.xlsx" class="nc-in">
+      <div id="s-prev" class="nc-p"></div>`, 'Cargar', async dd => {
+      if (!docs.length) throw new Error('Elige primero el informe');
+      const r = await post({ action: 'nc_softland', docs });
+      toast(`Softland: ${r.actualizadas} NC actualizadas · ${r.nuevas} nuevas${r.iguales ? ` · ${r.iguales} ya estaban` : ''}`);
+      st.filtro = 'todas'; st.sel = null;
+      await cargar();
+    });
+    d.querySelector('#s-xls').addEventListener('change', async e => {
+      const f = e.target.files[0]; if (!f) return;
+      const prev = d.querySelector('#s-prev');
+      try {
+        const res = SoftlandRecepciones.parse(XLSX.read(await f.arrayBuffer(), { type: 'array' }), XLSX);
+        const otros = res.docs.filter(x => !/devoluci/i.test(x.concepto));
+        docs = res.docs.filter(x => /devoluci/i.test(x.concepto));
+        if (!docs.length) throw new Error('El informe no trae guías con concepto "Devolución de Cliente"');
+        const tipoDe = x => String(x.dcto).replace(/\D/g, '').length >= 6 ? 'Factura' : 'Boleta';
+        const tiene = x => notas.some(n => n.docNum === String(x.dcto).replace(/\D/g, '') && n.docTipo === tipoDe(x) && n.estado !== 'ANULADA');
+        const ya = docs.filter(x => notas.some(n => devsDe(n).some(g => String(g.folio) === String(x.folio))));
+        const conNC = docs.filter(x => tiene(x) && !ya.includes(x));
+        const sinNC = docs.filter(x => !tiene(x));
+        const porBod = {}; docs.forEach(x => { porBod[x.bodega] = (porBod[x.bodega] || 0) + 1; });
+        prev.innerHTML = `Período ${fCorta(res.periodo.desde)} – ${fCorta(res.periodo.hasta)}: <b>${docs.length}</b> devoluciones por <b>${plata(docs.reduce((s, x) => s + x.total, 0))}</b>
+          (${Object.entries(porBod).map(([b, c]) => `${esc(b)} ${c}`).join(' · ')}).<br>
+          ✓ ${conNC.length} se suman a una NC existente · ➕ ${sinNC.length} crean NC nueva${ya.length ? ` · ${ya.length} ya estaban cargadas` : ''}${otros.length ? `<br><span class="nc-dim">Se ignoran ${otros.length} guías de otro concepto.</span>` : ''}
+          ${sinNC.length ? `<details class="nc-mt"><summary>Ver las que crean NC nueva</summary><div class="nc-tw"><table class="nc-t"><thead><tr><th>Doc.</th><th>Cliente</th><th>Bodega</th><th>Fecha</th><th class="num">Total</th></tr></thead><tbody>${sinNC.map(x => `<tr><td>${tipoDe(x) === 'Boleta' ? 'B' : 'F'} ${esc(x.dcto)}</td><td>${esc(x.origen)}</td><td>${esc(x.bodega)}</td><td>${fCorta(x.fecha)}</td><td class="num">${plata(x.total)}</td></tr>`).join('')}</tbody></table></div></details>` : ''}`;
+      } catch (err) { docs = []; prev.innerHTML = `<span class="nc-err">${esc(err.message)}</span>`; }
+    });
   }
 
   // ============ IMPORTAR HISTORIAL DE TELEGRAM ============

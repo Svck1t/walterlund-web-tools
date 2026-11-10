@@ -26,6 +26,10 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 2v20l3-2 3 2 3-2 3 2 3-2 1 .7V2l-1 .7-3-2-3 2-3-2-3 2-3-2z"/><line x1="8" y1="8" x2="16" y2="8"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
           Facturas
         </button>
+        <button class="tab" data-view="softland">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+          Softland
+        </button>
       </div>
       <button class="btn btn-secondary btn-icon-only" id="btn-refresh" title="Recargar">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
@@ -96,6 +100,11 @@
 
   <div id="vista-documentos" class="hidden">
     <div id="documentos-content"></div>
+  </div>
+
+  <div id="vista-softland" class="hidden">
+    <div id="softland-content"></div>
+    <input type="file" accept=".xls,.xlsx" id="softland-input" class="hidden">
   </div>
 
   <div id="vista-resumen" class="hidden">

@@ -103,9 +103,9 @@ const LlegadasSection = (() => {
       if (!m.has(k)) m.set(k, { cod, prod, unidad: c.unidad, bulto: c.bulto, ca: 0, bu: 0, kg: 0, conts: new Map() });
       const p = m.get(k);
       p.ca += ca || 0; p.bu += bu || 0; p.kg += kg || 0;
-      const e = p.conts.get(c.c) || { c, ca: 0, bu: 0 };
+      const e = p.conts.get(c.id) || { c, ca: 0, bu: 0 };
       e.ca += ca || 0; e.bu += bu || 0;
-      p.conts.set(c.c, e);
+      p.conts.set(c.id, e);
     }));
     return [...m.values()].map(p => {
       const cs = [...p.conts.values()].sort((a, b) => ordenC(a.c, b.c));

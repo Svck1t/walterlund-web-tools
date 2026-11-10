@@ -53,6 +53,7 @@ document.addEventListener('DOMContentLoaded', () => {
     'control-facturas': 'Control de Despachos',
     parciales: 'Despachos Parciales',
     'notas-credito': 'Notas de Crédito',
+    'solicitud-productos': 'Solicitud de productos',
     traslados: 'Control de Traslados',
     compras: 'Compras Nacionales',
     stock: 'Stock',
@@ -105,6 +106,9 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'bodega':
         content.innerHTML = '<iframe src="bodega/index.html" title="Bodega y Logística WL" style="display:block;width:100%;height:calc(100vh - 120px);min-height:520px;border:0;border-radius:10px;background:#fff"></iframe>';
+        break;
+      case 'solicitud-productos':
+        SolicitudProductosSection.render(content);
         break;
       case 'notas-credito':
         NotasCreditoSection.render(content);

@@ -9,6 +9,8 @@ const PL_URL = 'https://script.google.com/macros/s/AKfycbwidbVD0AHfZxIa90u-X8P8B
 
 const norm = c => String(c || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 const key = c => norm(c).slice(0, 10); // tolera N° sin dígito verificador
+// N° oculto para comercial: PIDU7814650 -> PIDUXXXXXX-X (se ve la naviera, no el contenedor)
+const ocultar = c => { const n = norm(c); const m = n.match(/^([A-Z]{4})\d{6}(\d)?$/); return m ? m[1] + 'XXXXXX' + (m[2] !== undefined ? '-X' : '') : n.replace(/\d/g, 'X'); };
 const UNIDAD = { pallet: 'Resmas', bulto: 'Unidades', simple: 'Cantidad' };
 const BULTO = { pallet: 'Pallets', bulto: 'Cajas', simple: '' };
 const numero = v => (v === null || v === '' || v === undefined || isNaN(v)) ? null : Number(v);
@@ -37,11 +39,12 @@ module.exports = async (req, res) => {
     const hoy = imp.hoy;
     const conts = (imp.rows || [])
       .filter(r => !r.recepExcel && norm(r.contenedor))
-      .map(r => {
+      .map((r, i) => {
         const pl = porCont.get(key(r.contenedor));
         const f = pl ? (pl.f || 'pallet') : null;
         return {
-          c: r.contenedor,
+          id: 'c' + i,                 // identificador interno (el N° real no sale del servidor)
+          c: ocultar(r.contenedor),
           fase: fase(r, hoy),
           llegada: r.llegada || '',
           hora: r.hora || '',

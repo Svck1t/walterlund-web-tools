@@ -1,1329 +1,817 @@
-// Lógica de Control de Compras (de control-ingresos-wl.vercel.app), adaptada para
-// correr dentro del Shadow DOM de walterlund-web-tools:
-// - document.getElementById/querySelectorAll -> root.* (root = shadow root)
-// - URL del Apps Script fija (se quitó la pantalla de configuración y el modal de URL)
-// Misma hoja y mismo Apps Script que usaba control-ingresos-wl.vercel.app (no es una copia de los datos)
-const API_URL = 'https://script.google.com/macros/s/AKfycbzyyt5rYoEbLCvdVQ-AjKSk6_EUarexL3SXd5HIdC_XAuSMB6MCxfIQxv5amlOWa1xQ/exec';
+// =====================================================
+// SECCIÓN: COLA DE CONTENEDORES (v9.1 — listeners una sola vez; pestaña Packing lists + sección Packing Lists, js/packingLists.js)
+// Fuente: pestaña "Importaciones" (espejo del Excel Control Contenedores 2026)
+// Solo lectura: el estado se marca en el Excel
+// =====================================================
 
-const ESTADOS = {
-  pendiente: { label: 'Pendiente', cls: 'estado-pendiente' },
-  recibido:  { label: 'Recibido',  cls: 'estado-recibido' },
-  facturado: { label: 'Facturado', cls: 'estado-facturado' },
-};
+const ContendedoresSection = (() => {
+  const API_URL = 'https://script.google.com/macros/s/AKfycbx7bJ0YhnRKBF7pEO3OgOUcBPq82C4yO37TC2FmQFwNCZmOG_uDt5uzDkWiNFkWAr-GBQ/exec'; // termina en /exec
+  const HORA_LIMITE = '14:00';
+  const REFRESH_MS = 60000;
+  const HIST_URL = 'data/importaciones-2025.json'; // histórico estático (Excel 2025)
+  const ORDEN_ESTADO = { 'PENDIENTE': 0, 'GUARDADO': 1, 'EN PUERTO': 2, 'PREINGRESADO': 3, 'RECEPCIONADO': 4 };
 
-let entries = [];
-let documentos = [];   // facturas/boletas reales (hoja Documentos)
-let eliminados = [];   // papelera
-let editingId = null;
-let confirmDeleteId = null;
-let vista = 'lista';
-let filtros = { mes: monthOf(today()), sucursal: '', proveedor: '', estado: 'todos', busqueda: '' };
+  let hist = null;        // { rows, resumen } del histórico
+  let histError = '';
 
-// Sucursales que recepcionan compras. Cada equipo recuerda la última sucursal usada.
-const SUCURSALES = ['San Francisco', 'Aldunate', 'Viel', 'San Ignacio'];
-const SUCURSAL_KEY = 'compras-sucursal-equipo';
-function sucursalEquipo() { try { return localStorage.getItem(SUCURSAL_KEY) || ''; } catch { return ''; } }
-function guardarSucursalEquipo(s) { try { localStorage.setItem(SUCURSAL_KEY, s); } catch {} }
-const MESES_TXT = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
-function mesTxt(m) { const [y, mm] = m.split('-'); return MESES_TXT[Number(mm) - 1] + ' ' + y.slice(2); }
-function mesAnterior(m, n = 1) { const [y, mm] = m.split('-').map(Number); const d = new Date(y, mm - 1 - n, 1); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'); }
-let fotoPendienteBase64 = null;
-let fotoPendienteMime = null;
+  let rows = [];
+  let meta = { hoy: '', ahora: '', sync: '' };
+  let tab = 'proximos';
+  let filtro = '';
+  let timer = null;
+  let root = null;
+  let lastSig = '';
+  let lastSigPL = '';
+  let dashYear = null;
+  let charts = [];
+  let pendiente = null;   // contenedor a mostrar al entrar desde Packing Lists
 
-function today() { return new Date().toISOString().slice(0,10); }
-function monthOf(d) { return (d||'').slice(0,7); }
-function fmtCLP(n) { return new Intl.NumberFormat('es-CL',{style:'currency',currency:'CLP',maximumFractionDigits:0}).format(Number(n)||0); }
-function fmtCorto(n) { n = Number(n) || 0; if (n >= 1e6) return '$' + (n / 1e6).toLocaleString('es-CL', { maximumFractionDigits: 1 }) + 'M'; if (n >= 1e3) return '$' + Math.round(n / 1e3) + 'k'; return '$' + Math.round(n); }
-function fmtNum(n) { return new Intl.NumberFormat('es-CL',{maximumFractionDigits:2}).format(Number(n)||0); }
-function escapeHtml(s) { return String(s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]); }
-function uid() { return 'e_' + Date.now() + '_' + Math.random().toString(36).slice(2,7); }
+  const MESES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+  const fCorta = iso => { if (!iso) return '—'; const [, m, d] = iso.split('-'); return `${+d}-${MESES[+m - 1]}`; };
+  const fLarga = iso => { if (!iso) return '—'; const [y, m, d] = iso.split('-'); return `${d}/${m}/${y}`; };
+  const kg = n => n ? n.toLocaleString('es-CL', { maximumFractionDigits: 0 }) + ' kg' : '—';
+  const isoToDay = iso => { const [y, m, d] = iso.split('-').map(Number); return Date.UTC(y, m - 1, d) / 86400000; };
+  const recep = r => r.recepExcel; // solo manda el Excel
+  const fechaRef = r => r.llegada || r.eta;
+  const normCont = c => String(c || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const estadoDe = r => String(r.estado || '').trim().toUpperCase() || 'PENDIENTE';
+  const ordenEstado = e => (e in ORDEN_ESTADO ? ORDEN_ESTADO[e] : 3);
+  const bodCls = b => { const u = String(b || '').toUpperCase(); return u.includes('ALDUNATE') ? 'ald' : u.includes('VIEL') ? 'viel' : ''; };
+  const corto = (t, n = 28) => { t = String(t || ''); return t.length > n ? t.slice(0, n - 1) + '…' : t; };
+  const esMovil = () => window.matchMedia('(max-width: 700px)').matches;
 
-// ----------- API -----------
-async function apiGet() {
-  const res = await fetch(API_URL, { method: 'GET', redirect: 'follow' });
-  if (!res.ok) throw new Error('HTTP ' + res.status);
-  return await res.json();
-}
-async function apiPost(body, timeoutMs) {
-  // No establecer Content-Type para evitar preflight CORS con Apps Script
-  const ctrl = timeoutMs ? new AbortController() : null;
-  const t = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : null;
-  let res;
-  try {
-    res = await fetch(API_URL, {
-      method: 'POST',
-      body: JSON.stringify(body),
-      redirect: 'follow',
-      signal: ctrl ? ctrl.signal : undefined,
-    });
-  } catch (err) {
-    if (err.name === 'AbortError') throw new Error('Gemini tardó demasiado en responder');
-    throw err;
-  } finally { if (t) clearTimeout(t); }
-  if (!res.ok) throw new Error('HTTP ' + res.status);
-  return await res.json();
-}
-
-// ----------- Sync UI -----------
-function setSyncStatus(state, label) {
-  const pill = root.getElementById('sync-status');
-  const lbl = root.getElementById('sync-label');
-  pill.classList.remove('sync-ok','sync-loading','sync-error');
-  pill.classList.add('sync-' + state);
-  lbl.textContent = label;
-}
-
-async function loadEntries() {
-  setSyncStatus('loading','Sincronizando…');
-  try {
-    const data = await apiGet();
-    if (!data.ok) throw new Error(data.error || 'Error desconocido');
-    entries = (data.entries || []).map(normalize);
-    documentos = (data.documentos || []).map(normDoc);
-    eliminados = data.eliminados || [];
-    setSyncStatus('ok','Sincronizado · ' + new Date().toLocaleTimeString('es-CL',{hour:'2-digit',minute:'2-digit'}));
-    render();
-  } catch (err) {
-    console.error(err);
-    setSyncStatus('error','Error · click para reintentar');
-    root.getElementById('sync-status').onclick = loadEntries;
-  }
-}
-
-function normalize(e) {
-  return {
-    id: String(e.id),
-    fecha: String(e.fecha || '').slice(0,10),
-    proveedor: String(e.proveedor || ''),
-    producto: String(e.producto || ''),
-    cantidad: Number(e.cantidad) || 0,
-    unidad: String(e.unidad || 'unidad'),
-    costoUnitario: Number(e.costoUnitario) || 0,
-    estado: ESTADOS[e.estado] ? e.estado : 'pendiente',
-    referencia: String(e.referencia || ''),
-    notas: String(e.notas || ''),
-    fotoUrl: String(e.fotoUrl || ''),
-    sucursal: String(e.sucursal || ''),
-    grupo: String(e.grupo || ''),
-    tipoDoc: ['vale', 'boleta', 'factura'].includes(e.tipoDoc) ? e.tipoDoc : 'vale',
-    facturaId: String(e.facturaId || ''),
-    creadoEn: Number(e.creadoEn) || Date.now(),
-    actualizadoEn: Number(e.actualizadoEn) || Date.now(),
-  };
-}
-
-// ----------- Lógica filtros / totales -----------
-function getFiltered(opt = {}) {
-  const q = filtros.busqueda.trim().toLowerCase();
-  return entries
-    .filter(e => opt.sinMes || !filtros.mes || monthOf(e.fecha) === filtros.mes)
-    .filter(e => opt.sinSucursal || !filtros.sucursal || (filtros.sucursal === '-' ? !e.sucursal : e.sucursal === filtros.sucursal))
-    .filter(e => !filtros.proveedor || e.proveedor === filtros.proveedor)
-    .filter(e => filtros.estado === 'todos' || e.estado === filtros.estado)
-    .filter(e => !q || e.producto.toLowerCase().includes(q) || e.proveedor.toLowerCase().includes(q) || e.referencia.toLowerCase().includes(q) || e.notas.toLowerCase().includes(q))
-    .sort((a,b) => b.fecha.localeCompare(a.fecha) || b.creadoEn - a.creadoEn);
-}
-function getTotales(list) {
-  const t = { total:0, pendiente:0, recibido:0, facturado:0, count:new Set(list.map(grupoDe)).size };
-  list.forEach(e => {
-    const sub = e.cantidad * e.costoUnitario;
-    t.total += sub;
-    t[e.estado] = (t[e.estado]||0) + sub;
-  });
-  return t;
-}
-function getProveedoresUnicos() { return [...new Set(entries.map(e => e.proveedor).filter(Boolean))].sort(); }
-function getMesesDisponibles() {
-  const set = new Set(entries.map(e => monthOf(e.fecha)).filter(Boolean));
-  set.add(monthOf(today()));
-  return [...set].sort().reverse();
-}
-
-// ----------- Render -----------
-function render() {
-  renderFiltros();
-  ['lista', 'resumen', 'dashboard', 'documentos'].forEach(v => root.getElementById('vista-' + v).classList.toggle('hidden', v !== vista));
-  root.getElementById('summary-grid').classList.toggle('hidden', vista === 'dashboard' || vista === 'documentos');
-  if (vista === 'dashboard') renderDashboard();
-  else if (vista === 'documentos') renderDocumentos();
-  else { renderSummary(); vista === 'lista' ? renderLista() : renderResumen(); }
-  root.getElementById('pap-count').textContent = eliminados.length;
-  root.getElementById('total-registros').textContent = (n => n === 1 ? '1 registro total' : n + ' registros totales')(new Set(entries.map(grupoDe)).size);
-}
-
-function renderSummary() {
-  const t = getTotales(getFiltered());
-  root.getElementById('summary-grid').innerHTML = `
-    <div class="summary-card highlight">
-      <div class="label-row"><span class="label">Total del período</span></div>
-      <div class="value">${fmtCLP(t.total)}</div>
-      <div class="sub">${t.count} ${t.count===1?'registro':'registros'}</div>
-    </div>
-    <div class="summary-card">
-      <div class="label-row"><span class="dot" style="background:var(--amber-dot)"></span><span class="label">Pendiente</span></div>
-      <div class="value">${fmtCLP(t.pendiente)}</div>
-    </div>
-    <div class="summary-card">
-      <div class="label-row"><span class="dot" style="background:var(--sky-dot)"></span><span class="label">Recibido</span></div>
-      <div class="value">${fmtCLP(t.recibido)}</div>
-    </div>
-    <div class="summary-card">
-      <div class="label-row"><span class="dot" style="background:var(--emerald-dot)"></span><span class="label">Facturado</span></div>
-      <div class="value">${fmtCLP(t.facturado)}</div>
-    </div>`;
-}
-
-function renderFiltros() {
-  const mesSelect = root.getElementById('filtro-mes');
-  const meses = getMesesDisponibles();
-  mesSelect.innerHTML = '<option value="">Todos los meses</option>' +
-    meses.map(m => `<option value="${m}" ${m===filtros.mes?'selected':''}>${m}</option>`).join('');
-  const provs = getProveedoresUnicos();
-  root.getElementById('filtro-proveedor').innerHTML = '<option value="">Todos</option>' +
-    provs.map(p => `<option value="${escapeHtml(p)}" ${p===filtros.proveedor?'selected':''}>${escapeHtml(p)}</option>`).join('');
-  root.getElementById('proveedores-list').innerHTML = provs.map(p => `<option value="${escapeHtml(p)}">`).join('');
-  root.getElementById('filtro-sucursal').innerHTML = '<option value="">Todas</option>' +
-    SUCURSALES.map(x => `<option ${x===filtros.sucursal?'selected':''}>${x}</option>`).join('') +
-    (entries.some(e => !e.sucursal) ? `<option value="-" ${filtros.sucursal==='-'?'selected':''}>Sin sucursal</option>` : '');
-  root.getElementById('filtro-estado').value = filtros.estado;
-  root.getElementById('busqueda').value = filtros.busqueda;
-}
-
-function renderLista() {
-  const list = getFiltered();
-  const cont = root.getElementById('lista-content');
-  if (list.length === 0) {
-    cont.innerHTML = emptyStateHtml();
-    root.getElementById('empty-add')?.addEventListener('click', () => openModal());
-    return;
-  }
-  // Un registro = un documento (boleta/factura/vale) con uno o más ítems
-  const gs = new Set(list.map(grupoDe));
-  const docs = agruparDocs(entries.filter(e => gs.has(grupoDe(e))));
-  const totalDocs = docs.reduce((s, d) => s + d.total, 0);
-  const rows = docs.map(d => {
-    const uno = d.items.length === 1 ? d.items[0] : null;
-    const detalle = uno
-      ? `<div class="text-muted">${escapeHtml(uno.producto)}</div>`
-      : `<div class="doc-items">${d.items.map(it => `
-          <div class="doc-item"><span class="doc-item-prod">${escapeHtml(it.producto)}</span><span class="doc-item-num">${fmtNum(it.cantidad)} ${escapeHtml(it.unidad)} × ${fmtCLP(it.costoUnitario)}</span></div>`).join('')}
-        </div>`;
-    return `
-    <tr data-id="${escapeHtml(d.grupo)}">
-      <td class="mono text-muted" style="font-size:12px;">
-        ${d.fecha}${d.referencia ? `<div class="text-faint">${escapeHtml(d.referencia)}</div>` : ''}
-        <div class="suc-badge${d.sucursal ? '' : ' suc-vacia'}">${escapeHtml(d.sucursal || 'Sin sucursal')}</div>
-        ${tipoBadge(d)}
-      </td>
-      <td>
-        <div class="product-name">${escapeHtml(d.proveedor)}</div>
-        ${detalle}
-        ${d.notas ? `<div class="note-text">${escapeHtml(d.notas)}</div>` : ''}
-      </td>
-      <td class="right mono">${uno ? `${fmtNum(uno.cantidad)} <span class="text-faint">${escapeHtml(uno.unidad)}</span>` : `<span class="text-faint">${d.items.length} ítems</span>`}</td>
-      <td class="right mono">${uno ? fmtCLP(uno.costoUnitario) : ''}</td>
-      <td class="right mono" style="font-weight:600;">${fmtCLP(d.total)}</td>
-      <td>
-        <select class="estado-select ${ESTADOS[d.estado].cls}" data-id="${escapeHtml(d.grupo)}" data-action="estado">
-          ${Object.entries(ESTADOS).map(([k,v]) => `<option value="${k}" ${k===d.estado?'selected':''}>${v.label}</option>`).join('')}
-        </select>
-      </td>
-      <td>
-        <div class="row-actions">
-          ${d.fotoUrl ? `<button class="icon-btn" data-id="${escapeHtml(d.grupo)}" data-action="ver-foto" title="Ver foto"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg></button>` : ''}
-          <button class="icon-btn" data-id="${escapeHtml(d.grupo)}" data-action="edit" title="Editar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg></button>
-          <button class="icon-btn danger" data-id="${escapeHtml(d.grupo)}" data-action="delete" title="Eliminar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"/></svg></button>
-        </div>
-      </td>
-    </tr>`;
-  }).join('');
-
-  cont.innerHTML = `
-    <div class="table-wrap">
-      <table>
-        <thead><tr>
-          <th>Fecha</th><th>Proveedor / Producto</th><th class="right">Cantidad</th>
-          <th class="right">C. Unit.</th><th class="right">Subtotal</th><th>Estado</th><th></th>
-        </tr></thead>
-        <tbody>${rows}</tbody>
-        <tfoot><tr>
-          <td colspan="4">Total · ${docs.length} ${docs.length===1?'registro':'registros'}</td>
-          <td class="total">${fmtCLP(totalDocs)}</td>
-          <td colspan="2"></td>
-        </tr></tfoot>
-      </table>
-    </div>`;
-
-  cont.querySelectorAll('[data-action="estado"]').forEach(s => s.addEventListener('change', onEstadoChange));
-  cont.querySelectorAll('[data-action="edit"]').forEach(b => b.addEventListener('click', () => openModal(b.dataset.id)));
-  cont.querySelectorAll('[data-action="ver-foto"]').forEach(b => b.addEventListener('click', () => verFoto(b.dataset.id)));
-  cont.querySelectorAll('[data-action="delete"]').forEach(b => b.addEventListener('click', () => {
-    confirmDeleteId = b.dataset.id;
-    root.getElementById('modal-delete').classList.remove('hidden');
-  }));
-}
-
-// ----------- Documentos: varios ítems = un solo registro -----------
-// En la hoja cada ítem es una fila (así el reporte y el dashboard por producto siguen funcionando),
-// y las filas de un mismo documento comparten la columna "grupo". Filas antiguas sin grupo = documento de 1 ítem.
-function grupoDe(e) { return e.grupo || e.id; }
-function itemsDe(g) { return entries.filter(e => grupoDe(e) === g).sort((a, b) => a.creadoEn - b.creadoEn); }
-function agruparDocs(list) {
-  const m = new Map();
-  list.forEach(e => { const g = grupoDe(e); if (!m.has(g)) m.set(g, []); m.get(g).push(e); });
-  return [...m.entries()].map(([g, items]) => {
-    items.sort((a, b) => a.creadoEn - b.creadoEn);
-    const p = items[0];
-    return { grupo: g, items, fecha: p.fecha, sucursal: p.sucursal, proveedor: p.proveedor, estado: p.estado,
-      referencia: p.referencia, notas: p.notas, creadoEn: p.creadoEn, tipoDoc: p.tipoDoc, facturaId: p.facturaId,
-      fotoUrl: items.map(x => x.fotoUrl).find(Boolean) || '',
-      total: items.reduce((s, x) => s + x.cantidad * x.costoUnitario, 0) };
-  }).sort((a, b) => b.fecha.localeCompare(a.fecha) || b.creadoEn - a.creadoEn);
-}
-// Reemplaza todas las filas del documento por las nuevas (en una sola llamada y con la foto subida una vez)
-async function guardarGrupo(grupo, nuevas, image, mimeType) {
-  nuevas.forEach(n => { n.grupo = grupo; });
-  const body = { action: 'save_group', grupo, entries: nuevas };
-  if (image) { body.image = image; body.mimeType = mimeType; }
-  const res = await apiPost(body);
-  if (!res.ok) throw new Error(res.error || 'Error al guardar');
-  if (res.fotoUrl) nuevas.forEach(n => { n.fotoUrl = res.fotoUrl; });
-  entries = entries.filter(e => grupoDe(e) !== grupo).concat(nuevas);
-}
-
-function renderResumen() {
-  const list = getFiltered();
-  const cont = root.getElementById('resumen-content');
-  if (list.length === 0) {
-    cont.innerHTML = '<div class="table-card">' + emptyStateHtml() + '</div>';
-    root.getElementById('empty-add')?.addEventListener('click', () => openModal());
-    return;
-  }
-  const map = new Map();
-  list.forEach(e => {
-    if (!map.has(e.proveedor)) map.set(e.proveedor, { proveedor: e.proveedor, items: [], total:0, pendiente:0, recibido:0, facturado:0 });
-    const g = map.get(e.proveedor);
-    const sub = e.cantidad * e.costoUnitario;
-    g.items.push(e); g.total += sub; g[e.estado] = (g[e.estado]||0) + sub;
-  });
-  const grupos = [...map.values()].sort((a,b) => b.total - a.total);
-  cont.innerHTML = grupos.map(g => `
-    <div class="proveedor-card">
-      <div class="proveedor-header">
-        <div>
-          <div class="proveedor-title">${escapeHtml(g.proveedor)}</div>
-          <div class="proveedor-meta">${g.items.length} ${g.items.length===1?'registro':'registros'}</div>
-        </div>
-        <div class="proveedor-totals">
-          <div class="proveedor-total">${fmtCLP(g.total)}</div>
-          <div class="proveedor-breakdown">
-            ${g.pendiente>0 ? `<span class="breakdown-pendiente">P: ${fmtCLP(g.pendiente)}</span>` : ''}
-            ${g.recibido>0 ? `<span class="breakdown-recibido">R: ${fmtCLP(g.recibido)}</span>` : ''}
-            ${g.facturado>0 ? `<span class="breakdown-facturado">F: ${fmtCLP(g.facturado)}</span>` : ''}
+  // ============ INIT ============
+  function init(container) {
+    if (!container) { console.error('ContendedoresSection.init(): falta container'); return; }
+    root = container;
+    injectStyles();
+    root.innerHTML = `
+      <div class="ci">
+        <div class="ci-head">
+          <div>
+            <h1>📦 Control Importaciones</h1>
+            <p>Importaciones desde el Excel Control Contenedores 2026 (límite ${HORA_LIMITE})</p>
           </div>
+          <button class="ci-btn" id="ci-refresh">🔄 Actualizar ahora</button>
         </div>
-      </div>
-      ${g.items.map(e => `
-        <div class="proveedor-item">
-          <div class="item-main">
-            <div>${escapeHtml(e.producto)}</div>
-            <div class="item-detail">${e.fecha}${e.sucursal ? ' · ' + escapeHtml(e.sucursal) : ''} · ${fmtNum(e.cantidad)} ${escapeHtml(e.unidad)} × ${fmtCLP(e.costoUnitario)}${e.referencia ? ' · ' + escapeHtml(e.referencia) : ''}</div>
-          </div>
-          <div class="item-estado ${ESTADOS[e.estado].cls}">${ESTADOS[e.estado].label}</div>
-          <div class="item-subtotal">${fmtCLP(e.cantidad * e.costoUnitario)}</div>
-        </div>`).join('')}
-    </div>`).join('');
-}
-
-// ----------- Dashboard -----------
-function barras(lista, total, cls = '') {
-  if (!lista.length) return '<div class="dash-vacio">Sin datos en este período</div>';
-  const max = Math.max(...lista.map(x => x.valor), 1);
-  return lista.map(x => `
-    <div class="dash-bar-row">
-      <div class="dash-bar-label" title="${escapeHtml(x.nombre)}">${escapeHtml(x.nombre)}</div>
-      <div class="dash-bar-track"><div class="dash-bar ${cls}" style="width:${(x.valor / max * 100).toFixed(1)}%"></div></div>
-      <div class="dash-bar-val">${fmtCLP(x.valor)}${total ? `<span>${Math.round(x.valor / total * 100)}%</span>` : ''}</div>
-    </div>`).join('');
-}
-function agrupar(list, clave) {
-  const m = new Map();
-  list.forEach(e => { const k = clave(e); m.set(k, (m.get(k) || 0) + e.cantidad * e.costoUnitario); });
-  return [...m.entries()].map(([nombre, valor]) => ({ nombre, valor })).sort((a, b) => b.valor - a.valor);
-}
-function renderDashboard() {
-  const cont = root.getElementById('dashboard-content');
-  const todos = !filtros.mes;                                         // "Todos los meses"
-  const mes = filtros.mes || monthOf(today());
-  const base = getFiltered({ sinMes: true });                       // respeta sucursal/proveedor/estado/búsqueda
-  const enPeriodo = e => todos || monthOf(e.fecha) === mes;
-  const delMes = base.filter(enPeriodo);
-  const previo = todos ? [] : base.filter(e => monthOf(e.fecha) === mesAnterior(mes));
-  const mesesConDatos = new Set(delMes.map(e => monthOf(e.fecha)).filter(Boolean)).size;
-  const sum = l => l.reduce((s, e) => s + e.cantidad * e.costoUnitario, 0);
-  const total = sum(delMes), totalPrev = sum(previo);
-  const variacion = totalPrev > 0 ? (total - totalPrev) / totalPrev * 100 : null;
-  const porFacturar = delMes.filter(e => e.estado !== 'facturado');
-  const docsMes = agruparDocs(delMes);
-  const conFoto = docsMes.filter(d => d.fotoUrl).length;
-  const nPorFacturar = new Set(porFacturar.map(grupoDe)).size;
-
-  // Por sucursal: mismo mes y filtros, pero siempre todas las sucursales
-  const mesTodas = getFiltered({ sinMes: true, sinSucursal: true }).filter(enPeriodo);
-  const porSuc = agrupar(mesTodas, e => e.sucursal || 'Sin sucursal');
-  SUCURSALES.forEach(s => { if (!porSuc.some(x => x.nombre === s)) porSuc.push({ nombre: s, valor: 0 }); });
-  const totalTodas = sum(mesTodas);
-
-  // Tendencia: 6 meses hasta el mes elegido, o 12 meses en "Todos los meses"
-  const nCols = todos ? 12 : 6;
-  const meses = Array.from({ length: nCols }, (_, i) => mesAnterior(mes, nCols - 1 - i));
-  const tend = meses.map(m => ({ m, v: sum(base.filter(e => monthOf(e.fecha) === m)) }));
-  const maxT = Math.max(...tend.map(t => t.v), 1);
-
-  const tituloSuc = filtros.sucursal ? (filtros.sucursal === '-' ? 'Sin sucursal' : filtros.sucursal) : 'Todas las sucursales';
-  cont.innerHTML = `
-    <div class="dash-titulo">${tituloSuc} · ${todos ? 'Todos los meses' : mesTxt(mes)}</div>
-    <div class="summary-grid">
-      <div class="summary-card highlight">
-        <div class="label-row"><span class="label">${todos ? 'Total histórico' : 'Total del mes'}</span></div>
-        <div class="value">${fmtCLP(total)}</div>
-        <div class="sub">${todos ? `${mesesConDatos} ${mesesConDatos === 1 ? 'mes' : 'meses'} · prom. ${fmtCLP(mesesConDatos ? total / mesesConDatos : 0)}/mes` : variacion === null ? 'Sin datos del mes anterior' : (variacion >= 0 ? '▲ ' : '▼ ') + Math.abs(variacion).toFixed(1) + '% vs ' + mesTxt(mesAnterior(mes))}</div>
-      </div>
-      <div class="summary-card">
-        <div class="label-row"><span class="label">Registros</span></div>
-        <div class="value">${docsMes.length}</div>
-        <div class="sub">${(n => n + (n === 1 ? ' proveedor' : ' proveedores'))(new Set(delMes.map(e => e.proveedor)).size)}</div>
-      </div>
-      <div class="summary-card">
-        <div class="label-row"><span class="dot" style="background:var(--amber-dot)"></span><span class="label">Por facturar</span></div>
-        <div class="value">${fmtCLP(sum(porFacturar))}</div>
-        <div class="sub">${nPorFacturar} ${nPorFacturar === 1 ? 'registro' : 'registros'} pendiente o recibido</div>
-      </div>
-      <div class="summary-card">
-        <div class="label-row"><span class="label">Con foto</span></div>
-        <div class="value">${conFoto} / ${docsMes.length}</div>
-        <div class="sub">${docsMes.length ? Math.round(conFoto / docsMes.length * 100) : 0}% respaldado</div>
-      </div>
-    </div>
-    <div class="dash-grid">
-      ${panelVales()}
-      <div class="dash-panel">
-        <div class="dash-panel-title">Por sucursal</div>
-        ${barras(porSuc, totalTodas, 'suc')}
-      </div>
-      <div class="dash-panel">
-        <div class="dash-panel-title">Últimos ${nCols} meses</div>
-        <div class="dash-cols${todos ? ' doce' : ''}">
-          ${tend.map(t => `
-            <div class="dash-col${t.m === mes ? ' actual' : ''}">
-              <div class="dash-col-val">${t.v ? fmtCorto(t.v) : ''}</div>
-              <div class="dash-col-track"><div class="dash-col-bar" style="height:${(t.v / maxT * 100).toFixed(1)}%"></div></div>
-              <div class="dash-col-label">${mesTxt(t.m)}</div>
-            </div>`).join('')}
+        <div class="ci-kpis" id="ci-kpis"></div>
+        <p class="ci-meta" id="ci-meta">Cargando…</p>
+        <div class="ci-tabs" role="tablist">
+          <button class="ci-tab" data-tab="proximos" role="tab">📅 Próximos</button>
+          <button class="ci-tab" data-tab="todas" role="tab">📋 Todas<span class="ci-hide-sm"> las importaciones</span></button>
+          <button class="ci-tab" data-tab="packing" role="tab">📦 Packing<span class="ci-hide-sm"> lists</span></button>
+          <button class="ci-tab" data-tab="dashboard" role="tab">📊 Dashboard</button>
         </div>
-      </div>
-      <div class="dash-panel">
-        <div class="dash-panel-title">Top proveedores</div>
-        ${barras(agrupar(delMes, e => e.proveedor).slice(0, 6), total)}
-      </div>
-      <div class="dash-panel">
-        <div class="dash-panel-title">Top productos</div>
-        ${barras(agrupar(delMes, e => e.producto).slice(0, 6), total)}
-      </div>
-    </div>`;
-  cont.querySelector('[data-goto]')?.addEventListener('click', () => irA('documentos'));
-}
-
-// ----------- Autocompletar: proveedores existentes y productos del proveedor -----------
-function similitud(q, v) {
-  const x = normProv(q), y = normProv(v);
-  if (!x || !y) return 0;
-  if (x === y) return 100;
-  if (y.startsWith(x)) return 90;
-  if (y.includes(x) || x.includes(y)) return 75;
-  const px = x.split(' '), py = y.split(' ');
-  if (px[0].length >= 3 && px[0] === py[0]) return 60;
-  const comunes = px.filter(w => w.length >= 3 && py.some(z => z.startsWith(w) || w.startsWith(z))).length;
-  return comunes ? 40 + comunes * 5 : 0;
-}
-function fuenteProveedores() {
-  const m = new Map();
-  entries.forEach(e => { if (e.proveedor) m.set(e.proveedor, (m.get(e.proveedor) || new Set()).add(grupoDe(e))); });
-  documentos.forEach(d => { if (d.proveedor && !m.has(d.proveedor)) m.set(d.proveedor, new Set()); });
-  return [...m.entries()].map(([valor, g]) => ({ valor, n: g.size, detalle: g.size + (g.size === 1 ? ' registro' : ' registros') }));
-}
-// Productos ya comprados a un proveedor, con la última unidad y el último precio usados
-function productosDe(proveedor) {
-  const k = normProv(proveedor);
-  const m = new Map();
-  [...entries].sort((a, b) => a.fecha.localeCompare(b.fecha) || a.creadoEn - b.creadoEn).forEach(e => {
-    if (!e.producto || (k && normProv(e.proveedor) !== k)) return;
-    const key = normProv(e.producto);
-    const x = m.get(key) || { n: 0 };
-    Object.assign(x, { valor: e.producto, unidad: e.unidad, costo: e.costoUnitario, proveedor: e.proveedor });
-    x.n++;
-    m.set(key, x);
-  });
-  return [...m.values()];
-}
-function fuenteProductos() {
-  const prov = root.getElementById('f-proveedor').value.trim();
-  let l = productosDe(prov);
-  const otros = !!prov && !l.length;           // proveedor nuevo: se muestran productos de todos
-  if (!prov || otros) l = productosDe('');
-  return l.map(x => ({ ...x, detalle: fmtCLP(x.costo) + ' / ' + x.unidad + (!prov || otros ? ' · ' + x.proveedor : '') }));
-}
-function autocompletar(input, fuente, alElegir) {
-  const wrap = input.parentElement;
-  wrap.classList.add('ac-wrap');
-  input.setAttribute('autocomplete', 'off');
-  input.removeAttribute('list');
-  const box = document.createElement('div');
-  box.className = 'ac-box hidden';
-  wrap.appendChild(box);
-  let items = [], activo = -1;
-  const cerrar = () => { box.classList.add('hidden'); activo = -1; };
-  function mostrar() {
-    const q = input.value.trim();
-    const todos = fuente();
-    items = (q
-      ? todos.map(x => ({ ...x, s: similitud(q, x.valor) })).filter(x => x.s > 0).sort((a, b) => b.s - a.s || b.n - a.n)
-      : todos.slice().sort((a, b) => b.n - a.n)).slice(0, 8);
-    if (items.length === 1 && normProv(items[0].valor) === normProv(q)) items = []; // ya está elegido
-    if (!items.length) { cerrar(); return; }
-    box.innerHTML = items.map((x, i) => `<div class="ac-item${i === activo ? ' activo' : ''}" data-i="${i}"><span class="ac-val">${escapeHtml(x.valor)}</span><span class="ac-det">${escapeHtml(x.detalle || '')}</span></div>`).join('');
-    box.style.top = (input.offsetTop + input.offsetHeight + 2) + 'px';
-    box.classList.remove('hidden');
-  }
-  function elegir(x) {
-    input.value = x.valor;
-    cerrar();
-    input.dispatchEvent(new Event('input'));
-    cerrar();
-    if (alElegir) alElegir(x);
-  }
-  box.addEventListener('mousedown', ev => ev.preventDefault()); // no perder el foco al tocar la lista
-  box.addEventListener('click', ev => { const it = ev.target.closest('.ac-item'); if (it) elegir(items[+it.dataset.i]); });
-  input.addEventListener('focus', mostrar);
-  input.addEventListener('input', mostrar);
-  input.addEventListener('blur', () => setTimeout(cerrar, 150));
-  input.addEventListener('keydown', ev => {
-    if (box.classList.contains('hidden')) return;
-    if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
-      ev.preventDefault();
-      activo = (activo + (ev.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
-      box.querySelectorAll('.ac-item').forEach((n, i) => n.classList.toggle('activo', i === activo));
-    } else if (ev.key === 'Enter' && activo >= 0) { ev.preventDefault(); elegir(items[activo]); }
-    else if (ev.key === 'Escape') { ev.stopPropagation(); cerrar(); }
-  });
-}
-// Al elegir un producto ya comprado, se completan unidad y último precio (si el precio está vacío)
-function aplicarProducto(x, unidadSel, costoInput) {
-  if (UNIDADES.includes(x.unidad)) unidadSel.value = x.unidad;
-  if (!costoInput.value && x.costo) costoInput.value = x.costo;
-  updateSubtotalPreview();
-}
-// Si el proveedor escrito (o leído de la foto) no existe, sugiere los parecidos
-function sugerirProveedor() {
-  const input = root.getElementById('f-proveedor');
-  const cont = root.getElementById('prov-sug');
-  const v = input.value.trim();
-  const lista = fuenteProveedores();
-  if (!v || lista.some(x => normProv(x.valor) === normProv(v))) { cont.classList.add('hidden'); return; }
-  const sim = lista.map(x => ({ ...x, s: similitud(v, x.valor) })).filter(x => x.s >= 40).sort((a, b) => b.s - a.s || b.n - a.n).slice(0, 3);
-  if (!sim.length) { cont.innerHTML = '<span class="text-faint">Proveedor nuevo</span>'; cont.classList.remove('hidden'); return; }
-  cont.innerHTML = '<span class="text-faint">¿Es alguno de estos?</span>' + sim.map(x => `<button type="button" class="sug-chip" data-v="${escapeHtml(x.valor)}">${escapeHtml(x.valor)}</button>`).join('');
-  cont.classList.remove('hidden');
-  cont.querySelectorAll('.sug-chip').forEach(b => b.addEventListener('click', () => {
-    input.value = b.dataset.v;
-    sugerirProveedor();
-    const p = root.getElementById('f-producto');
-    if (!p.value) p.focus();
-  }));
-}
-
-function emptyStateHtml() {
-  return `
-    <div class="empty-state">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16.5 9.4 7.55 4.24"/><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
-      <h3>No hay registros en este filtro</h3>
-      <p>Agrega tu primer pedido o ajusta los filtros</p>
-      <button class="btn btn-primary" id="empty-add">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-        Nuevo registro
-      </button>
-    </div>`;
-}
-
-// ----------- Acciones sobre datos -----------
-async function onEstadoChange(ev) {
-  const g = ev.target.dataset.id;
-  const nuevoEstado = ev.target.value;
-  const items = itemsDe(g);
-  if (!items.length) return;
-  const nuevas = items.map(e => ({ ...e, estado: nuevoEstado, actualizadoEn: Date.now() }));
-  setSyncStatus('loading','Guardando…');
-  try {
-    await guardarGrupo(g, nuevas);
-    setSyncStatus('ok','Sincronizado');
-    render();
-  } catch (err) {
-    setSyncStatus('error','Error al guardar · recargando…');
-    setTimeout(loadEntries, 800);
-  }
-}
-
-// ----------- Registrar por foto -----------
-// Redimensiona/comprime la foto en el navegador antes de enviarla (las fotos de celular
-// pueden pesar varios MB, lo que hace lento tanto el análisis con Gemini como la subida a Drive).
-function resizeImage(file, maxDim = 1600, quality = 0.8) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const img = new Image();
-      img.onload = () => {
-        let { width, height } = img;
-        if (width > maxDim || height > maxDim) {
-          if (width > height) { height = Math.round(height * (maxDim / width)); width = maxDim; }
-          else { width = Math.round(width * (maxDim / height)); height = maxDim; }
-        }
-        const canvas = document.createElement('canvas');
-        canvas.width = width; canvas.height = height;
-        canvas.getContext('2d').drawImage(img, 0, 0, width, height);
-        resolve(canvas.toDataURL('image/jpeg', quality));
-      };
-      img.onerror = () => reject(new Error('No se pudo procesar la imagen'));
-      img.src = reader.result;
-    };
-    reader.onerror = () => reject(new Error('No se pudo leer el archivo'));
-    reader.readAsDataURL(file);
-  });
-}
-
-async function handleFotoSeleccionada(e) {
-  const file = e.target.files[0];
-  e.target.value = ''; // permite volver a elegir la misma foto después
-  if (!file) return;
-
-  let dataUrl;
-  try {
-    dataUrl = await resizeImage(file);
-  } catch {
-    alert('No se pudo leer la imagen.');
-    return;
-  }
-  const base64 = dataUrl.split(',')[1];
-  const mimeType = 'image/jpeg';
-
-  root.getElementById('foto-preview').src = dataUrl;
-  const status = root.getElementById('foto-status');
-  status.textContent = 'Extrayendo datos…';
-  root.getElementById('modal-foto').classList.remove('hidden');
-  // Gemini a veces tarda porque el servidor reintenta con otro modelo: se avisa para que no parezca pegado
-  const aviso = setTimeout(() => { status.textContent = 'Gemini está lento, probando de nuevo…'; }, 12000);
-
-  let data = {}, errorLectura = null;
-  try {
-    const res = await apiPost({ action: 'extract', image: base64, mimeType }, 100000);
-    if (!res.ok) throw new Error(res.error || 'No se pudieron extraer los datos');
-    data = res.data || {};
-  } catch (err) {
-    errorLectura = err.message; // la foto NO se pierde: se abre el registro con la foto adjunta
-  } finally {
-    clearTimeout(aviso);
-    root.getElementById('modal-foto').classList.add('hidden');
-  }
-  abrirModalConDatosExtraidos(data, base64, mimeType, errorLectura);
-}
-
-function abrirModalConDatosExtraidos(data, fotoBase64, fotoMime, errorLectura) {
-  openModal(); // limpia cualquier foto pendiente anterior
-  fotoPendienteBase64 = fotoBase64 || null;
-  fotoPendienteMime = fotoMime || null;
-  root.getElementById('modal-foto-indicator').classList.toggle('hidden', !fotoPendienteBase64);
-  // La fecha se fija al día de hoy (registro), no se usa la fecha manuscrita de la boleta.
-  const hoy = new Date();
-  const yyyy = hoy.getFullYear();
-  const mm = String(hoy.getMonth() + 1).padStart(2, '0');
-  const dd = String(hoy.getDate()).padStart(2, '0');
-  root.getElementById('f-fecha').value = `${yyyy}-${mm}-${dd}`;
-  if (data.proveedor) root.getElementById('f-proveedor').value = proveedorCanonico(data.proveedor);
-  if (data.documento) {
-    root.getElementById('f-referencia').value = data.documento;
-    root.getElementById('f-tipo').value = /factura/i.test(data.documento) ? 'factura' : /boleta/i.test(data.documento) ? 'boleta' : 'vale';
-  }
-  // Formato nuevo: data.items = [{producto, cantidad, costoUnitario}, ...]. Formato antiguo: un solo producto.
-  const items = Array.isArray(data.items) && data.items.length ? data.items
-    : (data.producto || data.costoUnitario != null) ? [data] : [];
-  items.forEach((it, i) => {
-    if (i === 0) {
-      if (it.producto) root.getElementById('f-producto').value = it.producto;
-      if (it.cantidad !== null && it.cantidad !== undefined) root.getElementById('f-cantidad').value = it.cantidad;
-      if (it.costoUnitario !== null && it.costoUnitario !== undefined) root.getElementById('f-costo').value = it.costoUnitario;
-    } else {
-      agregarItem(it);
-    }
-  });
-  root.getElementById('f-estado').value = 'recibido';
-  sugerirProveedor();
-  root.getElementById('f-notas').value = errorLectura
-    ? 'Foto adjunta — los datos no se pudieron extraer, ingresados a mano.'
-    : 'Datos extraídos de la foto — revisa antes de guardar.';
-  if (errorLectura) {
-    setTimeout(() => alert('No se pudieron extraer los datos automáticamente.\n\n' + errorLectura + '\n\nLa foto quedó adjunta: completa los datos a mano y guarda.'), 50);
-  } else if (items.length > 1) {
-    setTimeout(() => alert('Se detectaron ' + items.length + ' ítems. Revísalos antes de guardar: quedan todos en un mismo registro.'), 50);
-  }
-  updateSubtotalPreview();
-}
-
-// Solo guarda la foto (sin Gemini): sirve para respaldar vales, guías o documentos que no hay que leer
-async function leerFotoSinAnalisis(file) {
-  const dataUrl = await resizeImage(file);
-  return { base64: dataUrl.split(',')[1], mimeType: 'image/jpeg' };
-}
-async function handleSoloFoto(e) {
-  const file = e.target.files[0];
-  e.target.value = '';
-  if (!file) return;
-  let f;
-  try { f = await leerFotoSinAnalisis(file); } catch { alert('No se pudo leer la imagen.'); return; }
-  openModal();
-  fotoPendienteBase64 = f.base64; fotoPendienteMime = f.mimeType;
-  root.getElementById('modal-foto-indicator').classList.remove('hidden');
-}
-// Adjuntar o cambiar la foto desde el formulario (nuevo o edición), sin análisis
-async function handleAdjuntarFoto(e) {
-  const file = e.target.files[0];
-  e.target.value = '';
-  if (!file) return;
-  try {
-    const f = await leerFotoSinAnalisis(file);
-    fotoPendienteBase64 = f.base64; fotoPendienteMime = f.mimeType;
-    root.getElementById('modal-foto-indicator').classList.remove('hidden');
-  } catch { alert('No se pudo leer la imagen.'); }
-}
-
-function verFoto(g) {
-  const url = itemsDe(g).map(x => x.fotoUrl).find(Boolean);
-  if (!url) return;
-  root.getElementById('foto-ver-img').src = url;
-  root.getElementById('modal-ver-foto').classList.remove('hidden');
-}
-function cerrarVerFoto() { root.getElementById('modal-ver-foto').classList.add('hidden'); }
-
-async function openModal(id) {
-  editingId = id || null;
-  fotoPendienteBase64 = null;
-  fotoPendienteMime = null;
-  root.getElementById('modal-foto-indicator').classList.add('hidden');
-  root.getElementById('items-extra').innerHTML = '';
-  root.getElementById('item1-label').classList.add('hidden');
-  root.getElementById('modal-title').textContent = editingId ? 'Editar registro' : 'Nuevo registro';
-  root.getElementById('modal-save-label').textContent = editingId ? 'Guardar cambios' : 'Agregar registro';
-  root.getElementById('f-sucursal').value = sucursalEquipo();
-  const items = editingId ? itemsDe(editingId) : [];
-  if (items.length) {
-    const e = items[0];
-    root.getElementById('f-sucursal').value = e.sucursal || '';
-    root.getElementById('f-fecha').value = e.fecha;
-    root.getElementById('f-proveedor').value = e.proveedor;
-    root.getElementById('f-producto').value = e.producto;
-    root.getElementById('f-cantidad').value = e.cantidad;
-    root.getElementById('f-unidad').value = e.unidad;
-    root.getElementById('f-costo').value = e.costoUnitario;
-    root.getElementById('f-estado').value = e.estado;
-    root.getElementById('f-tipo').value = e.tipoDoc || 'vale';
-    root.getElementById('f-referencia').value = e.referencia;
-    root.getElementById('f-notas').value = e.notas;
-    items.slice(1).forEach(it => agregarItem(it));
-  } else {
-    editingId = null;
-    root.getElementById('f-fecha').value = today();
-    root.getElementById('f-proveedor').value = '';
-    root.getElementById('f-producto').value = '';
-    root.getElementById('f-cantidad').value = '';
-    root.getElementById('f-unidad').value = 'unidad';
-    root.getElementById('f-costo').value = '';
-    root.getElementById('f-estado').value = 'pendiente';
-    root.getElementById('f-tipo').value = 'vale';
-    root.getElementById('f-referencia').value = '';
-    root.getElementById('f-notas').value = '';
-  }
-  updateSubtotalPreview();
-  root.getElementById('prov-sug').classList.add('hidden');
-  root.getElementById('modal').classList.remove('hidden');
-  setTimeout(() => root.getElementById('f-proveedor').focus(), 50);
-}
-function closeModal() {
-  root.getElementById('modal').classList.add('hidden');
-  editingId = null;
-  fotoPendienteBase64 = null;
-  fotoPendienteMime = null;
-}
-
-function updateSubtotalPreview() {
-  const items = leerItems();
-  const total = items.reduce((s, it) => s + (it.cantidad > 0 && it.costoUnitario > 0 ? it.cantidad * it.costoUnitario : 0), 0);
-  const box = root.getElementById('subtotal-preview');
-  box.querySelector('.label').textContent = items.length > 1 ? `Total (${items.length} ítems)` : 'Subtotal calculado';
-  if (total > 0) {
-    root.getElementById('subtotal-value').textContent = fmtCLP(total);
-    box.classList.remove('hidden');
-  } else box.classList.add('hidden');
-}
-
-// ----------- Varios ítems por boleta/factura -----------
-const UNIDADES = ['unidad','caja','resma','rollo','pallet','kg','m','lt','paquete'];
-function agregarItem(it = {}) {
-  const cont = root.getElementById('items-extra');
-  const row = document.createElement('div');
-  row.className = 'item-extra';
-  const unidad = UNIDADES.includes(it.unidad) ? it.unidad : 'unidad';
-  row.innerHTML = `
-    <div class="item-extra-head">
-      <span class="item-num"></span>
-      <button type="button" class="icon-btn danger item-del" title="Quitar ítem">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-      </button>
-    </div>
-    <div class="field"><input type="text" class="input i-producto" placeholder="Producto / Descripción" value="${escapeHtml(it.producto || '')}"></div>
-    <div class="field-grid-3">
-      <div class="field"><input type="number" step="any" class="input font-mono i-cantidad" placeholder="Cantidad" value="${it.cantidad ?? ''}"></div>
-      <div class="field"><select class="input i-unidad">${UNIDADES.map(u => `<option${u === unidad ? ' selected' : ''}>${u}</option>`).join('')}</select></div>
-      <div class="field"><input type="number" step="any" class="input font-mono i-costo" placeholder="Costo unitario" value="${it.costoUnitario ?? ''}"></div>
-    </div>`;
-  row.querySelector('.item-del').addEventListener('click', () => { row.remove(); renumerarItems(); updateSubtotalPreview(); });
-  row.querySelectorAll('.i-cantidad, .i-costo').forEach(i => i.addEventListener('input', updateSubtotalPreview));
-  cont.appendChild(row);
-  autocompletar(row.querySelector('.i-producto'), fuenteProductos, x => aplicarProducto(x, row.querySelector('.i-unidad'), row.querySelector('.i-costo')));
-  renumerarItems();
-  updateSubtotalPreview();
-  return row;
-}
-function renumerarItems() {
-  const rows = root.getElementById('items-extra').querySelectorAll('.item-extra');
-  rows.forEach((r, i) => { r.querySelector('.item-num').textContent = 'Ítem ' + (i + 2); });
-  root.getElementById('item1-label').classList.toggle('hidden', rows.length === 0);
-}
-// Ítem 1 = campos principales; los demás vienen de #items-extra (se ignoran filas totalmente vacías)
-function leerItems() {
-  const items = [{
-    producto: root.getElementById('f-producto').value.trim(),
-    cantidad: parseFloat(root.getElementById('f-cantidad').value),
-    unidad: root.getElementById('f-unidad').value,
-    costoUnitario: parseFloat(root.getElementById('f-costo').value),
-  }];
-  root.getElementById('items-extra').querySelectorAll('.item-extra').forEach(r => {
-    const it = {
-      producto: r.querySelector('.i-producto').value.trim(),
-      cantidad: parseFloat(r.querySelector('.i-cantidad').value),
-      unidad: r.querySelector('.i-unidad').value,
-      costoUnitario: parseFloat(r.querySelector('.i-costo').value),
-    };
-    if (it.producto || !isNaN(it.cantidad) || !isNaN(it.costoUnitario)) items.push(it);
-  });
-  return items;
-}
-
-async function saveForm() {
-  const fecha = root.getElementById('f-fecha').value;
-  const sucursal = root.getElementById('f-sucursal').value;
-  let proveedor = root.getElementById('f-proveedor').value.trim();
-  const tipoDoc = root.getElementById('f-tipo').value;
-  const estado = root.getElementById('f-estado').value;
-  const referencia = root.getElementById('f-referencia').value.trim();
-  const notas = root.getElementById('f-notas').value.trim();
-  const items = leerItems();
-  if (!sucursal) { alert('Elige la sucursal que recepciona la compra.'); root.getElementById('f-sucursal').focus(); return; }
-  if (!fecha || !proveedor) { alert('Falta la fecha o el proveedor.'); return; }
-  guardarSucursalEquipo(sucursal);
-  const malo = items.findIndex(it => !it.producto || isNaN(it.cantidad) || isNaN(it.costoUnitario));
-  if (malo !== -1) { alert('Al ítem ' + (malo + 1) + ' le falta producto, cantidad o costo unitario.'); return; }
-  proveedor = proveedorCanonico(proveedor);
-  // Posible duplicado: mismo proveedor, fecha y monto que un registro existente
-  if (!editingId) {
-    const totalNuevo = Math.round(items.reduce((s, it) => s + it.cantidad * it.costoUnitario, 0));
-    const dup = agruparDocs(entries).find(d => d.fecha === fecha && Math.round(d.total) === totalNuevo && normProv(d.proveedor) === normProv(proveedor));
-    if (dup && !confirm(`Ya existe un registro de ${dup.proveedor} del ${fecha} por ${fmtCLP(dup.total)}${dup.sucursal ? ' en ' + dup.sucursal : ''}.\n\n¿Es una compra distinta? Aceptar = guardar igual.`)) return;
-  }
-
-  const saveBtn = root.getElementById('modal-save');
-  saveBtn.disabled = true;
-  setSyncStatus('loading','Guardando…');
-
-  try {
-    const ahora = Date.now();
-    const previos = editingId ? itemsDe(editingId) : [];
-    const grupo = editingId || ('g_' + uid().slice(2));
-    const fotoActual = previos.map(x => x.fotoUrl).find(Boolean) || '';
-    const nuevas = items.map((it, i) => ({
-      id: previos[i] ? previos[i].id : uid() + i,
-      sucursal, fecha, proveedor, producto: it.producto, cantidad: it.cantidad, unidad: it.unidad,
-      costoUnitario: it.costoUnitario, estado, referencia, notas, fotoUrl: fotoActual,
-      tipoDoc, facturaId: (previos[0] && previos[0].facturaId) || '',
-      creadoEn: previos[i] ? previos[i].creadoEn : ahora + i, actualizadoEn: ahora,
-    }));
-    await guardarGrupo(grupo, nuevas, fotoPendienteBase64, fotoPendienteMime);
-    fotoPendienteBase64 = null;
-    fotoPendienteMime = null;
-    setSyncStatus('ok','Sincronizado');
-    closeModal();
-    render();
-  } catch (err) {
-    alert('Error al guardar: ' + err.message);
-    setSyncStatus('error','Error al guardar');
-  } finally {
-    saveBtn.disabled = false;
-  }
-}
-
-async function deleteEntry(g) {
-  setSyncStatus('loading','Eliminando…');
-  try {
-    const res = await apiPost({ action: 'delete_group', grupo: g });
-    if (!res.ok) throw new Error(res.error);
-    entries = entries.filter(e => grupoDe(e) !== g);
-    render();
-    loadEntries(); // actualiza la papelera
-  } catch (err) {
-    alert('Error al eliminar: ' + err.message);
-    setSyncStatus('error','Error al eliminar');
-  }
-}
-
-// ----------- Documentos tributarios (facturas/boletas reales) y conciliación con vales -----------
-let editingDocId = null, docFotoB64 = null, docSeleccion = new Set();
-function normDoc(d) {
-  let grupos = [];
-  try { grupos = Array.isArray(d.grupos) ? d.grupos : JSON.parse(d.grupos || '[]'); } catch {}
-  return { id: String(d.id), tipo: d.tipo === 'boleta' ? 'boleta' : 'factura', numero: String(d.numero || ''), fecha: String(d.fecha || '').slice(0, 10),
-    proveedor: String(d.proveedor || ''), sucursal: String(d.sucursal || ''), neto: Number(d.neto) || 0, iva: Number(d.iva) || 0, total: Number(d.total) || 0,
-    fotoUrl: String(d.fotoUrl || ''), notas: String(d.notas || ''), grupos: grupos.map(String), creadoEn: Number(d.creadoEn) || 0 };
-}
-function normProv(s) { return String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(); }
-// Si el proveedor ya existe escrito de otra forma (mayúsculas, tildes, espacios), se usa el nombre existente
-function proveedorCanonico(p) { const k = normProv(p); return [...getProveedoresUnicos(), ...documentos.map(d => d.proveedor)].find(x => normProv(x) === k) || p; }
-function docLabel(d) { return (d.tipo === 'boleta' ? 'Boleta' : 'Factura') + ' N° ' + d.numero; }
-function tipoBadge(d) {
-  if (d.tipoDoc === 'boleta') return '<div class="tipo-badge tipo-ok">Boleta</div>';
-  if (d.tipoDoc === 'factura') return '<div class="tipo-badge tipo-ok">Factura</div>';
-  if (d.facturaId) {
-    const f = documentos.find(x => x.id === d.facturaId);
-    return `<div class="tipo-badge tipo-ok">Vale · ${f ? escapeHtml(docLabel(f)) : 'facturado'}</div>`;
-  }
-  return '<div class="tipo-badge tipo-pend">Vale · sin factura</div>';
-}
-function valesPendientes(lista = entries) { return agruparDocs(lista).filter(d => d.tipoDoc === 'vale' && !d.facturaId); }
-function diasDesde(f) { return Math.max(0, Math.floor((new Date(today() + 'T12:00:00') - new Date(f + 'T12:00:00')) / 86400000)); }
-function cuadreTxt(suma, total, neto, n) {
-  if (!n) return { n, suma, cls: 'cuadre-gris', txt: 'Sin vales asociados' };
-  const dif = Math.round(total - suma);
-  if (Math.abs(dif) <= 1) return { n, suma, cls: 'cuadre-ok', txt: 'Cuadra ✓' };
-  if (neto && Math.abs(Math.round(neto - suma)) <= 1) return { n, suma, cls: 'cuadre-ok', txt: 'Cuadra con el neto ✓' };
-  return { n, suma, cls: 'cuadre-mal', txt: (dif > 0 ? 'Factura mayor por ' : 'Vales mayores por ') + fmtCLP(Math.abs(dif)) };
-}
-function cuadreDoc(d) {
-  const vales = agruparDocs(entries.filter(e => d.grupos.includes(grupoDe(e))));
-  return cuadreTxt(vales.reduce((s, x) => s + x.total, 0), d.total, d.neto, vales.length);
-}
-function irA(v) {
-  vista = v;
-  root.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x.dataset.view === v));
-  render();
-}
-
-function panelVales() {
-  const pend = valesPendientes(entries.filter(e => !filtros.proveedor || e.proveedor === filtros.proveedor));
-  if (!pend.length) return `<div class="dash-panel dash-full"><div class="dash-panel-title">Vales sin factura</div><div class="dash-vacio vp-ok">Todos los vales tienen su factura ✓</div></div>`;
-  const total = pend.reduce((s, d) => s + d.total, 0);
-  const porSuc = new Map();
-  pend.forEach(d => {
-    const k = d.sucursal || 'Sin sucursal';
-    const x = porSuc.get(k) || { n: 0, total: 0, dias: 0 };
-    x.n++; x.total += d.total; x.dias = Math.max(x.dias, diasDesde(d.fecha));
-    porSuc.set(k, x);
-  });
-  return `
-    <div class="dash-panel dash-full">
-      <div class="vp-head">
-        <div class="dash-panel-title" style="margin:0;">Vales sin factura · ${pend.length} · ${fmtCLP(total)}</div>
-        <button class="btn btn-secondary btn-adjuntar" data-goto="documentos">Registrar factura</button>
-      </div>
-      ${[...porSuc.entries()].sort((a, b) => b[1].total - a[1].total).map(([k, x]) => `
-        <div class="vp-row">
-          <span class="vp-suc">${escapeHtml(k)}</span>
-          <span class="text-muted">${x.n} ${x.n === 1 ? 'vale' : 'vales'}</span>
-          <span class="${x.dias > 30 ? 'vp-alerta' : 'text-muted'}">${x.dias} ${x.dias === 1 ? 'día' : 'días'} el más antiguo</span>
-          <span class="vp-monto">${fmtCLP(x.total)}</span>
-        </div>`).join('')}
-    </div>`;
-}
-
-function renderDocumentos() {
-  const cont = root.getElementById('documentos-content');
-  const q = filtros.busqueda.trim().toLowerCase();
-  const lista = documentos
-    .filter(d => !filtros.mes || monthOf(d.fecha) === filtros.mes)
-    .filter(d => !filtros.sucursal || (filtros.sucursal === '-' ? !d.sucursal : d.sucursal === filtros.sucursal))
-    .filter(d => !filtros.proveedor || d.proveedor === filtros.proveedor)
-    .filter(d => !q || d.numero.toLowerCase().includes(q) || d.proveedor.toLowerCase().includes(q) || d.notas.toLowerCase().includes(q))
-    .sort((a, b) => b.fecha.localeCompare(a.fecha) || b.creadoEn - a.creadoEn);
-  const pend = valesPendientes();
-  const totalPend = pend.reduce((s, d) => s + d.total, 0);
-  cont.innerHTML = `
-    <div class="docs-bar">
-      <div class="docs-pend ${pend.length ? '' : 'ok'}">${pend.length ? `<b>${pend.length}</b> ${pend.length === 1 ? 'vale' : 'vales'} sin factura · ${fmtCLP(totalPend)}` : 'Todos los vales tienen factura ✓'}</div>
-      <button class="btn btn-primary" id="btn-nuevo-doc"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Registrar factura</button>
-    </div>
-    ${lista.length ? lista.map(d => { const c = cuadreDoc(d); return `
-      <div class="doc-card">
-        <div class="doc-card-main">
-          <div class="doc-card-top"><span class="product-name">${escapeHtml(docLabel(d))}</span><span class="suc-badge${d.sucursal ? '' : ' suc-vacia'}" style="margin:0;">${escapeHtml(d.sucursal || 'Varias')}</span></div>
-          <div class="text-muted">${escapeHtml(d.proveedor)} · ${d.fecha}</div>
-          <div class="doc-card-vales">${c.n} ${c.n === 1 ? 'vale' : 'vales'} · ${fmtCLP(c.suma)}</div>
-          ${d.notas ? `<div class="note-text">${escapeHtml(d.notas)}</div>` : ''}
-        </div>
-        <div class="doc-card-side">
-          <div class="doc-card-total">${fmtCLP(d.total)}</div>
-          <div class="cuadre-badge ${c.cls}">${c.txt}</div>
-          <div class="row-actions" style="opacity:1;">
-            ${d.fotoUrl ? `<button class="icon-btn" data-docfoto="${escapeHtml(d.id)}" title="Ver foto"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg></button>` : ''}
-            <button class="icon-btn" data-docedit="${escapeHtml(d.id)}" title="Editar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg></button>
-            <button class="icon-btn danger" data-docdel="${escapeHtml(d.id)}" title="Eliminar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"/></svg></button>
-          </div>
-        </div>
-      </div>`; }).join('') : `<div class="table-card"><div class="empty-state"><h3>No hay facturas en este filtro</h3><p>Registra la factura del proveedor y marca los vales que cubre</p></div></div>`}`;
-  root.getElementById('btn-nuevo-doc').addEventListener('click', () => abrirDoc());
-  cont.querySelectorAll('[data-docedit]').forEach(b => b.addEventListener('click', () => abrirDoc(b.dataset.docedit)));
-  cont.querySelectorAll('[data-docdel]').forEach(b => b.addEventListener('click', () => eliminarDoc(b.dataset.docdel)));
-  cont.querySelectorAll('[data-docfoto]').forEach(b => b.addEventListener('click', () => {
-    const d = documentos.find(x => x.id === b.dataset.docfoto);
-    if (!d) return;
-    root.getElementById('foto-ver-img').src = d.fotoUrl;
-    root.getElementById('modal-ver-foto').classList.remove('hidden');
-  }));
-}
-
-function abrirDoc(id) {
-  const d = id ? documentos.find(x => x.id === id) : null;
-  editingDocId = d ? d.id : null;
-  docFotoB64 = null;
-  root.getElementById('doc-title').textContent = d ? 'Editar ' + docLabel(d) : 'Registrar factura';
-  root.getElementById('d-tipo').value = d ? d.tipo : 'factura';
-  root.getElementById('d-numero').value = d ? d.numero : '';
-  root.getElementById('d-fecha').value = d ? d.fecha : today();
-  root.getElementById('d-proveedor').value = d ? d.proveedor : (filtros.proveedor || '');
-  root.getElementById('d-sucursal').value = d ? d.sucursal : (filtros.sucursal && filtros.sucursal !== '-' ? filtros.sucursal : '');
-  root.getElementById('d-neto').value = d && d.neto ? d.neto : '';
-  root.getElementById('d-iva').value = d && d.iva ? d.iva : '';
-  root.getElementById('d-total').value = d && d.total ? d.total : '';
-  root.getElementById('d-notas').value = d ? d.notas : '';
-  const ind = root.getElementById('d-foto-ind');
-  ind.textContent = 'Tiene foto';
-  ind.classList.toggle('hidden', !(d && d.fotoUrl));
-  docSeleccion = new Set(d ? d.grupos : []);
-  renderValesDoc();
-  root.getElementById('modal-doc').classList.remove('hidden');
-}
-function cerrarDoc() { root.getElementById('modal-doc').classList.add('hidden'); editingDocId = null; docFotoB64 = null; }
-
-function candidatosDoc() {
-  const prov = normProv(root.getElementById('d-proveedor').value);
-  const suc = root.getElementById('d-sucursal').value;
-  return agruparDocs(entries)
-    .filter(x => docSeleccion.has(x.grupo) || (x.tipoDoc === 'vale' && !x.facturaId
-      && (!prov || normProv(x.proveedor).includes(prov)) && (!suc || x.sucursal === suc)))
-    .sort((a, b) => a.fecha.localeCompare(b.fecha));
-}
-function renderValesDoc() {
-  const c = candidatosDoc();
-  const cont = root.getElementById('d-vales');
-  cont.innerHTML = c.length ? c.map(x => `
-    <label class="vale-row">
-      <input type="checkbox" data-g="${escapeHtml(x.grupo)}" ${docSeleccion.has(x.grupo) ? 'checked' : ''}>
-      <span class="vale-info"><b>${x.fecha}</b> · ${escapeHtml(x.sucursal || 'Sin sucursal')}<br><span class="text-muted">${escapeHtml(x.proveedor)} · ${escapeHtml(x.items.map(i => fmtNum(i.cantidad) + ' ' + i.producto).join(', '))}</span></span>
-      <span class="vale-monto">${fmtCLP(x.total)}</span>
-    </label>`).join('') : '<div class="dash-vacio">No hay vales sin factura para este proveedor' + (root.getElementById('d-sucursal').value ? ' y sucursal' : '') + '.</div>';
-  cont.querySelectorAll('input[type=checkbox]').forEach(ch => ch.addEventListener('change', () => {
-    ch.checked ? docSeleccion.add(ch.dataset.g) : docSeleccion.delete(ch.dataset.g);
-    actualizarCuadreDoc();
-  }));
-  root.getElementById('d-vales-info').textContent = c.length ? `${c.length} ${c.length === 1 ? 'vale disponible' : 'vales disponibles'}` : '';
-  actualizarCuadreDoc();
-}
-function actualizarCuadreDoc() {
-  const sel = agruparDocs(entries).filter(x => docSeleccion.has(x.grupo));
-  const suma = sel.reduce((s, x) => s + x.total, 0);
-  const total = parseFloat(root.getElementById('d-total').value) || 0;
-  const neto = parseFloat(root.getElementById('d-neto').value) || 0;
-  const c = cuadreTxt(suma, total, neto, sel.length);
-  root.getElementById('d-cuadre').innerHTML = `
-    <div><span class="text-muted">Vales marcados</span><b>${sel.length} · ${fmtCLP(suma)}</b></div>
-    <div><span class="text-muted">Total documento</span><b>${fmtCLP(total)}</b></div>
-    <div class="cuadre-badge ${c.cls}">${c.txt}</div>`;
-}
-function onNetoDoc() {
-  const neto = parseFloat(root.getElementById('d-neto').value);
-  if (!isNaN(neto)) {
-    const iva = Math.round(neto * 0.19);
-    root.getElementById('d-iva').value = iva;
-    root.getElementById('d-total').value = Math.round(neto + iva);
-  }
-  actualizarCuadreDoc();
-}
-function onIvaDoc() {
-  const neto = parseFloat(root.getElementById('d-neto').value) || 0;
-  const iva = parseFloat(root.getElementById('d-iva').value) || 0;
-  root.getElementById('d-total').value = Math.round(neto + iva);
-  actualizarCuadreDoc();
-}
-async function guardarDoc() {
-  const tipo = root.getElementById('d-tipo').value;
-  const numero = root.getElementById('d-numero').value.trim();
-  const fecha = root.getElementById('d-fecha').value;
-  const proveedor = proveedorCanonico(root.getElementById('d-proveedor').value.trim());
-  const sucursal = root.getElementById('d-sucursal').value;
-  const neto = parseFloat(root.getElementById('d-neto').value) || 0;
-  const iva = parseFloat(root.getElementById('d-iva').value) || 0;
-  const total = parseFloat(root.getElementById('d-total').value) || 0;
-  const notas = root.getElementById('d-notas').value.trim();
-  if (!numero || !fecha || !proveedor) { alert('Faltan el N° de documento, la fecha o el proveedor.'); return; }
-  if (total <= 0) { alert('Falta el total del documento.'); return; }
-  const repetido = documentos.find(x => x.id !== editingDocId && x.numero === numero && normProv(x.proveedor) === normProv(proveedor) && x.tipo === tipo);
-  if (repetido && !confirm(`Ya existe ${docLabel(repetido)} de ${repetido.proveedor}. ¿Guardar igual?`)) return;
-  const previo = editingDocId ? documentos.find(x => x.id === editingDocId) : null;
-  const d = { id: editingDocId || ('d_' + uid().slice(2)), tipo, numero, fecha, proveedor, sucursal, neto, iva, total, notas,
-    fotoUrl: previo ? previo.fotoUrl : '', creadoEn: previo ? previo.creadoEn : Date.now(), actualizadoEn: Date.now() };
-  const grupos = [...docSeleccion];
-  const btn = root.getElementById('doc-save');
-  btn.disabled = true;
-  setSyncStatus('loading', 'Guardando…');
-  try {
-    const body = { action: 'doc_save', documento: d, grupos };
-    if (docFotoB64) { body.image = docFotoB64; body.mimeType = 'image/jpeg'; }
-    const res = await apiPost(body);
-    if (!res.ok) throw new Error(res.error || 'Error al guardar');
-    if (res.fotoUrl) d.fotoUrl = res.fotoUrl;
-    const nd = normDoc({ ...d, grupos });
-    documentos = documentos.filter(x => x.id !== nd.id).concat(nd);
-    const set = new Set(grupos);
-    entries.forEach(e => {
-      if (set.has(grupoDe(e))) { e.facturaId = nd.id; e.estado = 'facturado'; }
-      else if (e.facturaId === nd.id) { e.facturaId = ''; e.estado = 'recibido'; }
-    });
-    setSyncStatus('ok', 'Sincronizado');
-    cerrarDoc();
-    render();
-  } catch (err) {
-    alert('Error al guardar: ' + err.message);
-    setSyncStatus('error', 'Error al guardar');
-  } finally { btn.disabled = false; }
-}
-async function eliminarDoc(id) {
-  const d = documentos.find(x => x.id === id);
-  if (!d || !confirm(`¿Eliminar ${docLabel(d)}? Se moverá a la papelera y sus vales quedarán sin factura.`)) return;
-  setSyncStatus('loading', 'Eliminando…');
-  try {
-    const res = await apiPost({ action: 'doc_delete', id });
-    if (!res.ok) throw new Error(res.error);
-    await loadEntries();
-  } catch (err) {
-    alert('Error al eliminar: ' + err.message);
-    setSyncStatus('error', 'Error al eliminar');
-  }
-}
-
-// ----------- Papelera -----------
-function abrirPapelera() { renderPapelera(); root.getElementById('modal-papelera').classList.remove('hidden'); }
-function cerrarPapelera() { root.getElementById('modal-papelera').classList.add('hidden'); }
-function renderPapelera() {
-  const cont = root.getElementById('pap-list');
-  cont.innerHTML = eliminados.length ? eliminados.map(x => `
-    <div class="pap-row">
-      <div class="pap-info">
-        <div class="pap-res">${escapeHtml(x.resumen)}</div>
-        <div class="text-faint" style="font-size:11px;">${x.tipo === 'documento' ? 'Factura / boleta' : 'Registro de compra'} · eliminado ${escapeHtml(x.eliminadoEn)}</div>
-      </div>
-      <button class="btn btn-secondary btn-adjuntar" data-rest="${escapeHtml(x.eliminadoId)}">Restaurar</button>
-    </div>`).join('') : '<div class="dash-vacio">La papelera está vacía.</div>';
-  cont.querySelectorAll('[data-rest]').forEach(b => b.addEventListener('click', async () => {
-    b.disabled = true; b.textContent = 'Restaurando…';
-    try {
-      const res = await apiPost({ action: 'restore', eliminadoId: b.dataset.rest });
-      if (!res.ok) throw new Error(res.error);
-      await loadEntries();
-      renderPapelera();
-    } catch (err) { alert('No se pudo restaurar: ' + err.message); b.disabled = false; b.textContent = 'Restaurar'; }
-  }));
-}
-
-// ----------- Ordenar proveedores -----------
-function abrirProveedores() { renderProveedores(); root.getElementById('modal-prov').classList.remove('hidden'); }
-function cerrarProveedores() { root.getElementById('modal-prov').classList.add('hidden'); }
-function renderProveedores() {
-  const m = new Map();
-  entries.forEach(e => {
-    if (!e.proveedor) return;
-    const x = m.get(e.proveedor) || { g: new Set(), total: 0 };
-    x.g.add(grupoDe(e)); x.total += e.cantidad * e.costoUnitario;
-    m.set(e.proveedor, x);
-  });
-  documentos.forEach(d => { if (d.proveedor && !m.has(d.proveedor)) m.set(d.proveedor, { g: new Set(), total: 0 }); });
-  const nombres = [...m.keys()].sort((a, b) => a.localeCompare(b, 'es'));
-  const primera = s => normProv(s).split(' ')[0];
-  const cont = root.getElementById('prov-list');
-  cont.innerHTML = nombres.length ? nombres.map(n => {
-    const x = m.get(n);
-    const sim = nombres.filter(o => o !== n && (normProv(o) === normProv(n) || (primera(o) && primera(o) === primera(n))));
-    const otros = [...sim, ...nombres.filter(o => o !== n && !sim.includes(o))];
-    return `
-      <div class="prov-row${sim.length ? ' prov-sim' : ''}">
-        <div class="prov-info">
-          <div class="product-name">${escapeHtml(n)}</div>
-          <div class="text-faint" style="font-size:11px;">${x.g.size} ${x.g.size === 1 ? 'registro' : 'registros'} · ${fmtCLP(x.total)}${sim.length ? ` · <span class="prov-aviso">¿es el mismo que ${sim.map(escapeHtml).join(', ')}?</span>` : ''}</div>
-        </div>
-        <div class="prov-acc">
-          <select class="input prov-sel"><option value="">Unir con…</option>${otros.map(o => `<option value="${escapeHtml(o)}">${escapeHtml(o)}</option>`).join('')}</select>
-          <button class="btn btn-secondary btn-adjuntar" data-unir="${escapeHtml(n)}">Unir</button>
-        </div>
+        <div id="ci-body"></div>
       </div>`;
-  }).join('') : '<div class="dash-vacio">Todavía no hay proveedores.</div>';
-  cont.querySelectorAll('[data-unir]').forEach(b => b.addEventListener('click', () => {
-    unirProveedor(b.dataset.unir, b.parentElement.querySelector('.prov-sel').value);
-  }));
-}
-async function unirProveedor(de, a) {
-  if (!a) { alert('Elige con qué proveedor unirlo.'); return; }
-  if (!confirm(`Todos los registros de "${de}" pasarán a llamarse "${a}". ¿Continuar?`)) return;
-  setSyncStatus('loading', 'Guardando…');
-  try {
-    const res = await apiPost({ action: 'rename_proveedor', de, a });
-    if (!res.ok) throw new Error(res.error);
-    entries.forEach(e => { if (e.proveedor === de) e.proveedor = a; });
-    documentos.forEach(d => { if (d.proveedor === de) d.proveedor = a; });
-    if (filtros.proveedor === de) filtros.proveedor = a;
-    setSyncStatus('ok', 'Sincronizado');
-    renderProveedores();
+
+    root.querySelector('#ci-refresh').addEventListener('click', () => cargar(true));
+    root.querySelectorAll('.ci-tab').forEach(b => b.addEventListener('click', () => irTab(b.dataset.tab)));
+    // root es el mismo elemento cada vez que se entra a la sección: los listeners se agregan una sola vez
+    // (si no, se acumulan y un click se ejecuta varias veces, ej. 3 PDFs iguales)
+    if (!root.dataset.ciBound) {
+      root.dataset.ciBound = '1';
+      root.addEventListener('click', e => {
+        const ver = e.target.closest('[data-pl]');
+        if (ver) { PackingLists.seleccionar(ver.dataset.pl); irTab('packing', true); return; }
+        const nuevo = e.target.closest('[data-plnew]');
+        if (nuevo) { irTab('packing'); PackingLists.formNuevo(nuevo.dataset.plnew); return; }
+        const pdf = e.target.closest('[data-plpdf]');
+        if (pdf) { PackingLists.pdfContenedores(pdf.dataset.plpdf.split(',')); return; }
+      });
+      root.addEventListener('input', e => {
+        if (e.target.id === 'ci-buscar') { filtro = e.target.value; renderTabla(); }
+      });
+    }
+
+    if (pendiente) { tab = 'todas'; filtro = pendiente; pendiente = null; }
+    cargar(true);
+    clearInterval(timer);
+    timer = setInterval(() => {
+      if (!root.querySelector('.ci')) { clearInterval(timer); return; } // salió de la sección
+      cargar(false);
+    }, REFRESH_MS);
+  }
+
+  // ============ DATOS ============
+  async function cargar(mostrarCarga) {
+    const metaEl = root.querySelector('#ci-meta');
+    if (mostrarCarga && metaEl) metaEl.textContent = 'Cargando…';
+    try {
+      const [res] = await Promise.all([fetch(API_URL, { cache: 'no-store' }), cargarHist(), PackingLists.cargar(false)]);
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || 'Respuesta inválida');
+      meta = { hoy: data.hoy, ahora: data.ahora, sync: data.sync };
+      const sig = JSON.stringify(data.rows);
+      const sigPL = PackingLists.firma();
+      if (sig === lastSig && sigPL === lastSigPL && !mostrarCarga) { renderMeta(); return; } // sin cambios: no redibuja
+      lastSigPL = sigPL;
+      lastSig = sig;
+      rows = unir(data.rows, hist ? hist.rows : []);
+      render();
+    } catch (err) {
+      console.error(err);
+      if (metaEl) metaEl.innerHTML = `<span class="ci-err">No se pudieron cargar los datos: ${esc(err.message)}. Revisa API_URL y que el Web App esté implementado con acceso "Cualquier usuario".</span>`;
+    }
+  }
+
+  async function cargarHist() {
+    if (hist || histError) return;
+    try {
+      const r = await fetch(HIST_URL);
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      hist = await r.json();
+    } catch (err) {
+      console.error('Histórico 2025:', err);
+      histError = err.message;
+    }
+  }
+
+  // Agrega el histórico sin duplicar lo que ya venga en el Excel 2026
+  function unir(actual, viejas) {
+    const ya = new Set(actual.map(r => normCont(r.contenedor) + '|' + (r.llegada || '')));
+    return actual.concat(viejas.filter(r => !ya.has(normCont(r.contenedor) + '|' + (r.llegada || ''))));
+  }
+
+  // ============ CLASIFICACIÓN ============
+  function clasificar(lista = rows, hoyIso = meta.hoy) {
+    const hoy = isoToDay(hoyIso);
+    const dow = (new Date(hoy * 86400000).getUTCDay() + 6) % 7; // 0 = lunes
+    const finSemana = hoy + (6 - dow);
+    const finProx = finSemana + 7;
+    const out = { hoy: [], dias: [], semana: [] };
+
+    lista.filter(r => !recep(r) && fechaRef(r)).forEach(r => {
+      if (r.llegada) {
+        const dl = isoToDay(r.llegada);
+        // HOY: llega hoy antes del límite, o llegada pasada sin recepcionar
+        if (dl < hoy) return out.hoy.push({ ...r, tag: 'atrasado', tagCls: 'late' });
+        if (dl === hoy && (!r.hora || r.hora < HORA_LIMITE)) return out.hoy.push(r);
+        // Llega hoy después del límite o mañana -> "Mañana"
+        const tag = (dl === hoy || dl === hoy + 1) ? { tag: 'mañana', tagCls: 'next' } : {};
+        if (dl === hoy || dl <= finSemana) return out.dias.push({ ...r, ...tag });
+        if (dl <= finProx) return out.semana.push({ ...r, ...tag });
+        return;
+      }
+      // Sin Fecha de Llegada: se usa la ETA
+      const d = isoToDay(r.eta);
+      // ETA hoy o pasada = ya está en puerto, falta que informen la salida
+      if (d <= hoy) return out.dias.push({ ...r, tag: 'por informar', tagCls: 'pend' });
+      if (d <= finSemana) return out.dias.push(r);
+      if (d <= finProx) return out.semana.push(r);
+    });
+    // Orden: mañana, atrasados, llegada confirmada, "por informar" y al final los que solo tienen ETA
+    const rango = r => r.tagCls === 'next' ? 0 : r.tagCls === 'late' ? 1 : r.llegada ? 2 : r.tagCls === 'pend' ? 3 : 4;
+    const orden = (a, b) => rango(a) - rango(b) || (fechaRef(a) + a.hora).localeCompare(fechaRef(b) + b.hora);
+    Object.values(out).forEach(l => l.sort(orden));
+    return out;
+  }
+
+  // ============ RENDER ============
+  function render() {
+    if (!root) return;
+    const g = clasificar();
+    const yHoy = meta.hoy.slice(0, 4);
+    const nRecep = rows.filter(r => recep(r) && String(fechaRef(r) || '').startsWith(yHoy)).length;
+    const nPend = rows.filter(r => !recep(r)).length;
+
+    root.querySelector('#ci-kpis').innerHTML = [
+      ['Hoy (antes ' + HORA_LIMITE + ')', g.hoy.length],
+      ['Próximos días', g.dias.length],
+      ['Próxima semana', g.semana.length],
+      ['✅ Recepcionados ' + yHoy, nRecep],
+      ['⏳ Pendientes', nPend]
+    ].map(([l, v]) => `<div class="ci-kpi"><span>${l}</span><strong>${v}</strong></div>`).join('');
+
+    renderMeta();
+
+    root.querySelectorAll('.ci-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+    const body = root.querySelector('#ci-body');
+
+    charts.forEach(c => c.destroy()); charts = [];
+    if (tab === 'packing') {
+      PackingLists.render(body, rows);
+    } else if (tab === 'dashboard') {
+      renderDashboard(body);
+    } else if (tab === 'proximos') {
+      body.innerHTML = `<div class="ci-legend"><span class="ci-sw-ald"></span>Aldunate <span class="ci-sw-viel"></span>Viel</div>
+      <div class="ci-cols">
+        ${panel('📍 Hoy (antes ' + HORA_LIMITE + ')', g.hoy)}
+        ${panel('⏰ Próximos días (esta semana)', g.dias)}
+        ${panel('🗓️ Próxima semana', g.semana)}
+      </div>`;
+    } else {
+      body.innerHTML = `
+        <input id="ci-buscar" class="ci-search" type="search" placeholder="Buscar contenedor, orden, proveedor, material o bodega" value="${esc(filtro)}">
+        <div class="ci-table-wrap" id="ci-tabla"></div>`;
+      renderTabla();
+    }
+  }
+
+  // Indicador de packing list: 📦 abre el detalle, ＋ crea uno (solo pendientes)
+  function badgePL(r) {
+    const c = normCont(r.contenedor);
+    if (!c) return '';
+    if (PackingLists.tiene(c)) return `<button class="ci-pl" data-pl="${esc(c)}" title="Ver packing list">📦 PL</button>`;
+    if (!recep(r) && /^[A-Z]{4}\d{7}$/.test(c)) return `<button class="ci-pl ci-pl-no" data-plnew="${esc(c)}" title="Crear packing list">＋ PL</button>`;
+    return '';
+  }
+
+  // Cambia de pestaña (force: redibuja aunque ya esté en ella, ej. para mostrar otro packing list)
+  function irTab(t, force) {
+    if (tab === t && !force) return;
+    tab = t;
+    root.querySelector('#ci-body').innerHTML = '';
     render();
-  } catch (err) {
-    alert('Error al unir: ' + err.message);
-    setSyncStatus('error', 'Error al guardar');
   }
-}
 
-// ----------- Export CSV -----------
-function exportarCSV() {
-  const list = getFiltered();
-  if (list.length === 0) return;
-  const headers = ['Fecha','Sucursal','Tipo','Factura','Proveedor','Producto','Cantidad','Unidad','Costo Unitario','Subtotal','Estado','Referencia','Notas'];
-  const rows = list.map(e => [
-    e.fecha, e.sucursal, e.tipoDoc, (documentos.find(d => d.id === e.facturaId) || {}).numero || '', e.proveedor, e.producto, e.cantidad, e.unidad, e.costoUnitario,
-    (e.cantidad * e.costoUnitario).toFixed(0), ESTADOS[e.estado].label, e.referencia, (e.notas||'').replace(/\n/g,' '),
+  function panel(titulo, lista) {
+    const items = lista.length ? lista.map(r => `
+      <li class="ci-item${bodCls(r.bodega) ? ' ci-b-' + bodCls(r.bodega) : ''}${r.tagCls === 'late' ? ' ci-late' : ''}">
+        <div>
+          <b>${esc(r.contenedor)}</b>${r.tag ? ` <em class="ci-tag ci-tag-${r.tagCls}">${r.tag}</em>` : ''} ${badgePL(r)}
+          <small>${fCorta(fechaRef(r))}${r.hora ? ' ' + esc(r.hora) : ''}${r.llegada ? '' : ' (ETA)'} · ${esc(r.proveedor)}</small>
+          <small>${esc(r.material)} · ${kg(r.peso)}${r.bodega ? ' · ' + esc(r.bodega) : ''}</small>
+        </div>
+      </li>`).join('') : '<li class="ci-empty">Sin contenedores</li>';
+    const conPL = lista.map(r => normCont(r.contenedor)).filter(c => PackingLists.tiene(c));
+    const btnPdf = conPL.length ? `<button class="ci-pl ci-pl-pdf" data-plpdf="${esc(conPL.join(','))}" title="Descargar los packing lists de esta lista">📄 PDF (${conPL.length})</button>` : '';
+    return `<section class="ci-panel"><h3>${titulo}<span>${btnPdf}${lista.length}</span></h3><ul>${items}</ul></section>`;
+  }
+
+  function renderTabla() {
+    const wrap = root && root.querySelector('#ci-tabla');
+    if (!wrap) return;
+    const q = filtro.trim().toUpperCase();
+    const lista = rows
+      .filter(r => !q || [r.contenedor, r.orden, r.proveedor, r.material, r.detalle, r.bodega, estadoDe(r)].join(' ').toUpperCase().includes(q))
+      .sort((a, b) =>
+        ordenEstado(estadoDe(a)) - ordenEstado(estadoDe(b)) ||
+        ((fechaRef(b) || '') + b.hora).localeCompare((fechaRef(a) || '') + a.hora) ||
+        (Number(b.n) - Number(a.n)));
+
+    const cuenta = {};
+    lista.forEach(r => { const e = estadoDe(r); cuenta[e] = (cuenta[e] || 0) + 1; });
+
+    let grupo = null;
+    const filas = lista.map(r => {
+      const estado = estadoDe(r);
+      const bc = bodCls(r.bodega);
+      let head = '';
+      if (estado !== grupo) {
+        grupo = estado;
+        head = `<tr class="ci-grp ci-grp-${ordenEstado(estado)}"><td colspan="10">${esc(estado)} <span>${cuenta[estado]}</span></td></tr>`;
+      }
+      return head + `<tr class="${recep(r) ? '' : 'ci-pend'}">
+          <td class="c-n">${esc(r.n)}</td>
+          <td class="c-lleg">${r.llegada ? fLarga(r.llegada) : fLarga(r.eta) + (r.eta ? ' (ETA)' : '')}</td>
+          <td class="c-hora">${esc(r.hora) || '—'}</td>
+          <td class="c-prov">${esc(r.proveedor) || '—'}</td>
+          <td class="c-orden">${esc(r.orden)}</td>
+          <td class="c-cont"><b>${esc(r.contenedor)}</b> ${badgePL(r)}</td>
+          <td class="c-mat" title="${esc(r.detalle || r.material)}">${esc(r.material)}</td>
+          <td class="c-peso num">${kg(r.peso)}</td>
+          <td class="c-bod">${r.bodega ? `<span class="ci-bod${bc ? ' ci-bod-' + bc : ''}">${esc(r.bodega)}</span>` : '—'}</td>
+          <td class="c-est"><span class="ci-est ci-est-${ordenEstado(estado)}">${esc(estado)}</span></td></tr>`;
+    }).join('');
+
+    wrap.innerHTML = `<table class="ci-table">
+      <thead><tr><th>N°</th><th>Llegada</th><th>Hora</th><th>Proveedor</th><th>N° Orden</th><th>Contenedor</th><th>Material</th><th class="num">Peso</th><th>Bodega</th><th>Estado</th></tr></thead>
+      <tbody>${filas || '<tr><td colspan="10" class="ci-empty">No hay importaciones que coincidan con la búsqueda</td></tr>'}
+      </tbody></table>`;
+  }
+
+  // ============ DASHBOARD ============
+  const MESES_L = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+  const DIAS_SEM = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+  const FERIADOS = new Set([
+    '2025-01-01', '2025-04-18', '2025-05-01', '2025-05-21', '2025-06-20', '2025-07-16', '2025-08-15', '2025-09-18', '2025-09-19', '2025-10-31', '2025-12-08', '2025-12-25',
+    '2026-01-01', '2026-04-03', '2026-05-01', '2026-05-21', '2026-06-29', '2026-07-16', '2026-09-18', '2026-10-12', '2026-12-08', '2026-12-25'
   ]);
-  const csv = [headers, ...rows].map(r => r.map(c => `"${String(c).replace(/"/g,'""')}"`).join(';')).join('\n');
-  const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = `compras_${filtros.mes || 'todas'}.csv`;
-  a.click(); URL.revokeObjectURL(url);
-}
+  const BODEGAS = [
+    { k: 'VIEL', l: 'Viel', c: '#2563eb' },
+    { k: 'ALDUNATE', l: 'Aldunate', c: '#dc2626' },
+    { k: 'SAN FRANCISCO', l: 'San Francisco', c: '#16a34a' },
+    { k: 'CLIENTE', l: 'Cliente', c: '#9333ea' },
+    { k: 'CONCHA', l: 'Stgo Concha', c: '#ea580c' },
+    { k: 'OTRA', l: 'Otra / sin asignar', c: '#9ca3af' }
+  ];
+  const PALETA = ['#2563eb', '#dc2626', '#16a34a', '#9333ea', '#ea580c', '#0891b2', '#ca8a04', '#db2777', '#4f46e5', '#65a30d', '#0d9488', '#9ca3af'];
+  const nf = (n, d = 0) => Number(n || 0).toLocaleString('es-CL', { minimumFractionDigits: d, maximumFractionDigits: d });
+  const normBod = b => { const u = String(b || '').toUpperCase(); const f = BODEGAS.find(x => x.k !== 'OTRA' && u.includes(x.k)); return f ? f.k : 'OTRA'; };
+  const pad = n => String(n).padStart(2, '0');
 
-// ----------- Eventos -----------
-
-root.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
-  root.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
-  t.classList.add('active');
-  vista = t.dataset.view;
-  render();
-}));
-root.getElementById('btn-nuevo').addEventListener('click', () => openModal());
-root.getElementById('btn-foto').addEventListener('click', () => root.getElementById('foto-input').click());
-root.getElementById('foto-input').addEventListener('change', handleFotoSeleccionada);
-root.getElementById('btn-export').addEventListener('click', exportarCSV);
-root.getElementById('btn-papelera').addEventListener('click', abrirPapelera);
-autocompletar(root.getElementById('f-proveedor'), fuenteProveedores, () => {
-  sugerirProveedor();
-  const p = root.getElementById('f-producto');
-  if (!p.value) setTimeout(() => p.focus(), 0); // muestra los productos de ese proveedor
-});
-root.getElementById('f-proveedor').addEventListener('input', sugerirProveedor);
-autocompletar(root.getElementById('f-producto'), fuenteProductos, x => aplicarProducto(x, root.getElementById('f-unidad'), root.getElementById('f-costo')));
-autocompletar(root.getElementById('d-proveedor'), fuenteProveedores);
-root.getElementById('pap-close').addEventListener('click', cerrarPapelera);
-root.getElementById('modal-papelera').addEventListener('click', e => { if (e.target.id === 'modal-papelera') cerrarPapelera(); });
-root.getElementById('btn-proveedores').addEventListener('click', abrirProveedores);
-root.getElementById('prov-close').addEventListener('click', cerrarProveedores);
-root.getElementById('modal-prov').addEventListener('click', e => { if (e.target.id === 'modal-prov') cerrarProveedores(); });
-root.getElementById('doc-close').addEventListener('click', cerrarDoc);
-root.getElementById('doc-cancel').addEventListener('click', cerrarDoc);
-root.getElementById('doc-save').addEventListener('click', guardarDoc);
-root.getElementById('d-neto').addEventListener('input', onNetoDoc);
-root.getElementById('d-iva').addEventListener('input', onIvaDoc);
-root.getElementById('d-total').addEventListener('input', actualizarCuadreDoc);
-root.getElementById('d-proveedor').addEventListener('input', renderValesDoc);
-root.getElementById('d-sucursal').addEventListener('change', renderValesDoc);
-root.getElementById('d-vales-todos').addEventListener('click', () => { candidatosDoc().forEach(x => docSeleccion.add(x.grupo)); renderValesDoc(); });
-root.getElementById('d-foto-btn').addEventListener('click', () => root.getElementById('d-foto-input').click());
-root.getElementById('d-foto-input').addEventListener('change', async e => {
-  const file = e.target.files[0]; e.target.value = '';
-  if (!file) return;
-  try {
-    const f = await leerFotoSinAnalisis(file);
-    docFotoB64 = f.base64;
-    const ind = root.getElementById('d-foto-ind'); ind.textContent = 'Foto lista para guardar'; ind.classList.remove('hidden');
-  } catch { alert('No se pudo leer la imagen.'); }
-});
-root.getElementById('btn-refresh').addEventListener('click', loadEntries);
-root.getElementById('modal-close').addEventListener('click', closeModal);
-root.getElementById('modal-cancel').addEventListener('click', closeModal);
-root.getElementById('modal-save').addEventListener('click', saveForm);
-root.getElementById('f-cantidad').addEventListener('input', updateSubtotalPreview);
-root.getElementById('f-costo').addEventListener('input', updateSubtotalPreview);
-root.getElementById('btn-add-item').addEventListener('click', () => { const r = agregarItem(); r.querySelector('.i-producto').focus(); });
-
-root.getElementById('filtro-mes').addEventListener('change', e => { filtros.mes = e.target.value; render(); });
-root.getElementById('filtro-sucursal').addEventListener('change', e => { filtros.sucursal = e.target.value; render(); });
-root.getElementById('btn-solo-foto').addEventListener('click', () => root.getElementById('solo-foto-input').click());
-root.getElementById('solo-foto-input').addEventListener('change', handleSoloFoto);
-root.getElementById('btn-adjuntar-foto').addEventListener('click', () => root.getElementById('adjuntar-foto-input').click());
-root.getElementById('adjuntar-foto-input').addEventListener('change', handleAdjuntarFoto);
-root.getElementById('f-sucursal').addEventListener('change', e => { if (e.target.value) guardarSucursalEquipo(e.target.value); });
-root.getElementById('filtro-proveedor').addEventListener('change', e => { filtros.proveedor = e.target.value; render(); });
-root.getElementById('filtro-estado').addEventListener('change', e => { filtros.estado = e.target.value; render(); });
-root.getElementById('busqueda').addEventListener('input', e => { filtros.busqueda = e.target.value; render(); });
-
-root.getElementById('del-cancel').addEventListener('click', () => {
-  root.getElementById('modal-delete').classList.add('hidden');
-  confirmDeleteId = null;
-});
-root.getElementById('del-confirm').addEventListener('click', () => {
-  const id = confirmDeleteId;
-  root.getElementById('modal-delete').classList.add('hidden');
-  confirmDeleteId = null;
-  if (id) deleteEntry(id);
-});
-
-root.getElementById('ver-foto-close').addEventListener('click', cerrarVerFoto);
-root.getElementById('modal-ver-foto').addEventListener('click', e => { if (e.target.id === 'modal-ver-foto') cerrarVerFoto(); });
-
-root.getElementById('modal').addEventListener('click', e => { if (e.target.id === 'modal') closeModal(); });
-root.getElementById('modal-delete').addEventListener('click', e => {
-  if (e.target.id === 'modal-delete') {
-    root.getElementById('modal-delete').classList.add('hidden');
-    confirmDeleteId = null;
+  function diasLaborales(y, m, hastaIso) {
+    let n = 0;
+    const dim = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+    for (let d = 1; d <= dim; d++) {
+      const iso = `${y}-${pad(m + 1)}-${pad(d)}`;
+      if (hastaIso && iso > hastaIso) break;
+      const w = new Date(Date.UTC(y, m, d)).getUTCDay();
+      if (w !== 0 && w !== 6 && !FERIADOS.has(iso)) n++;
+    }
+    return n;
   }
-});
-document.addEventListener('keydown', e => {
-  if (e.key === 'Escape' && root.host && root.host.isConnected) {
-    closeModal();
-    root.getElementById('modal-delete').classList.add('hidden');
-    cerrarVerFoto();
+
+  let chartPromise = null;
+  function loadChart() {
+    if (window.Chart) return Promise.resolve();
+    if (!chartPromise) chartPromise = new Promise((res, rej) => {
+      const s = document.createElement('script');
+      s.src = 'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js';
+      s.onload = res;
+      s.onerror = () => { chartPromise = null; rej(new Error('No se pudo cargar la librería de gráficos')); };
+      document.head.appendChild(s);
+    });
+    return chartPromise;
   }
-});
 
-// Refrescar cuando vuelve el foco a la pestaña, solo si la sección está en pantalla
-window.addEventListener('focus', () => { if (root.host && root.host.isConnected) loadEntries(); });
+  function calcDashboard() {
+    const rec = rows.filter(recep).map(r => ({ ...r, f: r.llegada || r.eta, bod: normBod(r.bodega) })).filter(r => r.f);
+    const years = [...new Set(rec.map(r => r.f.slice(0, 4)))].sort().reverse();
+    const yHoy = meta.hoy.slice(0, 4);
+    if (!dashYear || !years.includes(dashYear)) dashYear = years.includes(yHoy) ? yHoy : years[0];
+    const Y = Number(dashYear);
+    const ry = rec.filter(r => r.f.startsWith(dashYear));
+    const esActual = dashYear === yHoy;
+    const mesHoy = Number(meta.hoy.slice(5, 7)) - 1;
+    const mesesTrans = esActual ? mesHoy + 1 : 12;
 
-// ----------- Init -----------
-loadEntries();
+    const porMes = Array(12).fill(0), kgMes = Array(12).fill(0);
+    const bodMes = {}; BODEGAS.forEach(b => bodMes[b.k] = Array(12).fill(0));
+    const antes = Array(12).fill(0), despues = Array(12).fill(0), sinHora = Array(12).fill(0);
+    const porHora = Array(24).fill(0), porDia = Array(7).fill(0);
+    const prov = {}, mat = {};
+    const puerto = [], puertoMes = Array.from({ length: 12 }, () => []);
+    let conPeso = 0, kgTotal = 0;
+
+    ry.forEach(r => {
+      const m = Number(r.f.slice(5, 7)) - 1;
+      porMes[m]++; kgMes[m] += r.peso; kgTotal += r.peso; if (r.peso > 0) conPeso++;
+      bodMes[r.bod][m]++;
+      const p = prov[r.proveedor || 'Sin proveedor'] = prov[r.proveedor || 'Sin proveedor'] || { n: 0, kg: 0, dias: [] };
+      p.n++; p.kg += r.peso;
+      const mt = mat[r.material || 'Sin material'] = mat[r.material || 'Sin material'] || { n: 0, kg: 0 };
+      mt.n++; mt.kg += r.peso;
+      if (/^\d{2}:\d{2}$/.test(r.hora)) {
+        (r.hora < HORA_LIMITE ? antes : despues)[m]++;
+        porHora[Number(r.hora.slice(0, 2))]++;
+      } else sinHora[m]++;
+      if (r.llegada) porDia[new Date(isoToDay(r.llegada) * 86400000).getUTCDay()]++;
+      if (r.llegada && r.eta) {
+        const d = isoToDay(r.llegada) - isoToDay(r.eta);
+        if (d >= 0 && d <= 90) { puerto.push({ d, r }); puertoMes[m].push(d); p.dias.push(d); }
+      }
+    });
+
+    // Meses sin detalle: se completan con el resumen mensual por bodega (ej. ene–may 2025)
+    const nDet = ry.length;
+    const resumen = hist && hist.resumen && hist.resumen[dashYear];
+    const soloResumen = [];
+    if (resumen) {
+      for (let m = 0; m < mesesTrans; m++) {
+        if (porMes[m]) continue;
+        let s = 0;
+        Object.entries(resumen).forEach(([b, arr]) => { const v = Number(arr[m]) || 0; bodMes[normBod(b)][m] += v; s += v; });
+        if (s) { porMes[m] = s; soloResumen.push(m); }
+      }
+    }
+    const total = porMes.reduce((a, b) => a + b, 0);
+
+    const dl = Array.from({ length: 12 }, (_, m) => diasLaborales(Y, m));
+    const dlTrans = Array.from({ length: 12 }, (_, m) => diasLaborales(Y, m, esActual ? meta.hoy : null)).reduce((a, b) => a + b, 0);
+    const prom = a => a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0;
+    const mesesActivos = porMes.slice(0, mesesTrans);
+    const maxM = mesesActivos.indexOf(Math.max(...mesesActivos));
+    const minM = mesesActivos.indexOf(Math.min(...mesesActivos));
+    const top = o => Object.entries(o).sort((a, b) => b[1].n - a[1].n);
+    const totBod = BODEGAS.map(b => ({ ...b, n: bodMes[b.k].reduce((x, y) => x + y, 0) })).filter(b => b.n);
+    const conHora = antes.reduce((a, b) => a + b, 0) + despues.reduce((a, b) => a + b, 0);
+    const maxPuerto = puerto.sort((a, b) => b.d - a.d)[0];
+
+    // Pendientes actuales (todas, sin filtro de año)
+    const hoyD = isoToDay(meta.hoy);
+    const pend = { 'Por informar (en puerto)': 0, 'En tránsito (ETA futura)': 0, 'Llegada programada': 0, 'Atrasados': 0, 'Sin fechas': 0 };
+    rows.filter(r => !recep(r)).forEach(r => {
+      if (r.llegada) pend[isoToDay(r.llegada) < hoyD ? 'Atrasados' : 'Llegada programada']++;
+      else if (r.eta) pend[isoToDay(r.eta) <= hoyD ? 'Por informar (en puerto)' : 'En tránsito (ETA futura)']++;
+      else pend['Sin fechas']++;
+    });
+
+    // ---- Comparación con el año anterior (meses cerrados: no se compara un mes a medias) ----
+    const prevY = String(Y - 1);
+    const cuenta = y => {
+      const pm = Array(12).fill(0), km = Array(12).fill(0), bm = {};
+      BODEGAS.forEach(b => bm[b.k] = Array(12).fill(0));
+      rec.filter(r => r.f.startsWith(y)).forEach(r => { const m = Number(r.f.slice(5, 7)) - 1; pm[m]++; km[m] += r.peso; bm[r.bod][m]++; });
+      const res = hist && hist.resumen && hist.resumen[y];
+      if (res) for (let m = 0; m < 12; m++) { if (pm[m]) continue; Object.entries(res).forEach(([b, arr]) => { const v = Number(arr[m]) || 0; pm[m] += v; bm[normBod(b)][m] += v; }); }
+      return { pm, km, bm };
+    };
+    const P = cuenta(prevY);
+    const cerrados = esActual ? mesHoy : 12;              // ene … mes anterior al actual
+    const suma = (a, n = cerrados) => a.slice(0, n).reduce((x, y) => x + y, 0);
+    const comp = P.pm.slice(0, cerrados).some(v => v) && cerrados > 0 ? {
+      prevY, cerrados,
+      act: suma(porMes), prev: suma(P.pm), kgAct: suma(kgMes), kgPrev: suma(P.km),
+      kgComparable: P.km.slice(0, cerrados).every((v, m) => v > 0 || !P.pm[m]),
+      porMesPrev: P.pm, kgMesPrev: P.km,
+      bod: BODEGAS.map(b => ({ ...b, act: suma(bodMes[b.k]), prev: suma(P.bm[b.k]) })).filter(b => b.act || b.prev)
+    } : null;
+
+    return {
+      comp,
+      years, Y, total, nDet, soloResumen, kgTotal, conPeso, porMes, kgMes, bodMes, dl, dlTrans, mesesTrans,
+      antes, despues, sinHora, porHora, porDia, prov: top(prov), mat: top(mat), totBod,
+      puertoProm: prom(puerto.map(x => x.d)), puertoN: puerto.length, puertoMes: puertoMes.map(prom), puertoArr: puerto.map(x => x.d),
+      maxPuerto, maxM, minM, conHora, pend
+    };
+  }
+
+  function renderDashboard(body) {
+    if (!rows.length) { body.innerHTML = '<p class="ci-empty">Sin datos todavía</p>'; return; }
+    const D = calcDashboard();
+    if (!D.total) { body.innerHTML = '<p class="ci-empty">No hay contenedores recepcionados para mostrar</p>'; return; }
+    const pctAntes = D.conHora ? D.antes.reduce((a, b) => a + b, 0) / D.conHora * 100 : 0;
+    const bodUsadas = BODEGAS.filter(b => D.bodMes[b.k].some(v => v));
+    const meses = MESES_L.map(m => m.slice(0, 3));
+    const pendTot = Object.values(D.pend).reduce((a, b) => a + b, 0);
+
+    const kpi = (l, v, sub) => `<div class="ci-kpi"><span>${l}</span><strong>${v}</strong>${sub ? `<small>${sub}</small>` : ''}</div>`;
+    const mtxRow = (label, arr, fmt, cls = '', sw = '') =>
+      `<tr class="${cls}"><td>${sw}${label}</td>${arr.map(v => `<td>${fmt(v)}</td>`).join('')}</tr>`;
+    const tot = a => a.reduce((x, y) => x + y, 0);
+
+    body.innerHTML = `
+      <div class="ci-dash-bar">
+        <label>Año <select id="ci-year">${D.years.map(y => `<option ${y === dashYear ? 'selected' : ''}>${y}</option>`).join('')}</select></label>
+        <small>Contenedores con Estado RECEPCIONADO, agrupados por mes de Fecha de Llegada (o ETA si no tiene)</small>
+      </div>
+      ${D.soloResumen.length ? `<p class="ci-note">ℹ️ ${D.soloResumen.map(m => MESES_L[m]).join(', ')}: solo hay totales por bodega (sin detalle de contenedor, peso ni proveedor). Los gráficos de detalle consideran ${nf(D.nDet)} contenedores.</p>` : ''}
+
+      <div class="ci-kpis ci-kpis-auto">
+        ${kpi('Contenedores recepcionados', nf(D.total))}
+        ${kpi('Toneladas recepcionadas', nf(D.kgTotal / 1000, 1), D.conPeso < D.total ? `${D.total - D.conPeso} sin peso registrado` : '')}
+        ${kpi('Promedio diario', nf(D.total / (D.dlTrans || 1), 2), `${D.dlTrans} días laborales${D.mesesTrans < 12 ? ' a la fecha' : ''}`)}
+        ${kpi('Promedio mensual', nf(D.total / D.mesesTrans, 1), `${D.mesesTrans} meses`)}
+        ${kpi('Días en puerto (prom.)', nf(D.puertoProm, 1), `ETA → Llegada, ${D.puertoN} contenedores`)}
+        ${kpi('Llegadas antes de ' + HORA_LIMITE, D.conHora ? nf(pctAntes, 0) + '%' : '—', `${D.conHora} con hora registrada`)}
+        ${kpi('Peso promedio', D.conPeso ? nf(D.kgTotal / D.conPeso) + ' kg' : '—', 'por contenedor')}
+        ${kpi('Pendientes hoy', nf(pendTot), 'todos los años')}
+        ${D.comp ? kpi('vs ' + D.comp.prevY, (D.comp.act >= D.comp.prev ? '+' : '') + nf((D.comp.act / (D.comp.prev || 1) - 1) * 100, 0) + '%',
+          `${nf(D.comp.act)} vs ${nf(D.comp.prev)} contenedores · ${D.comp.cerrados === 12 ? 'año completo' : 'ene–' + MESES_L[D.comp.cerrados - 1].slice(0, 3).toLowerCase()}`) : ''}
+      </div>
+
+      <div class="ci-card" style="margin-top:18px">
+        <h3>Contenedores recepcionados por bodega y mes — ${dashYear}</h3>
+        <div class="ci-table-wrap"><table class="ci-mtx">
+          <thead><tr><th>Bodega</th>${meses.map(m => `<th>${m}</th>`).join('')}<th>Total</th><th>%</th></tr></thead>
+          <tbody>
+            ${bodUsadas.map(b => `<tr><td><span class="ci-sw" style="background:${b.c}"></span>${b.l}</td>${D.bodMes[b.k].map(v => `<td>${v || ''}</td>`).join('')}<td class="tot">${tot(D.bodMes[b.k])}</td><td class="tot">${nf(tot(D.bodMes[b.k]) / D.total * 100, 1)}%</td></tr>`).join('')}
+            <tr class="sum"><td>Total contenedores</td>${D.porMes.map(v => `<td>${v}</td>`).join('')}<td>${D.total}</td><td>100%</td></tr>
+            <tr><td>Días laborales</td>${D.dl.map(v => `<td>${v}</td>`).join('')}<td class="tot">${tot(D.dl)}</td><td></td></tr>
+            <tr><td>Contenedores diarios</td>${D.porMes.map((v, m) => `<td>${nf(v / D.dl[m], 2)}</td>`).join('')}<td class="tot">${nf(D.total / (D.dlTrans || 1), 2)}</td><td></td></tr>
+            <tr><td>Toneladas</td>${D.kgMes.map(v => `<td>${v ? nf(v / 1000, 1) : ''}</td>`).join('')}<td class="tot">${nf(D.kgTotal / 1000, 1)}</td><td></td></tr>
+            <tr><td>Días en puerto (prom.)</td>${D.puertoMes.map(v => `<td>${v ? nf(v, 1) : ''}</td>`).join('')}<td class="tot">${nf(D.puertoProm, 1)}</td><td></td></tr>
+          </tbody>
+        </table></div>
+      </div>
+
+      <div class="ci-grid2">
+        ${D.comp ? `<div class="ci-card"><h3>${dashYear} vs ${D.comp.prevY}</h3><p class="ci-sub">Contenedores por mes${D.comp.cerrados < 12 ? ' (el mes en curso se compara cuando cierre)' : ''}</p><div class="ci-chart"><canvas id="ch-comp"></canvas></div></div>
+        <div class="ci-card"><h3>Comparación por bodega</h3><p class="ci-sub">${D.comp.cerrados === 12 ? 'Año completo' : 'Enero a ' + MESES_L[D.comp.cerrados - 1].toLowerCase()}, mismo período de cada año</p>
+          <div class="ci-table-wrap"><table class="ci-mtx">
+            <thead><tr><th>Bodega</th><th>${dashYear}</th><th>${D.comp.prevY}</th><th>Variación</th></tr></thead>
+            <tbody>${D.comp.bod.map(b => `<tr><td><span class="ci-sw" style="background:${b.c}"></span>${b.l}</td><td>${nf(b.act)}</td><td>${nf(b.prev)}</td><td class="${b.act >= b.prev ? 'ci-up' : 'ci-down'}">${b.prev ? (b.act >= b.prev ? '+' : '') + nf((b.act / b.prev - 1) * 100, 0) + '%' : 'nuevo'}</td></tr>`).join('')}
+              <tr class="sum"><td>Total</td><td>${nf(D.comp.act)}</td><td>${nf(D.comp.prev)}</td><td>${D.comp.prev ? (D.comp.act >= D.comp.prev ? '+' : '') + nf((D.comp.act / D.comp.prev - 1) * 100, 0) + '%' : '—'}</td></tr>
+              ${D.comp.kgComparable ? `<tr><td>Toneladas</td><td>${nf(D.comp.kgAct / 1000, 1)}</td><td>${nf(D.comp.kgPrev / 1000, 1)}</td><td class="${D.comp.kgAct >= D.comp.kgPrev ? 'ci-up' : 'ci-down'}">${D.comp.kgPrev ? (D.comp.kgAct >= D.comp.kgPrev ? '+' : '') + nf((D.comp.kgAct / D.comp.kgPrev - 1) * 100, 0) + '%' : '—'}</td></tr>` : ''}
+            </tbody></table></div>
+          ${D.comp.kgComparable ? '' : `<p class="ci-sub" style="margin-top:8px">Toneladas no comparables: ${D.comp.prevY} tiene meses solo con totales por bodega, sin peso.</p>`}
+        </div>` : ''}
+        <div class="ci-card"><h3>Contenedores y toneladas por mes</h3><div class="ci-chart"><canvas id="ch-mes"></canvas></div></div>
+        <div class="ci-card"><h3>Distribución por bodega</h3><div class="ci-chart"><canvas id="ch-bod"></canvas></div></div>
+
+        <div class="ci-card"><h3>Contenedores por bodega cada mes</h3><div class="ci-chart"><canvas id="ch-bodmes"></canvas></div></div>
+        <div class="ci-card"><h3>Datos destacados — ${dashYear}</h3>
+          <div class="ci-ins">
+            <div><span>Mes con más actividad</span><strong>${MESES_L[D.maxM]} (${D.porMes[D.maxM]})</strong></div>
+            <div><span>Mes con menos actividad</span><strong>${MESES_L[D.minM]} (${D.porMes[D.minM]})</strong></div>
+            <div><span>Proveedor principal</span><strong>${esc(D.prov[0][0])} (${D.prov[0][1].n})</strong></div>
+            <div><span>Material principal</span><strong>${esc(D.mat[0][0])} (${D.mat[0][1].n})</strong></div>
+            <div><span>Bodega principal</span><strong>${D.totBod.sort((a, b) => b.n - a.n)[0].l} (${nf(D.totBod[0].n / D.total * 100, 0)}%)</strong></div>
+            <div><span>Mayor tiempo en puerto</span><strong>${D.maxPuerto ? `${D.maxPuerto.d} días (${esc(D.maxPuerto.r.contenedor)})` : '—'}</strong></div>
+            <div><span>Proveedores distintos</span><strong>${D.prov.length}</strong></div>
+            <div><span>Materiales distintos</span><strong>${D.mat.length}</strong></div>
+          </div>
+        </div>
+
+        <div class="ci-card"><h3>Toneladas por proveedor</h3><div class="ci-chart"><canvas id="ch-prov"></canvas></div></div>
+        <div class="ci-card"><h3>Resumen por proveedor</h3>
+          <div class="ci-table-wrap"><table class="ci-mtx">
+            <thead><tr><th>Proveedor</th><th>Cont.</th><th>%</th><th>Toneladas</th><th>Días puerto</th></tr></thead>
+            <tbody>${D.prov.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${v.n}</td><td>${nf(v.n / (D.nDet || 1) * 100, 1)}%</td><td>${nf(v.kg / 1000, 1)}</td><td>${v.dias.length ? nf(v.dias.reduce((a, b) => a + b, 0) / v.dias.length, 1) : '—'}</td></tr>`).join('')}</tbody>
+          </table></div>
+        </div>
+
+        <div class="ci-card"><h3>Materiales más recepcionados</h3><p class="ci-sub">Top 12 por cantidad de contenedores</p><div class="ci-chart"><canvas id="ch-mat"></canvas></div></div>
+        <div class="ci-card"><h3>Toneladas por material</h3><p class="ci-sub">Top 12 por peso</p><div class="ci-chart"><canvas id="ch-matkg"></canvas></div></div>
+
+        <div class="ci-card"><h3>Hora de llegada por mes</h3><p class="ci-sub">Antes y después de las ${HORA_LIMITE}</p><div class="ci-chart"><canvas id="ch-hora"></canvas></div></div>
+        <div class="ci-card"><h3>Llegadas por hora del día</h3><div class="ci-chart"><canvas id="ch-horadia"></canvas></div></div>
+
+        <div class="ci-card"><h3>Días en puerto promedio por mes</h3><p class="ci-sub">Desde la ETA hasta la Fecha de Llegada a bodega</p><div class="ci-chart"><canvas id="ch-puerto"></canvas></div></div>
+        <div class="ci-card"><h3>Distribución de días en puerto</h3><div class="ci-chart"><canvas id="ch-puertodist"></canvas></div></div>
+
+        <div class="ci-card"><h3>Llegadas por día de la semana</h3><div class="ci-chart"><canvas id="ch-dia"></canvas></div></div>
+        <div class="ci-card"><h3>Pendientes actuales</h3><p class="ci-sub">Todo lo que aún no figura como RECEPCIONADO en el Excel</p><div class="ci-chart"><canvas id="ch-pend"></canvas></div></div>
+      </div>`;
+
+    body.querySelector('#ci-year').addEventListener('change', e => { dashYear = e.target.value; render(); });
+
+    loadChart().then(() => {
+      if (tab !== 'dashboard' || !document.body.contains(body)) return;
+      dibujar(D, meses);
+    }).catch(err => {
+      body.insertAdjacentHTML('afterbegin', `<p class="ci-err">${esc(err.message)}</p>`);
+    });
+  }
+
+  function dibujar(D, meses) {
+    const mk = (id, cfg) => { const el = root.querySelector('#' + id); if (el) charts.push(new Chart(el, cfg)); };
+    // Funciones (no objetos compartidos): Chart.js escribe "scales" dentro del objeto de opciones que recibe
+    const baseF = () => ({ responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom', labels: { boxWidth: 12 } } } });
+    const sinLeyendaF = () => ({ ...baseF(), plugins: { legend: { display: false } } });
+    const pct = (v, t) => t ? ` (${nf(v / t * 100, 1)}%)` : '';
+    const dona = (labels, data, colors, unidad) => ({
+      type: 'doughnut',
+      data: { labels, datasets: [{ data, backgroundColor: colors, borderWidth: 1 }] },
+      options: {
+        ...baseF(), cutout: '55%',
+        plugins: {
+          legend: { position: esMovil() ? 'bottom' : 'right', labels: { boxWidth: 12, generateLabels: ch => {
+            const t = data.reduce((a, b) => a + b, 0);
+            return labels.map((l, i) => ({ text: `${l}${pct(data[i], t)}`, fillStyle: colors[i], strokeStyle: colors[i], index: i }));
+          } } },
+          tooltip: { callbacks: { label: c => `${c.label}: ${nf(c.raw, unidad === 't' ? 1 : 0)}${unidad === 't' ? ' t' : ''}` } }
+        }
+      }
+    });
+
+    mk('ch-mes', {
+      data: {
+        labels: meses,
+        datasets: [
+          { type: 'bar', label: 'Contenedores', data: D.porMes, backgroundColor: '#2563eb', yAxisID: 'y' },
+          { type: 'line', label: 'Toneladas', data: D.kgMes.map(v => v ? +(v / 1000).toFixed(1) : null), spanGaps: false, borderColor: '#ea580c', backgroundColor: '#ea580c', tension: .3, yAxisID: 'y1' }
+        ]
+      },
+      options: { ...baseF(), scales: { y: { beginAtZero: true, title: { display: true, text: 'Contenedores' } }, y1: { beginAtZero: true, position: 'right', grid: { drawOnChartArea: false }, title: { display: true, text: 'Toneladas' } } } }
+    });
+
+    if (D.comp) mk('ch-comp', {
+      type: 'bar',
+      data: { labels: meses, datasets: [
+        { label: String(D.Y), data: D.porMes.map((v, m) => m < D.mesesTrans ? v : null), backgroundColor: '#2563eb' },
+        { label: D.comp.prevY, data: D.comp.porMesPrev, backgroundColor: '#cbd5e1' }
+      ] },
+      options: { ...baseF(), scales: { y: { beginAtZero: true } } }
+    });
+
+    const tb = D.totBod;
+    mk('ch-bod', dona(tb.map(b => b.l), tb.map(b => b.n), tb.map(b => b.c)));
+
+    mk('ch-bodmes', {
+      type: 'bar',
+      data: { labels: meses, datasets: BODEGAS.filter(b => D.bodMes[b.k].some(v => v)).map(b => ({ label: b.l, data: D.bodMes[b.k], backgroundColor: b.c })) },
+      options: { ...baseF(), scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true } } }
+    });
+
+    const pv = D.prov.filter(([, v]) => v.kg > 0);
+    mk('ch-prov', dona(pv.map(p => p[0]), pv.map(p => +(p[1].kg / 1000).toFixed(1)), pv.map((_, i) => PALETA[i % PALETA.length]), 't'));
+
+    const m12 = D.mat.slice(0, 12);
+    mk('ch-mat', { type: 'bar', data: { labels: m12.map(m => corto(m[0])), datasets: [{ label: 'Contenedores', data: m12.map(m => m[1].n), backgroundColor: '#0891b2' }] }, options: { ...sinLeyendaF(), indexAxis: 'y' } });
+    const mkg = [...D.mat].sort((a, b) => b[1].kg - a[1].kg).filter(m => m[1].kg > 0).slice(0, 12);
+    mk('ch-matkg', { type: 'bar', data: { labels: mkg.map(m => corto(m[0])), datasets: [{ label: 'Toneladas', data: mkg.map(m => +(m[1].kg / 1000).toFixed(1)), backgroundColor: '#ea580c' }] }, options: { ...sinLeyendaF(), indexAxis: 'y' } });
+
+    mk('ch-hora', {
+      type: 'bar',
+      data: {
+        labels: meses, datasets: [
+          { label: 'Antes de ' + HORA_LIMITE, data: D.antes, backgroundColor: '#16a34a' },
+          { label: 'Después de ' + HORA_LIMITE, data: D.despues, backgroundColor: '#ca8a04' },
+          { label: 'Sin hora', data: D.sinHora, backgroundColor: '#d1d5db' }
+        ]
+      },
+      options: { ...baseF(), scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true } } }
+    });
+
+    const h0 = D.porHora.findIndex(v => v), h1 = 23 - [...D.porHora].reverse().findIndex(v => v);
+    const horas = h0 < 0 ? [] : Array.from({ length: h1 - h0 + 1 }, (_, i) => h0 + i);
+    mk('ch-horadia', {
+      type: 'bar',
+      data: { labels: horas.map(h => pad(h) + ':00'), datasets: [{ label: 'Contenedores', data: horas.map(h => D.porHora[h]), backgroundColor: horas.map(h => pad(h) + ':00' < HORA_LIMITE ? '#16a34a' : '#ca8a04') }] },
+      options: sinLeyendaF()
+    });
+
+    mk('ch-puerto', { type: 'bar', data: { labels: meses, datasets: [{ label: 'Días promedio', data: D.puertoMes.map(v => +v.toFixed(1)), backgroundColor: '#9333ea' }] }, options: { ...sinLeyendaF(), scales: { y: { beginAtZero: true, title: { display: true, text: 'Días' } } } } });
+
+    const tramos = [['0–2', 0, 2], ['3–5', 3, 5], ['6–10', 6, 10], ['11–15', 11, 15], ['16–30', 16, 30], ['+30', 31, 999]];
+    mk('ch-puertodist', { type: 'bar', data: { labels: tramos.map(t => t[0] + ' días'), datasets: [{ label: 'Contenedores', data: tramos.map(([, a, b]) => D.puertoArr.filter(d => d >= a && d <= b).length), backgroundColor: '#4f46e5' }] }, options: sinLeyendaF() });
+
+    const ordenDias = [1, 2, 3, 4, 5, 6, 0];
+    mk('ch-dia', { type: 'bar', data: { labels: ordenDias.map(d => DIAS_SEM[d]), datasets: [{ label: 'Contenedores', data: ordenDias.map(d => D.porDia[d]), backgroundColor: '#0d9488' }] }, options: sinLeyendaF() });
+
+    const pe = Object.entries(D.pend).filter(([, v]) => v);
+    mk('ch-pend', dona(pe.map(p => p[0]), pe.map(p => p[1]), pe.map(([k]) => ({ 'Por informar (en puerto)': '#ca8a04', 'En tránsito (ETA futura)': '#2563eb', 'Llegada programada': '#16a34a', 'Atrasados': '#dc2626', 'Sin fechas': '#9ca3af' }[k]))));
+  }
+
+  function renderMeta() {
+    const el = root && root.querySelector('#ci-meta');
+    if (el) el.textContent = `Última actualización: ${meta.ahora}` +
+      (meta.sync ? ` · ${meta.sync.replace('Sync automático:', 'Excel sincronizado:')}` : '') +
+      (histError ? ` · ⚠️ Histórico 2025 no disponible (${histError})` : '');
+  }
+
+  // ============ UI ============
+  function toast(msg, error) {
+    const t = document.createElement('div');
+    t.className = 'ci-toast' + (error ? ' ci-toast-err' : '');
+    t.textContent = msg;
+    document.body.appendChild(t);
+    setTimeout(() => t.remove(), 3000);
+  }
+
+  function injectStyles() {
+    if (document.getElementById('ci-styles')) return;
+    const s = document.createElement('style');
+    s.id = 'ci-styles';
+    s.textContent = `
+      .ci{padding:24px;color:#1f2937}
+      .ci-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:20px}
+      .ci-head h1{margin:0;font-size:22px}
+      .ci-head p{margin:4px 0 0;color:#6b7280;font-size:13px}
+      .ci-btn{background:#1e7b34;color:#fff;border:0;border-radius:6px;padding:10px 18px;font-weight:600;cursor:pointer}
+      .ci-btn:hover{background:#17652a}
+      .ci-kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;background:#f5f7fa;padding:14px;border-radius:10px}
+      .ci-kpi{background:#fff;border-left:4px solid #667eea;border-radius:8px;padding:16px}
+      .ci-kpi span{display:block;font-size:12px;color:#6b7280}
+      .ci-kpi strong{display:block;font-size:26px;margin-top:6px}
+      .ci-meta{text-align:center;font-size:12px;color:#6b7280;margin:14px 0}
+      .ci-err{color:#b91c1c}
+      .ci-tabs{display:flex;gap:4px;border-bottom:1px solid #e5e7eb;margin-bottom:18px}
+      .ci-tab{background:none;border:0;border-bottom:3px solid transparent;padding:10px 18px;font-weight:600;color:#6b7280;cursor:pointer}
+      .ci-tab.active{color:#4f5bd5;border-bottom-color:#667eea}
+      .ci-cols{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
+      .ci-panel{background:#fff;border-radius:10px;padding:18px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+      .ci-panel h3{margin:0 0 12px;font-size:15px;display:flex;justify-content:space-between}
+      .ci-panel h3 span{color:#667eea}
+      .ci-panel ul{list-style:none;margin:0;padding:0;max-height:480px;overflow:auto}
+      .ci-item{display:flex;gap:10px;padding:10px 12px;margin-top:6px;border-radius:8px;border-left:4px solid transparent;background:#f9fafb}
+      .ci-item b{font-size:15px}
+      .ci-b-ald{background:#fce7f3;border-left-color:#ec4899}
+      .ci-b-viel{background:#fef9c3;border-left-color:#eab308}
+      .ci-legend{display:flex;align-items:center;gap:6px;font-size:12px;color:#6b7280;margin:-6px 0 12px}
+      .ci-legend span{display:inline-block;width:12px;height:12px;border-radius:3px;margin-left:8px}
+      .ci-legend span:first-child{margin-left:0}
+      .ci-sw-ald{background:#fce7f3;border:2px solid #ec4899}
+      .ci-sw-viel{background:#fef9c3;border:2px solid #eab308}
+      .ci-item small{display:block;color:#6b7280;font-size:12px;margin-top:2px}
+      .ci-pl{border:1px solid #c7d2fe;background:#eef2ff;color:#3730a3;border-radius:10px;font-size:11px;font-weight:700;padding:1px 8px;cursor:pointer;margin-left:4px;white-space:nowrap;font-family:inherit}
+      .ci-pl:hover{background:#e0e7ff}
+      .ci-pl-no{background:#fff;border-style:dashed;color:#6b7280;border-color:#d1d5db}
+      .ci-pl-pdf{margin:0 8px 0 0;font-size:11px}
+      .ci-tag{font-style:normal;font-size:11px;font-weight:700;padding:1px 7px;border-radius:10px;margin-left:4px}
+      .ci-tag-late{color:#b91c1c;background:#fee2e2}
+      .ci-tag-pend{color:#92400e;background:#fef3c7}
+      .ci-tag-next{color:#1e40af;background:#dbeafe}
+      .ci-late{border-left-color:#dc2626}
+      .ci-late:not(.ci-b-ald):not(.ci-b-viel){background:#fef2f2}
+      .ci-empty{color:#9ca3af;text-align:center;padding:30px 0}
+      .ci-search{width:100%;max-width:480px;padding:9px 12px;border:1px solid #d1d5db;border-radius:6px;margin-bottom:12px;font-size:14px}
+      .ci-table-wrap{overflow-x:auto;background:#fff;border-radius:10px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+      .ci-table{width:100%;border-collapse:collapse;font-size:13px}
+      .ci-table th{background:#f5f7fa;text-align:left;padding:10px;position:sticky;top:0;white-space:nowrap}
+      .ci-table td{padding:8px 10px;border-top:1px solid #f0f1f4;white-space:nowrap}
+      .ci-table .num{text-align:right}
+      .ci-table .c-mat{max-width:190px;overflow:hidden;text-overflow:ellipsis}
+      .ci-table .c-orden{max-width:150px;overflow:hidden;text-overflow:ellipsis}
+      .ci-pend td{background:#fffbeb}
+      .ci-grp td{background:#eef2ff;font-weight:700;font-size:12px;letter-spacing:.04em;color:#3730a3;padding:7px 10px}
+      .ci-grp td span{background:#fff;border-radius:10px;padding:1px 8px;margin-left:6px;font-size:11px}
+      .ci-grp-0 td{background:#fee2e2;color:#991b1b}
+      .ci-grp-1 td{background:#e0e7ff;color:#3730a3}
+      .ci-grp-2 td{background:#fef3c7;color:#92400e}
+      .ci-grp-4 td{background:#dcfce7;color:#166534}
+      .ci-bod{display:inline-block;padding:1px 8px;border-radius:10px;font-size:12px;background:#f3f4f6}
+      .ci-bod-ald{background:#fce7f3;color:#9d174d}
+      .ci-bod-viel{background:#fef9c3;color:#854d0e}
+      .ci-est{font-size:12px;font-weight:600}
+      .ci-est-0{color:#b91c1c}.ci-est-1{color:#4338ca}.ci-est-2{color:#b45309}.ci-est-4{color:#15803d}
+      .ci-note{background:#eff6ff;color:#1e40af;border-radius:8px;padding:10px 12px;font-size:13px;margin:0 0 14px}
+      .ci-toast{position:fixed;bottom:24px;right:24px;background:#1e7b34;color:#fff;padding:12px 18px;border-radius:8px;z-index:9999;font-size:14px}
+      .ci-toast-err{background:#b91c1c}
+      button:focus-visible,input:focus-visible{outline:2px solid #667eea;outline-offset:2px}
+      .ci-kpis-auto{grid-template-columns:repeat(auto-fit,minmax(170px,1fr))}
+      .ci-kpi small{display:block;font-size:11px;color:#9ca3af;margin-top:4px}
+      .ci-dash-bar{display:flex;align-items:center;gap:14px;margin-bottom:14px;font-size:14px;flex-wrap:wrap}
+      .ci-dash-bar select{padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;margin-left:6px}
+      .ci-dash-bar small{color:#6b7280}
+      .ci-mtx{width:100%;border-collapse:collapse;font-size:13px}
+      .ci-up{color:#15803d;font-weight:700}.ci-down{color:#b91c1c;font-weight:700}
+      .ci-mtx th,.ci-mtx td{padding:7px 8px;border:1px solid #eef0f3;text-align:center;white-space:nowrap}
+      .ci-mtx th{background:#f5f7fa}
+      .ci-mtx td:first-child,.ci-mtx th:first-child{text-align:left;font-weight:600}
+      .ci-mtx .tot{font-weight:700;background:#f5f7fa}
+      .ci-mtx tr.sum td{font-weight:700;background:#eef2ff}
+      .ci-sw{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px}
+      .ci-grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:18px}
+      .ci-card{background:#fff;border-radius:10px;padding:18px;box-shadow:0 1px 3px rgba(0,0,0,.08);min-width:0}
+      .ci-card h3{margin:0 0 12px;font-size:15px}
+      .ci-card .ci-sub{margin:-8px 0 12px;font-size:12px;color:#6b7280}
+      .ci-card .ci-table-wrap{box-shadow:none;max-height:300px;overflow:auto}
+      .ci-chart{position:relative;height:290px}
+      .ci-ins{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+      .ci-ins div{background:#f5f7fa;border-radius:8px;padding:12px}
+      .ci-ins span{display:block;font-size:12px;color:#6b7280}
+      .ci-ins strong{display:block;font-size:15px;margin-top:4px}
+      .ci-tabs{overflow-x:auto;scrollbar-width:none}
+      .ci-tab{white-space:nowrap}
+      @media (max-width:900px){.ci-kpis{grid-template-columns:repeat(2,1fr)}.ci-cols{grid-template-columns:1fr}.ci-head{flex-direction:column}.ci-grid2,.ci-ins{grid-template-columns:1fr}.ci-panel ul{max-height:none}}
+      @media (max-width:700px){
+        .ci{padding:0}
+        .ci-head{gap:12px;margin-bottom:14px}
+        .ci-head h1{font-size:19px}
+        .ci-btn{width:100%;padding:12px}
+        .ci-kpis{gap:8px;padding:8px}
+        .ci-kpis-auto{grid-template-columns:repeat(2,1fr)}
+        .ci-kpi{padding:10px 12px}
+        .ci-kpi span{font-size:11px}
+        .ci-kpi strong{font-size:22px;margin-top:2px}
+        .ci-tab{padding:10px 12px;font-size:14px}
+        .ci-hide-sm{display:none}
+        .ci-panel,.ci-card{padding:14px}
+        .ci-search{max-width:none;font-size:16px}
+        .ci-chart{height:260px}
+        /* Tabla -> tarjetas */
+        #ci-tabla.ci-table-wrap{background:none;box-shadow:none;overflow:visible}
+        .ci-table thead{display:none}
+        .ci-table,.ci-table tbody{display:block}
+        .ci-table tr{display:grid;grid-template-columns:auto 1fr auto;grid-template-areas:"cont cont est" "lleg hora bod" "mat mat peso" "prov orden orden";gap:3px 10px;background:#fff;border-radius:10px;padding:10px 12px;margin-bottom:8px;box-shadow:0 1px 2px rgba(0,0,0,.06)}
+        .ci-table tr.ci-pend{background:#fffbeb}
+        .ci-table td{border:0;padding:0;white-space:normal;font-size:13px;min-width:0}
+        .ci-table tr:not(.ci-grp) td{background:none}
+        .ci-table .c-n{display:none}
+        .ci-table .c-cont{grid-area:cont;font-size:15px}
+        .ci-table .c-est{grid-area:est;text-align:right}
+        .ci-table .c-lleg{grid-area:lleg}
+        .ci-table .c-hora{grid-area:hora;color:#6b7280}
+        .ci-table .c-bod{grid-area:bod;text-align:right}
+        .ci-table .c-mat{grid-area:mat;color:#4b5563;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .ci-table .c-peso{grid-area:peso}
+        .ci-table .c-prov{grid-area:prov;color:#6b7280;font-size:12px}
+        .ci-table .c-orden{grid-area:orden;color:#6b7280;font-size:12px;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .ci-table tr.ci-grp{display:block;background:none;box-shadow:none;padding:0;margin:14px 0 6px}
+        .ci-table tr.ci-grp td{display:block;border-radius:8px;padding:8px 12px}
+        .ci-table td.ci-empty{grid-column:1/-1}
+        .ci-toast{left:16px;right:16px;bottom:16px;text-align:center}
+      }
+    `;
+    document.head.appendChild(s);
+  }
+
+  // Para Inicio: trae los datos y los clasifica con las mismas reglas de esta sección
+  async function obtenerResumen() {
+    const res = await fetch(API_URL, { cache: 'no-store' });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'Respuesta inválida');
+    return { ...clasificar(data.rows, data.hoy), fechaHoy: data.hoy, sync: data.sync, horaLimite: HORA_LIMITE };
+  }
+
+  // Para Packing Lists: filas de Importaciones (2026 + histórico) sin depender de que esta sección esté abierta
+  async function obtenerFilas() {
+    if (rows.length) return rows;
+    const [res] = await Promise.all([fetch(API_URL, { cache: 'no-store' }), cargarHist()]);
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'Respuesta inválida');
+    if (!meta.hoy) meta = { hoy: data.hoy, ahora: data.ahora, sync: data.sync };
+    rows = unir(data.rows, hist ? hist.rows : []);
+    return rows;
+  }
+
+  // Navega a esta sección mostrando un contenedor en "Todas las importaciones"
+  function abrir(contenedor) {
+    if (root && root.isConnected && root.querySelector('.ci')) {
+      filtro = normCont(contenedor);
+      irTab('todas', true);
+      window.scrollTo(0, 0);
+      return;
+    }
+    pendiente = normCont(contenedor);
+    const nav = document.querySelector('.nav-item[data-section="cola-contenedores"]');
+    if (nav) nav.click();
+  }
+
+  return { init, obtenerResumen, obtenerFilas, abrir, estilos: injectStyles };
+})();

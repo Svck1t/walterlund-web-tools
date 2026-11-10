@@ -357,6 +357,17 @@ th.n{text-align:right}
     </form>
     <div class="vrow" id="vList"></div>
     <p class="muted" style="margin:12px 0 0">Las vacantes aparecen en rojo en el planograma y suman a la dotación total, pero no cuentan como presentes ni descuentan la asistencia. Al agregar a la persona contratada, la vacante se descuenta sola.</p></div>
+  <div class="card" id="ausCard"><h2>Vacaciones y licencias</h2>
+    <form id="ausForm" class="frm" autocomplete="off">
+      <div><label for="auPer">Persona</label><select id="auPer" required></select></div>
+      <div><label for="auTipo">Tipo</label><select id="auTipo"><option value="M">Vacaciones / Permiso</option><option value="L">Licencia médica</option></select></div>
+      <div><label for="auDesde">Desde</label><input type="date" id="auDesde" required></div>
+      <div><label for="auHasta">Hasta (inclusive)</label><input type="date" id="auHasta" required></div>
+      <div><label for="auNota">Nota (opcional)</label><input type="text" id="auNota" maxlength="120" placeholder="Ej: feriado legal"></div>
+      <div><button class="btn" type="submit">Guardar período</button></div>
+    </form>
+    <div id="ausList" style="margin-top:12px"></div>
+    <p class="muted" style="margin:12px 0 0">Durante el período la persona aparece sola como <b>Permiso / Vacación</b> o <b>Licencia médica</b> en el planograma y los reportes, sin marcarla cada día. Si un día igual viene, márcala Presente en el planograma y ese día manda lo marcado a mano.</p></div>
   <form class="card" id="addForm" autocomplete="off">
     <h2>Agregar persona</h2>
     <div class="frm">
@@ -410,8 +421,34 @@ function syncDims(){
   keep('#vSuc',SUC.map(s=>`<option>${esc(s)}</option>`).join(''));
   keep('#vPue',PUESTOS.map(([k,l])=>`<option value="${esc(k)}">${esc(l)}</option>`).join(''));
   keep('#aEmp',EMP.map(([k,l])=>`<option value="${esc(k)}">${esc(l)}</option>`).join(''));
-  renderCat();renderVac();
+  renderCat();renderVac();renderAus();
 }
+function renderAus(){
+  if(!$('#ausList'))return;
+  const hoy=iso(new Date()),nom=id=>{const p=S.people.find(x=>x.id===id);return p?short(p.nombre):'(persona quitada)'};
+  const opts=[...S.people].sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(p=>`<option value="${esc(p.id)}">${esc(short(p.nombre))} · ${esc(p.sucursal)}</option>`).join('');
+  const sel=$('#auPer'),cur=sel.value;sel.innerHTML='<option value="">Elegir…</option>'+opts;if(cur)sel.value=cur;
+  const f=d=>{const [y,m,dd]=d.split('-');return `${dd}/${m}/${y.slice(2)}`};
+  const rows=S.aus.filter(a=>a.hasta>=hoy).sort((a,b)=>a.desde.localeCompare(b.desde));
+  const viejos=S.aus.length-rows.length;
+  $('#ausList').innerHTML=rows.length?`<div class="tw"><table><thead><tr><th>Persona</th><th>Tipo</th><th>Desde</th><th>Hasta</th><th>Días</th><th>Nota</th><th></th></tr></thead><tbody>${rows.map(a=>{const dias=Math.round((pd(a.hasta)-pd(a.desde))/864e5)+1,ahora=a.desde<=hoy;return `<tr><td>${esc(nom(a.persona))}</td><td><span class="badge ${EST[a.tipo].cls}">${esc(EST[a.tipo].txt)}</span></td><td>${f(a.desde)}</td><td>${f(a.hasta)}</td><td>${dias}${ahora?' <small class="muted">· en curso</small>':''}</td><td>${esc(a.nota||'')}</td><td style="text-align:right"><button class="x" data-aud="${esc(a.id)}">Quitar</button></td></tr>`}).join('')}</tbody></table></div>`:'<span class="muted">No hay vacaciones ni licencias programadas.</span>';
+  if(viejos)$('#ausList').insertAdjacentHTML('beforeend',`<p class="muted" style="margin:8px 0 0">${viejos} período${viejos>1?'s':''} ya terminado${viejos>1?'s':''} (siguen contando en los reportes de esas fechas).</p>`);
+}
+$('#ausForm').onsubmit=async e=>{
+  e.preventDefault();
+  const persona=$('#auPer').value,tipo=$('#auTipo').value,desde=$('#auDesde').value,hasta=$('#auHasta').value,nota=$('#auNota').value.trim();
+  if(!persona||!desde||!hasta)return;
+  if(hasta<desde){toast('La fecha "hasta" es anterior a "desde"');return}
+  if(!colAu||!S.canWrite){toast('Tu acceso es solo de lectura');return}
+  const choca=S.aus.find(a=>a.persona===persona&&a.desde<=hasta&&desde<=a.hasta);
+  if(choca&&!confirm('Esa persona ya tiene un período que se cruza con estas fechas. ¿Guardar igual?'))return;
+  try{await colAu.doc(persona+'_'+desde+'_'+Date.now().toString(36)).set({persona,tipo,desde,hasta,nota,creado:new Date().toISOString()});toast('Período guardado');$('#auNota').value=''}catch(err){toast('No se pudo guardar')}
+};
+$('#ausList').onclick=async e=>{const b=e.target.closest('[data-aud]');if(!b)return;
+  if(!colAu||!S.canWrite){toast('Tu acceso es solo de lectura');return}
+  if(!confirm('¿Quitar este período? Los días pasados vuelven a contar como presentes si no tenían marca.'))return;
+  try{await colAu.doc(b.dataset.aud).delete();toast('Período quitado')}catch(err){toast('No se pudo quitar')}
+};
 function renderVac(){
   const rows=S.vac.filter(v=>+v.cantidad>0).sort((a,b)=>SUC.indexOf(a.sucursal)-SUC.indexOf(b.sucursal)||PUESTOS.findIndex(x=>x[0]===a.puesto)-PUESTOS.findIndex(x=>x[0]===b.puesto));
   $('#vList').innerHTML=rows.length?rows.map(v=>`<span class="vchip" data-id="${esc(v.id)}">${esc(v.sucursal)} · ${esc(PNAME[v.puesto])}<button type="button" data-vd="${esc(v.id)}" aria-label="Menos">−</button><b>${+v.cantidad}</b><button type="button" data-vi="${esc(v.id)}" aria-label="Más">+</button></span>`).join(''):'<span class="muted">No hay vacantes registradas.</span>';
@@ -470,8 +507,8 @@ const DIA=['domingo','lunes','martes','miércoles','jueves','viernes','sábado']
 const iso=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 const pd=s=>{const [y,m,d]=s.split('-').map(Number);return new Date(y,m-1,d)};
 const slug=s=>s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'');
-const S={tab:'plan',date:iso(new Date()),suc:'Aldunate',repSuc:'',repMode:'dia',repDias:'5',repDate:iso(new Date()),repMonth:iso(new Date()).slice(0,7),people:[],vac:[],fl:[],fd:{},att:{},ready:false,canWrite:true,mes:iso(new Date()).slice(0,7)};
-let colP=null,colA=null,colC=null,colV=null,colF=null,colFD=null,chain=Promise.resolve();
+const S={tab:'plan',date:iso(new Date()),suc:'Aldunate',repSuc:'',repMode:'dia',repDias:'5',repDate:iso(new Date()),repMonth:iso(new Date()).slice(0,7),people:[],vac:[],aus:[],fl:[],fd:{},att:{},ready:false,canWrite:true,mes:iso(new Date()).slice(0,7)};
+let colP=null,colA=null,colC=null,colV=null,colF=null,colFD=null,colAu=null,chain=Promise.resolve();
 const toast=m=>{const t=$('#toast');t.textContent=m;t.hidden=false;clearTimeout(toast.h);toast.h=setTimeout(()=>t.hidden=true,3000)};
 const title=n=>n.toLowerCase().split(' ').map(w=>['de','del','la'].includes(w)?w:w.charAt(0).toUpperCase()+w.slice(1)).join(' ');
 const PART=['de','del','la','las','los','san'];
@@ -497,7 +534,12 @@ $('#sucSeg').onclick=e=>{const b=e.target.closest('[data-s]');if(b){S.suc=b.data
 $('#repSuc').onclick=e=>{const b=e.target.closest('[data-s]');if(b){S.repSuc=b.dataset.s;render()}};
 
 /* ---- planograma ---- */
-const dayEst=()=>(S.att[S.date]&&S.att[S.date].estados)||{};
+// Períodos de vacaciones / licencia (colección 'ausencias'): tipo M o L entre desde y hasta (inclusive)
+const ausTipo=(id,date)=>{let t=null;for(const a of S.aus){if(a.persona===id&&a.desde<=date&&date<=a.hasta){if(a.tipo==='L')return 'L';t=a.tipo}}return t};
+const ausDe=(id,date)=>S.aus.find(a=>a.persona===id&&a.desde<=date&&date<=a.hasta);
+// Estados del día: lo marcado a mano manda; si no hay marca, se usa el período programado
+const estDia=date=>{const man=(S.att[date]&&S.att[date].estados)||{},o={};S.people.forEach(p=>{const t=ausTipo(p.id,date);if(t)o[p.id]=t});Object.keys(man).forEach(k=>{if(man[k])o[k]=man[k]});return o};
+const dayEst=()=>estDia(S.date);
 const vacOf=(suc,k)=>S.vac.filter(v=>v.sucursal===suc&&v.puesto===k).reduce((a,v)=>a+(+v.cantidad||0),0);
 const vacTotal=(suc)=>S.vac.filter(v=>(!suc||v.sucursal===suc)&&PUESTOS.some(x=>x[0]===v.puesto)&&SUC.includes(v.sucursal)).reduce((a,v)=>a+(+v.cantidad||0),0);
 function renderClose(){const d=S.att[S.date],c=d&&d.cerrado;$('#closeDay').textContent=c?'Reabrir jornada':'Cerrar jornada';$('#closeTxt').textContent=c?`Cerrada a las ${new Date(c).toLocaleTimeString('es-CL',{hour:'2-digit',minute:'2-digit'})}`:'';}
@@ -547,7 +589,7 @@ function renderPlan(){renderClose();
 let _rz;addEventListener('resize',()=>{clearTimeout(_rz);_rz=setTimeout(()=>{if(S.tab==='plan')renderPlan()},150)});
 $('#plan').onclick=e=>{
   const all=e.target.closest('[data-all]');
-  if(all){const ks=all.dataset.all.split(','),ids=S.people.filter(p=>p.sucursal===S.suc&&ks.includes(p.puesto)&&dayEst()[p.id]).map(p=>p.id);if(!ids.length){toast('Ya están todos presentes');return}mark(ids,null);return}
+  if(all){const ks=all.dataset.all.split(','),man=(S.att[S.date]&&S.att[S.date].estados)||{},ids=S.people.filter(p=>p.sucursal===S.suc&&ks.includes(p.puesto)&&man[p.id]&&man[p.id]!=='P').map(p=>p.id);if(!ids.length){toast('Ya están todos presentes');return}mark(ids,null);return}
   const vt=e.target.closest('[data-vac]');if(vt){openVacPop(vt);return}
   const t=e.target.closest('[data-p]');if(t)openPop(t);
 };
@@ -599,7 +641,8 @@ $('#closeDay').onclick=()=>{
 };
 function mark(ids,val){
   if(!S.canWrite||!colA){toast('Tu acceso es solo de lectura');return}
-  const date=S.date,obj={};ids.forEach(i=>obj[i]=(val==='P'?null:val));
+  // Presente dentro de un período programado se guarda como 'P' explícito para que gane ese día
+  const date=S.date,obj={};ids.forEach(i=>obj[i]=((!val||val==='P')?(ausTipo(i,date)?'P':null):val));
   chain=chain.then(async()=>{
     try{const ref=colA.doc(date),ex=S.att[date];
       if(ex)await ref.update({estados:obj});else if(Object.values(obj).some(v=>v))await ref.set({fecha:date,estados:obj});
@@ -608,7 +651,7 @@ function mark(ids,val){
 }
 
 /* ---- reportes ---- */
-const eff=(date,id)=>{const d=S.att[date];return (d&&d.estados&&d.estados[id])||'P'};
+const eff=(date,id)=>{const d=S.att[date];return (d&&d.estados&&d.estados[id])||ausTipo(id,date)||'P'};
 const dlong=s=>{const d=pd(s);return `${DIA[d.getDay()]} ${d.getDate()} de ${MES[d.getMonth()]} ${d.getFullYear()}`};
 const dshort=s=>{const d=pd(s);return `${DIA[d.getDay()].slice(0,3)} ${d.getDate()}`};
 function weekDays(s){const d=pd(s);d.setDate(d.getDate()-((d.getDay()+6)%7));return Array.from({length:7},()=>{const x=iso(d);d.setDate(d.getDate()+1);return x})}
@@ -744,7 +787,7 @@ $('#perBody').onclick=async e=>{const b=e.target.closest('button');if(!b)return;
 };
 
 function renderTotal(){
-  const n=S.people.length,est=(S.att[S.date]&&S.att[S.date].estados)||{};
+  const n=S.people.length,est=estDia(S.date);
   const pres=S.people.filter(p=>!est[p.id]||est[p.id]==='P').length,pct=n?Math.round(pres/n*100):0;
   const isToday=S.date===iso(new Date()),lab=isToday?'hoy':fmtD(S.date);
   const por=SUC.map(s=>`${s} ${S.people.filter(p=>p.sucursal===s).length}`).join(' · ');
@@ -903,6 +946,8 @@ async function boot(){
       render();
     },e=>setSync(false,'Error de conexión'));
     colA.onSnapshot(s=>{S.att=Object.fromEntries(s.docs.map(d=>[d.id,d.data()]));render()},e=>setSync(false,'Error de conexión'));
+    colAu=db.collection('ausencias');
+    colAu.onSnapshot(s=>{S.aus=s.docs.map(d=>({id:d.id,...d.data()})).filter(a=>a.persona&&a.desde&&a.hasta);renderAus();render()},e=>{});
   }catch(e){setSync(false,'Sin conexión a la base de datos')}
 }
 boot();

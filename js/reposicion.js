@@ -69,6 +69,7 @@ const ReposicionSection = (() => {
     return producto[bodega]?.min ?? null;
   }
 
+  let diagTerm = '';
   function filasAnalisis() {
     if (!allRecords) return [];
     return ReposicionAnalysis.analizar(allRecords, obtenerMinimo);
@@ -193,15 +194,7 @@ const ReposicionSection = (() => {
           <span class="reposicion-card-value">${prev.length.toLocaleString('es-CL')}</span>
         </div>
       </div>
-      ${invalidos.length ? `<p style="color:#b45309; font-size:13px; margin:-6px 0 12px;">⚠️ ${invalidos.length} producto(s) tienen un nivel mínimo guardado que no es un número; se está usando el umbral por defecto (${ReposicionAnalysis.UMBRAL_STOCK_BAJO_DEFAULT}). Revísalos en "Niveles Mínimos": ${invalidos.slice(0, 8).join(', ')}${invalidos.length > 8 ? '…' : ''}</p>` : ''}
-      <div class="panel" style="margin:0 0 16px; padding:14px 16px;">
-        <label style="font-size:13px; font-weight:600; display:block; margin-bottom:6px;">¿Por qué un producto no aparece en la reposición?</label>
-        <div style="display:flex; gap:8px; flex-wrap:wrap;">
-          <input id="diagCodigo" type="search" placeholder="Código o nombre, ej. TITANB20072" style="flex:1; min-width:220px; padding:8px 10px; border:1px solid #d4d9e0; border-radius:8px; font:inherit;">
-          <button class="btn-outline" id="diagBtn" type="button">Revisar</button>
-        </div>
-        <div id="diagResultado" style="margin-top:10px;"></div>
-      </div>`;
+      ${invalidos.length ? `<p style="color:#b45309; font-size:13px; margin:-6px 0 12px;">⚠️ ${invalidos.length} producto(s) tienen un nivel mínimo guardado que no es un número; se está usando el umbral por defecto (${ReposicionAnalysis.UMBRAL_STOCK_BAJO_DEFAULT}). Revísalos en "Niveles Mínimos": ${invalidos.slice(0, 8).join(', ')}${invalidos.length > 8 ? '…' : ''}</p>` : ''}`;
 
     const nivelesNota = `
       <p style="color:#6b7280; font-size:13px; margin:-6px 0 16px;">
@@ -217,7 +210,17 @@ const ReposicionSection = (() => {
           <div class="icon">✅</div>
           <strong>Todo el stock está en niveles saludables</strong>
           <span>Ningún producto de SAN FRANCISCO 918 o ALDUNATE está bajo su nivel mínimo.</span>
-        </div>`;
+        </div>
+      <details class="panel" id="diagPanel" style="margin-top:20px;"${diagTerm ? ' open' : ''}>
+        <summary class="filter-bar" style="cursor:pointer; list-style:none;">🔎 Revisar un producto</summary>
+        <div style="padding:16px 20px;">
+          <div class="field" style="display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap;">
+            <div style="flex:1; min-width:240px;"><label for="diagCodigo">CÓDIGO O NOMBRE</label><input id="diagCodigo" type="search" placeholder="Ej: TITANB20072"></div>
+            <button class="btn-outline" id="diagBtn" type="button">Revisar</button>
+          </div>
+          <div id="diagResultado" style="margin-top:12px;"></div>
+        </div>
+      </details>`;
     }
 
     const filtradas = filasFiltradas();
@@ -254,7 +257,17 @@ const ReposicionSection = (() => {
           <div class="icon">🔎</div>
           <strong>No hay resultados con ese filtro</strong>
           <span>Prueba con otra combinación de bodega y estado.</span>
-        </div>`;
+        </div>
+      <details class="panel" id="diagPanel" style="margin-top:20px;"${diagTerm ? ' open' : ''}>
+        <summary class="filter-bar" style="cursor:pointer; list-style:none;">🔎 Revisar un producto</summary>
+        <div style="padding:16px 20px;">
+          <div class="field" style="display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap;">
+            <div style="flex:1; min-width:240px;"><label for="diagCodigo">CÓDIGO O NOMBRE</label><input id="diagCodigo" type="search" placeholder="Ej: TITANB20072"></div>
+            <button class="btn-outline" id="diagBtn" type="button">Revisar</button>
+          </div>
+          <div id="diagResultado" style="margin-top:12px;"></div>
+        </div>
+      </details>`;
     }
 
     const todasIncluidas = filtradas.every(f => !excluidosPdf.has(claveFila(f)));
@@ -331,6 +344,16 @@ const ReposicionSection = (() => {
         <span id="pdfIncludeInfo">${mensajePdfInfo(filtradas)}</span>
         <button class="btn-primary" id="generateTrasladoPdf" type="button" ${resueltosFiltrados === 0 ? 'disabled' : ''}>🖨 Generar PDF de orden de traslado</button>
       </div>
+      <details class="panel" id="diagPanel" style="margin-top:20px;"${diagTerm ? ' open' : ''}>
+        <summary class="filter-bar" style="cursor:pointer; list-style:none;">🔎 Revisar un producto</summary>
+        <div style="padding:16px 20px;">
+          <div class="field" style="display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap;">
+            <div style="flex:1; min-width:240px;"><label for="diagCodigo">CÓDIGO O NOMBRE</label><input id="diagCodigo" type="search" placeholder="Ej: TITANB20072"></div>
+            <button class="btn-outline" id="diagBtn" type="button">Revisar</button>
+          </div>
+          <div id="diagResultado" style="margin-top:12px;"></div>
+        </div>
+      </details>
     `;
   }
 
@@ -343,15 +366,16 @@ const ReposicionSection = (() => {
     const r = allRecords.find(x => norm(x.codigo) === t) || allRecords.find(x => norm(x.codigo).includes(t) || norm(x.nombre).includes(t));
     if (!r) return `<span style="color:#b91c1c;">No encontré "${term}" en el stock cargado. Si el producto no aparece en el export de Softland, la reposición no lo puede ver.</span>`;
     const d = ReposicionAnalysis.diagnosticar(r, obtenerMinimo);
-    const fuenteTxt = { configurado: 'configurado', defecto: `por defecto (${ReposicionAnalysis.UMBRAL_STOCK_BAJO_DEFAULT})`, invalido: '⚠️ vacío o inválido → usa el por defecto' };
-    const filasB = d.bodegas.map(b => `<tr><td>${b.label}</td><td style="text-align:right;"><b>${b.stock.toLocaleString('es-CL')}</b></td><td style="text-align:right;">${b.min.toLocaleString('es-CL')} <span style="color:#8a97a5;font-size:12px;">${fuenteTxt[b.fuente]}</span></td>
-      <td>${b.bajo ? '<span class="badge badge-warn">Bajo el mínimo</span>' : b.cerca ? '<span class="badge" style="background:#e0f2fe;color:#075985;">Cerca del mínimo</span>' : '<span style="color:#15803d;">Sobre el mínimo</span>'}</td></tr>`).join('');
+    const fuenteTxt = { configurado: 'configurado', defecto: 'por defecto', invalido: 'mínimo guardado inválido, usa el por defecto' };
+    const filasB = d.bodegas.map(b => `<tr><td>${b.label}</td><td style="text-align:right;"><b>${b.stock.toLocaleString('es-CL')}</b></td><td style="text-align:right; color:#6b7280;">${b.min.toLocaleString('es-CL')}${b.fuente === 'configurado' ? '' : ` <span style="font-size:12px;">(${fuenteTxt[b.fuente]})</span>`}</td>
+      <td>${b.bajo ? '<span class="badge badge-warn">Bajo el mínimo</span>' : b.cerca ? '<span class="badge badge-warn" style="opacity:.75;">Cerca del mínimo</span>' : '<span class="badge badge-ok">Sobre el mínimo</span>'}</td></tr>`).join('');
     const conclusion = d.filas.length
-      ? d.filas.map(f => f.resuelto ? `✅ Aparece: ${f.destinoLabel} está en ${f.stockDestino} (mínimo ${f.umbralDestino}) → traslado de ${f.cantidad.toLocaleString('es-CL')} desde ${f.origenLabel}.` : `⚠️ Aparece como "Evaluar compra": ${f.destinoLabel} está bajo el mínimo pero ni VIEL ni la otra bodega tienen stock para enviar.`).join('<br>')
+      ? d.filas.map(f => f.resuelto ? `Sugerido: ${f.origenLabel} → ${f.destinoLabel}, ${f.cantidad.toLocaleString('es-CL')} ${r.unidad || ''}.` : `${f.destinoLabel} está bajo el mínimo, pero ni VIEL ni la otra bodega tienen stock para enviar (Evaluar compra).`).join('<br>')
       : `No aparece porque ninguna de las dos bodegas está en su mínimo o bajo él (se repone cuando el stock es ≤ al mínimo).${d.bodegas.some(b => b.cerca) ? ' Está <b>cerca</b>: aparece en Estado → Preventivo.' : ''} Si un pedido grande puede vaciarla antes de la próxima revisión, conviene subir el mínimo.`;
-    return `<div style="font-size:13px;"><b>${r.codigo}</b> · ${r.nombre} · VIEL: <b>${r.viel.toLocaleString('es-CL')}</b> ${r.unidad || ''}
-      <div class="table-scroll" style="margin:8px 0;"><table class="data-table"><thead><tr><th>Bodega</th><th>Stock</th><th>Mínimo usado</th><th>Estado</th></tr></thead><tbody>${filasB}</tbody></table></div>
-      <div>${conclusion}</div><div style="color:#8a97a5;font-size:12px;margin-top:4px;">${origen || ''}</div></div>`;
+    return `<div style="font-size:14px; margin-bottom:8px;"><b>${r.codigo}</b> · ${r.nombre}</div>
+      <div class="table-scroll"><table class="data-table"><thead><tr><th>Bodega</th><th>Stock</th><th>Mínimo</th><th>Estado</th></tr></thead>
+        <tbody>${filasB}<tr><td>VIEL</td><td style="text-align:right;">${r.viel.toLocaleString('es-CL')}</td><td style="text-align:right; color:#6b7280;">—</td><td style="color:#6b7280;">Bodega de acopio (envía)</td></tr></tbody></table></div>
+      <p style="font-size:13px; margin:10px 0 0;">${conclusion}</p>`;
   }
 
   // ---------- Vista: Niveles Mínimos ----------
@@ -572,7 +596,6 @@ const ReposicionSection = (() => {
 
   // ---------- Eventos ----------
 
-  let diagTerm = '';
   function attachResultEvents() {
     if (vista === 'analisis') {
       const diagIn = document.getElementById('diagCodigo'), diagOut = document.getElementById('diagResultado');

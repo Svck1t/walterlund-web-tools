@@ -12,19 +12,11 @@
       <div class="tabs">
         <button class="tab active" data-view="lista">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
-          Lista
-        </button>
-        <button class="tab" data-view="resumen">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>
-          Resumen
+          Registros
         </button>
         <button class="tab" data-view="dashboard">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>
           Dashboard
-        </button>
-        <button class="tab" data-view="documentos">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 2v20l3-2 3 2 3-2 3 2 3-2 1 .7V2l-1 .7-3-2-3 2-3-2-3 2-3-2z"/><line x1="8" y1="8" x2="16" y2="8"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
-          Facturas
         </button>
       </div>
       <button class="btn btn-secondary btn-icon-only" id="btn-refresh" title="Recargar">
@@ -86,21 +78,19 @@
     </button>
   </div>
 
-  <div id="vista-lista" class="table-card">
-    <div id="lista-content"></div>
+  <div id="vista-lista">
+    <div class="docs-bar">
+      <div class="seg" role="group" aria-label="Agrupar registros">
+        <button type="button" class="seg-btn active" data-agrupar="fecha">Por fecha</button>
+        <button type="button" class="seg-btn" data-agrupar="proveedor">Por proveedor</button>
+      </div>
+      <button class="btn btn-secondary btn-adjuntar hidden" id="btn-proveedores">Ordenar proveedores</button>
+    </div>
+    <div id="lista-content" class="table-card"></div>
   </div>
 
   <div id="vista-dashboard" class="hidden">
     <div id="dashboard-content"></div>
-  </div>
-
-  <div id="vista-documentos" class="hidden">
-    <div id="documentos-content"></div>
-  </div>
-
-  <div id="vista-resumen" class="hidden">
-    <div class="docs-bar"><span class="text-muted" style="font-size:13px;">Gasto por proveedor</span><button class="btn btn-secondary btn-adjuntar" id="btn-proveedores">Ordenar proveedores</button></div>
-    <div id="resumen-content" class="resumen-list"></div>
   </div>
 
   <footer>

@@ -1,6 +1,6 @@
 /* ============================================
    compras.js
-   Sección "Compras Nacionales": carga la webapp Control de Compras
+   Sección "Control de Gas" (antes Compras Nacionales): carga la webapp Control de Compras
    (antes en control-ingresos-wl.vercel.app) de forma NATIVA dentro
    de la plataforma, igual que Control de Despachos (controlFacturas.js):
    - markup/CSS/JS en js/compras-assets/, montados en un Shadow DOM

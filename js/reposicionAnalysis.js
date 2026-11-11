@@ -39,6 +39,9 @@ const ReposicionAnalysis = (() => {
 
   const UMBRAL_STOCK_BAJO_DEFAULT = 30; // se usa si el producto no tiene nivel mínimo configurado
   const PORCENTAJE_MINIMO_ORIGEN = 0.7; // el centro que envía no puede bajar de esto
+  // Preventivo: avisa cuando el stock está sobre el mínimo pero a menos de un 50% de él
+  // (ej. mínimo 20 → avisa con 30 o menos), para reponer antes de que un pedido grande lo deje en 0.
+  const MARGEN_PREVENTIVO = 1.5;
 
   const BODEGA_LABEL = {
     sanFco: 'SAN FRANCISCO 918',
@@ -55,12 +58,23 @@ const ReposicionAnalysis = (() => {
    * (vía `obtenerMinimo`) si existe, si no el umbral por defecto.
    * `obtenerMinimo` es opcional — sin ella, se comporta igual que antes (umbral fijo).
    */
+  // Un mínimo vacío ('') o no numérico NO es 0: es "sin configurar" y usa el umbral por defecto.
+  // (Antes Number('') daba 0 y el producto solo aparecía cuando ya se había agotado.)
+  function minimoValido(v) {
+    if (v === null || v === undefined) return null;
+    if (typeof v === 'string' && v.trim() === '') return null;
+    const n = Number(String(v).replace(',', '.'));
+    return isNaN(n) || n < 0 ? null : n;
+  }
   function umbralPara(codigo, bodega, obtenerMinimo) {
-    if (obtenerMinimo) {
-      const custom = obtenerMinimo(codigo, bodega);
-      if (custom !== null && custom !== undefined && !isNaN(custom)) return Number(custom);
-    }
-    return UMBRAL_STOCK_BAJO_DEFAULT;
+    const custom = obtenerMinimo ? minimoValido(obtenerMinimo(codigo, bodega)) : null;
+    return custom !== null ? custom : UMBRAL_STOCK_BAJO_DEFAULT;
+  }
+  function fuenteUmbral(codigo, bodega, obtenerMinimo) {
+    if (!obtenerMinimo) return 'defecto';
+    const v = obtenerMinimo(codigo, bodega);
+    if (v === null || v === undefined) return 'defecto';
+    return minimoValido(v) === null ? 'invalido' : 'configurado';
   }
 
   /** Cuánto puede dar un centro de distribución sin bajar del 70% de su stock actual.
@@ -77,7 +91,7 @@ const ReposicionAnalysis = (() => {
    * consultar el nivel mínimo configurado manualmente por producto.
    * Devuelve un array con 0, 1 o 2 filas (una por bodega con stock bajo).
    */
-  function evaluarRecord(record, obtenerMinimo) {
+  function evaluarRecord(record, obtenerMinimo, factor = 1) {
     const filas = [];
     let vielRestante = record.viel;
 
@@ -87,7 +101,7 @@ const ReposicionAnalysis = (() => {
     };
 
     const destinosBajos = ['sanFco', 'aldunate']
-      .filter(d => record[d] <= umbrales[d])
+      .filter(d => record[d] <= umbrales[d] * factor)
       .sort((a, b) => record[a] - record[b]); // más crítico (menos stock) primero
 
     destinosBajos.forEach(destino => {
@@ -102,7 +116,8 @@ const ReposicionAnalysis = (() => {
         cantidad = round2(vielRestante);
         vielRestante = 0; // VIEL entrega todo lo que tiene de una vez
       } else {
-        const disponibleOtro = disponibleDesdeCentro(record[otro], umbrales[otro]);
+        // en modo preventivo, el otro centro tampoco presta si está cerca de su propio mínimo
+        const disponibleOtro = disponibleDesdeCentro(record[otro], umbrales[otro] * factor);
         if (disponibleOtro > 0) {
           origen = otro;
           cantidad = disponibleOtro;
@@ -125,7 +140,8 @@ const ReposicionAnalysis = (() => {
         stockOrigenResultante: origen ? round2(stockOrigenActual - cantidad) : null,
         stockDestinoResultante: origen ? round2(stockDestino + cantidad) : null,
         cantidad,
-        resuelto: origen !== null
+        resuelto: origen !== null,
+        preventivo: factor > 1 && stockDestino > umbrales[destino]
       });
     });
 
@@ -145,6 +161,26 @@ const ReposicionAnalysis = (() => {
     return filas;
   }
 
+  /** Productos sobre su mínimo pero a menos de un 50% de él: reposición preventiva (solo filas nuevas). */
+  function preventivos(records, obtenerMinimo) {
+    return records.flatMap(r => evaluarRecord(r, obtenerMinimo, MARGEN_PREVENTIVO))
+      .filter(f => f.preventivo)
+      .sort((a, b) => (a.stockDestino / (a.umbralDestino || 1)) - (b.stockDestino / (b.umbralDestino || 1)));
+  }
+
+  /** Explica, para un producto, por qué aparece o no en la reposición. */
+  function diagnosticar(record, obtenerMinimo) {
+    const bod = ['sanFco', 'aldunate'].map(b => {
+      const min = umbralPara(record.codigo, b, obtenerMinimo);
+      const fuente = fuenteUmbral(record.codigo, b, obtenerMinimo);
+      const bajo = record[b] <= min;
+      const cerca = !bajo && record[b] <= min * MARGEN_PREVENTIVO;
+      return { bodega: b, label: BODEGA_LABEL[b], stock: record[b], min, fuente, bajo, cerca };
+    });
+    const filas = evaluarRecord(record, obtenerMinimo);
+    return { record, bodegas: bod, filas };
+  }
+
   function resumen(filas) {
     const resueltos = filas.filter(f => f.resuelto);
     return {
@@ -157,6 +193,10 @@ const ReposicionAnalysis = (() => {
   return {
     analizar,
     resumen,
+    preventivos,
+    diagnosticar,
+    minimoValido,
+    MARGEN_PREVENTIVO,
     UMBRAL_STOCK_BAJO_DEFAULT,
     PORCENTAJE_MINIMO_ORIGEN,
     BODEGA_LABEL

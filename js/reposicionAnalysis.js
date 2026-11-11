@@ -31,8 +31,12 @@
      dar sin bajar de su límite (0 para VIEL, 70% de su stock
      actual para el otro centro de distribución).
    - Si un mismo producto está bajo en ambas bodegas de distribución
-     a la vez y VIEL solo alcanza para una, se prioriza a la que
-     tiene MENOS stock (la más crítica).
+     a la vez, VIEL se REPARTE entre las dos (corregido nov 2026; antes
+     se le daba todo a la más crítica y la otra quedaba sin traslado):
+     primero se cubre lo que le falta a cada una para llegar a su
+     mínimo (en proporción a ese faltante si VIEL no alcanza), y lo que
+     sobra se reparte según lo que despacha cada centro: 80% ALDUNATE,
+     20% SAN FRANCISCO 918.
 ============================================ */
 
 const ReposicionAnalysis = (() => {
@@ -42,6 +46,8 @@ const ReposicionAnalysis = (() => {
   // Preventivo: avisa cuando el stock está sobre el mínimo pero a menos de un 50% de él
   // (ej. mínimo 20 → avisa con 30 o menos), para reponer antes de que un pedido grande lo deje en 0.
   const MARGEN_PREVENTIVO = 1.5;
+  // Reparto del sobrante de VIEL cuando ambos centros necesitan (según lo que despacha cada uno)
+  const PESO_CENTRO = { aldunate: 0.8, sanFco: 0.2 };
 
   const BODEGA_LABEL = {
     sanFco: 'SAN FRANCISCO 918',
@@ -104,6 +110,28 @@ const ReposicionAnalysis = (() => {
       .filter(d => record[d] <= umbrales[d] * factor)
       .sort((a, b) => record[a] - record[b]); // más crítico (menos stock) primero
 
+    // Cuánto de VIEL le toca a cada destino bajo
+    const asignViel = {};
+    if (record.viel > 0 && destinosBajos.length === 1) {
+      asignViel[destinosBajos[0]] = round2(record.viel);          // uno solo: VIEL entrega todo
+    } else if (record.viel > 0 && destinosBajos.length === 2) {
+      // en resmas/unidades se reparte en enteros; si VIEL trae decimales (kg) se mantienen 2 decimales
+      const redondear = Number.isInteger(record.viel) ? Math.floor : round2;
+      const falta = d => Math.max(0, umbrales[d] - record[d]);
+      const faltaTotal = destinosBajos.reduce((t, d) => t + falta(d), 0);
+      if (faltaTotal >= record.viel && faltaTotal > 0) {
+        // VIEL no alcanza para dejar a ambas en su mínimo: en proporción a lo que le falta a cada una
+        destinosBajos.forEach(d => { asignViel[d] = redondear(record.viel * falta(d) / faltaTotal); });
+      } else {
+        // cubre el faltante de cada una y reparte el resto 80% Aldunate / 20% San Francisco
+        const resto = record.viel - faltaTotal;
+        destinosBajos.forEach(d => { asignViel[d] = redondear(falta(d) + resto * PESO_CENTRO[d]); });
+      }
+      // que la suma sea exactamente lo que tiene VIEL (los redondeos van a la más crítica)
+      const dif = round2(record.viel - destinosBajos.reduce((t, d) => t + asignViel[d], 0));
+      asignViel[destinosBajos[0]] = round2(asignViel[destinosBajos[0]] + dif);
+    }
+
     destinosBajos.forEach(destino => {
       const stockDestino = record[destino];
       const otro = destino === 'sanFco' ? 'aldunate' : 'sanFco';
@@ -111,10 +139,10 @@ const ReposicionAnalysis = (() => {
       let origen = null;
       let cantidad = 0;
 
-      if (vielRestante > 0) {
+      if (asignViel[destino] > 0) {
         origen = 'viel';
-        cantidad = round2(vielRestante);
-        vielRestante = 0; // VIEL entrega todo lo que tiene de una vez
+        cantidad = asignViel[destino];
+        vielRestante = round2(vielRestante - cantidad);
       } else {
         // en modo preventivo, el otro centro tampoco presta si está cerca de su propio mínimo
         const disponibleOtro = disponibleDesdeCentro(record[otro], umbrales[otro] * factor);

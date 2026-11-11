@@ -53,12 +53,25 @@
           "value": "no-cache"
         }
       ]
+    },
+    {
+      "source": "/gas.html",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-cache"
+        }
+      ]
     }
   ],
   "rewrites": [
     {
       "source": "/llegadas",
       "destination": "/llegadas.html"
+    },
+    {
+      "source": "/gas",
+      "destination": "/gas.html"
     }
   ],
   "functions": {

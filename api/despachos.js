@@ -18,8 +18,9 @@ module.exports = async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
 
     if (req.method === 'GET') {
-      const m = req.query && req.query.m ? `&m=${encodeURIComponent(req.query.m)}` : '';
-      const r = await fetch(`${APPS_SCRIPT_URL}?action=list${m}`);
+      // pasa todos los parámetros (m, tipo, …) al Apps Script
+      const qs = new URLSearchParams(Object.assign({ action: 'list' }, req.query || {})).toString();
+      const r = await fetch(`${APPS_SCRIPT_URL}?${qs}`);
       res.status(200).json(await r.json());
       return;
     }

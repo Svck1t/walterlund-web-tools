@@ -73,6 +73,19 @@ const ReposicionSection = (() => {
     if (!allRecords) return [];
     return ReposicionAnalysis.analizar(allRecords, obtenerMinimo);
   }
+  // Sobre el mínimo pero cerca (≤ mínimo × 1,5): para reponer antes de quedar sin stock
+  function filasPreventivas() {
+    if (!allRecords) return [];
+    return ReposicionAnalysis.preventivos(allRecords, obtenerMinimo);
+  }
+  // Mínimos guardados vacíos o no numéricos (antes se leían como 0)
+  function minimosInvalidos() {
+    const all = NivelesMinimosStore.getAll();
+    return Object.keys(all).filter(c => ['sanFco', 'aldunate'].some(b => {
+      const v = all[c] && all[c][b] ? all[c][b].min : null;
+      return v !== null && v !== undefined && ReposicionAnalysis.minimoValido(v) === null && String(v).trim() !== '';
+    }));
+  }
 
   // ---------- Estructura general ----------
 
@@ -110,7 +123,8 @@ const ReposicionSection = (() => {
   // ---------- Vista: Análisis ----------
 
   function filasFiltradas() {
-    return filasAnalisis().filter(f => {
+    const base = filtroEstado === 'preventivo' ? filasPreventivas() : filasAnalisis();
+    return base.filter(f => {
       if (filtroRuta && `${f.origen}-${f.destino}` !== filtroRuta) return false;
       if (filtroEstado === 'resuelto' && !f.resuelto) return false;
       if (filtroEstado === 'sinSolucion' && f.resuelto) return false;
@@ -157,6 +171,8 @@ const ReposicionSection = (() => {
 
     const filas = filasAnalisis();
     const r = ReposicionAnalysis.resumen(filas);
+    const prev = filasPreventivas();
+    const invalidos = minimosInvalidos();
 
     const cards = `
       <div class="reposicion-summary">
@@ -172,6 +188,19 @@ const ReposicionSection = (() => {
           <span class="reposicion-card-label">Sin reposición disponible</span>
           <span class="reposicion-card-value">${r.totalSinSolucion.toLocaleString('es-CL')}</span>
         </div>
+        <div class="reposicion-card" title="Sobre el mínimo, pero a menos de un 50% de él. Filtra por Estado → Preventivo para verlos.">
+          <span class="reposicion-card-label">Cerca del mínimo (preventivo)</span>
+          <span class="reposicion-card-value">${prev.length.toLocaleString('es-CL')}</span>
+        </div>
+      </div>
+      ${invalidos.length ? `<p style="color:#b45309; font-size:13px; margin:-6px 0 12px;">⚠️ ${invalidos.length} producto(s) tienen un nivel mínimo guardado que no es un número; se está usando el umbral por defecto (${ReposicionAnalysis.UMBRAL_STOCK_BAJO_DEFAULT}). Revísalos en "Niveles Mínimos": ${invalidos.slice(0, 8).join(', ')}${invalidos.length > 8 ? '…' : ''}</p>` : ''}
+      <div class="panel" style="margin:0 0 16px; padding:14px 16px;">
+        <label style="font-size:13px; font-weight:600; display:block; margin-bottom:6px;">¿Por qué un producto no aparece en la reposición?</label>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <input id="diagCodigo" type="search" placeholder="Código o nombre, ej. TITANB20072" style="flex:1; min-width:220px; padding:8px 10px; border:1px solid #d4d9e0; border-radius:8px; font:inherit;">
+          <button class="btn-outline" id="diagBtn" type="button">Revisar</button>
+        </div>
+        <div id="diagResultado" style="margin-top:10px;"></div>
       </div>`;
 
     const nivelesNota = `
@@ -180,7 +209,7 @@ const ReposicionSection = (() => {
         ${NivelesMinimosStore.countConfigurados() > 0 ? `${NivelesMinimosStore.countConfigurados()} producto(s) con nivel mínimo personalizado — configúralos en la pestaña "Niveles Mínimos".` : 'Puedes personalizar el umbral por producto en la pestaña "Niveles Mínimos".'}
       </p>`;
 
-    if (filas.length === 0) {
+    if (filas.length === 0 && filtroEstado !== 'preventivo' && !prev.length) {
       return `
         ${cards}
         ${nivelesNota}
@@ -211,6 +240,7 @@ const ReposicionSection = (() => {
             <option value="" ${filtroEstado === '' ? 'selected' : ''}>Todos</option>
             <option value="resuelto" ${filtroEstado === 'resuelto' ? 'selected' : ''}>Traslado sugerido</option>
             <option value="sinSolucion" ${filtroEstado === 'sinSolucion' ? 'selected' : ''}>Evaluar compra</option>
+            <option value="preventivo" ${filtroEstado === 'preventivo' ? 'selected' : ''}>Preventivo (cerca del mínimo)</option>
           </select>
         </div>
       </div>`;
@@ -254,9 +284,11 @@ const ReposicionSection = (() => {
           <td style="text-align:right; color:#6b7280;">${f.umbralDestino.toLocaleString('es-CL')}</td>
           <td>${f.origenLabel ?? '—'}</td>
           <td style="text-align:right;">${f.resuelto && f.stockOrigenActual != null ? f.stockOrigenActual.toLocaleString('es-CL') : '—'}</td>
-          <td>${f.resuelto
-            ? '<span class="badge badge-ok">Traslado sugerido</span>'
-            : '<span class="badge badge-warn">Evaluar compra</span>'}
+          <td>${f.preventivo
+            ? (f.resuelto ? '<span class="badge badge-ok" style="background:#e0f2fe;color:#075985;">Preventivo</span>' : '<span class="badge badge-warn">Preventivo · sin origen</span>')
+            : f.resuelto
+              ? '<span class="badge badge-ok">Traslado sugerido</span>'
+              : '<span class="badge badge-warn">Evaluar compra</span>'}
           </td>
         </tr>`;
     }).join('');
@@ -269,7 +301,9 @@ const ReposicionSection = (() => {
       ${nivelesNota}
       ${filterBar}
       <div class="results-count">
-        ${filtradas.length.toLocaleString('es-CL')} de ${filas.length.toLocaleString('es-CL')} producto(s) con stock bajo.
+        ${filtroEstado === 'preventivo'
+          ? `${filtradas.length.toLocaleString('es-CL')} producto(s) sobre su mínimo pero a menos de un 50% de él: conviene reponerlos antes de que un pedido los deje en cero.`
+          : `${filtradas.length.toLocaleString('es-CL')} de ${filas.length.toLocaleString('es-CL')} producto(s) con stock bajo.`}
       </div>
       <div class="table-scroll">
         <table class="data-table">
@@ -298,6 +332,26 @@ const ReposicionSection = (() => {
         <button class="btn-primary" id="generateTrasladoPdf" type="button" ${resueltosFiltrados === 0 ? 'disabled' : ''}>🖨 Generar PDF de orden de traslado</button>
       </div>
     `;
+  }
+
+  // ---------- Diagnóstico de un producto ----------
+  function diagnosticoHtml(term) {
+    const t = String(term || '').trim().toUpperCase();
+    if (!t) return '';
+    if (!allRecords) return '<span style="color:#6b7280;">Primero carga el stock.</span>';
+    const norm = s => String(s || '').toUpperCase().replace(/\s+/g, ' ');
+    const r = allRecords.find(x => norm(x.codigo) === t) || allRecords.find(x => norm(x.codigo).includes(t) || norm(x.nombre).includes(t));
+    if (!r) return `<span style="color:#b91c1c;">No encontré "${term}" en el stock cargado. Si el producto no aparece en el export de Softland, la reposición no lo puede ver.</span>`;
+    const d = ReposicionAnalysis.diagnosticar(r, obtenerMinimo);
+    const fuenteTxt = { configurado: 'configurado', defecto: `por defecto (${ReposicionAnalysis.UMBRAL_STOCK_BAJO_DEFAULT})`, invalido: '⚠️ vacío o inválido → usa el por defecto' };
+    const filasB = d.bodegas.map(b => `<tr><td>${b.label}</td><td style="text-align:right;"><b>${b.stock.toLocaleString('es-CL')}</b></td><td style="text-align:right;">${b.min.toLocaleString('es-CL')} <span style="color:#8a97a5;font-size:12px;">${fuenteTxt[b.fuente]}</span></td>
+      <td>${b.bajo ? '<span class="badge badge-warn">Bajo el mínimo</span>' : b.cerca ? '<span class="badge" style="background:#e0f2fe;color:#075985;">Cerca del mínimo</span>' : '<span style="color:#15803d;">Sobre el mínimo</span>'}</td></tr>`).join('');
+    const conclusion = d.filas.length
+      ? d.filas.map(f => f.resuelto ? `✅ Aparece: ${f.destinoLabel} está en ${f.stockDestino} (mínimo ${f.umbralDestino}) → traslado de ${f.cantidad.toLocaleString('es-CL')} desde ${f.origenLabel}.` : `⚠️ Aparece como "Evaluar compra": ${f.destinoLabel} está bajo el mínimo pero ni VIEL ni la otra bodega tienen stock para enviar.`).join('<br>')
+      : `No aparece porque ninguna de las dos bodegas está en su mínimo o bajo él (se repone cuando el stock es ≤ al mínimo).${d.bodegas.some(b => b.cerca) ? ' Está <b>cerca</b>: aparece en Estado → Preventivo.' : ''} Si un pedido grande puede vaciarla antes de la próxima revisión, conviene subir el mínimo.`;
+    return `<div style="font-size:13px;"><b>${r.codigo}</b> · ${r.nombre} · VIEL: <b>${r.viel.toLocaleString('es-CL')}</b> ${r.unidad || ''}
+      <div class="table-scroll" style="margin:8px 0;"><table class="data-table"><thead><tr><th>Bodega</th><th>Stock</th><th>Mínimo usado</th><th>Estado</th></tr></thead><tbody>${filasB}</tbody></table></div>
+      <div>${conclusion}</div><div style="color:#8a97a5;font-size:12px;margin-top:4px;">${origen || ''}</div></div>`;
   }
 
   // ---------- Vista: Niveles Mínimos ----------
@@ -518,8 +572,16 @@ const ReposicionSection = (() => {
 
   // ---------- Eventos ----------
 
+  let diagTerm = '';
   function attachResultEvents() {
     if (vista === 'analisis') {
+      const diagIn = document.getElementById('diagCodigo'), diagOut = document.getElementById('diagResultado');
+      if (diagIn && diagOut) {
+        const correr = () => { diagTerm = diagIn.value; diagOut.innerHTML = diagnosticoHtml(diagTerm); };
+        document.getElementById('diagBtn').addEventListener('click', correr);
+        diagIn.addEventListener('keydown', e => { if (e.key === 'Enter') correr(); });
+        if (diagTerm) { diagIn.value = diagTerm; diagOut.innerHTML = diagnosticoHtml(diagTerm); }
+      }
       const rutaSelect = document.getElementById('filtroRutaSelect');
       if (rutaSelect) {
         rutaSelect.addEventListener('change', (e) => {

@@ -3,7 +3,7 @@
 <header>
   <div class="container header-inner">
     <div>
-      <h1 class="title">Compras Nacionales</h1>
+      <h1 class="title">Control de Gas</h1>
       <p class="subtitle">
         <span id="sync-status" class="sync-pill sync-loading"><span class="sync-dot"></span><span id="sync-label">Sincronizando…</span></span>
       </p>
@@ -25,10 +25,6 @@
         <button class="tab" data-view="documentos">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 2v20l3-2 3 2 3-2 3 2 3-2 1 .7V2l-1 .7-3-2-3 2-3-2-3 2-3-2z"/><line x1="8" y1="8" x2="16" y2="8"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
           Facturas
-        </button>
-        <button class="tab" data-view="softland">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
-          Softland
         </button>
       </div>
       <button class="btn btn-secondary btn-icon-only" id="btn-refresh" title="Recargar">
@@ -100,11 +96,6 @@
 
   <div id="vista-documentos" class="hidden">
     <div id="documentos-content"></div>
-  </div>
-
-  <div id="vista-softland" class="hidden">
-    <div id="softland-content"></div>
-    <input type="file" accept=".xls,.xlsx" id="softland-input" class="hidden">
   </div>
 
   <div id="vista-resumen" class="hidden">

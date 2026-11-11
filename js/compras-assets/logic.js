@@ -1231,10 +1231,26 @@ function exportarCSV() {
 }
 
 // ----------- Cruce con el informe de Softland ("Informe de Guías de Recepción", Compra con Factura) -----------
-// El informe se lee en el navegador (SoftlandRecepciones, js/softlandRecepciones.js) y se guarda en este equipo.
-// No modifica la planilla: solo compara las facturas registradas aquí con lo ingresado en Softland.
+// El informe se lee en el navegador (SoftlandRecepciones, js/softlandRecepciones.js) y se guarda en Drive
+// (Apps Script anexo, /api/despachos) para que todos los equipos vean el mismo. Este equipo guarda una copia por si falla la red.
+// No modifica la planilla de compras: solo compara las facturas registradas aquí con lo ingresado en Softland.
 const SOFT_KEY = 'compras-softland-informe';
+const SOFT_API = '/api/despachos';
 let softInforme = (() => { try { return JSON.parse(localStorage.getItem(SOFT_KEY) || 'null'); } catch { return null; } })();
+let softSync = 'pendiente'; // pendiente | ok | error
+async function softTraer() {
+  try {
+    const r = await fetch(`${SOFT_API}?m=inf&tipo=compras`, { cache: 'no-store' });
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error || 'sin respuesta');
+    if (d.informe && (!softInforme || (d.informe.cargado || 0) >= (softInforme.cargado || 0))) {
+      softInforme = d.informe;
+      try { localStorage.setItem(SOFT_KEY, JSON.stringify(softInforme)); } catch {}
+    }
+    softSync = 'ok';
+  } catch (e) { console.error('Informe Softland:', e); softSync = 'error'; }
+  if (vista === 'softland') renderSoftland();
+}
 const soloDig = s => String(s || '').replace(/\D/g, '').replace(/^0+/, '');
 const BOD_SUC = { 'SF 918': 'San Francisco', 'Aldunate': 'Aldunate', 'Viel': 'Viel', 'San Ignacio': 'San Ignacio' };
 function provParecido(a, b) {
@@ -1266,6 +1282,8 @@ function cruceSoftland() {
 }
 function renderSoftland() {
   const cont = root.getElementById('softland-content');
+  if (softSync === 'pendiente') { softSync = 'cargando'; softTraer(); }
+  if (!softInforme && softSync === 'cargando') { cont.innerHTML = '<div class="table-card"><div class="empty-state"><p>Cargando el último informe…</p></div></div>'; return; }
   const cargar = `<button class="btn btn-primary" id="btn-softland"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> ${softInforme ? 'Cargar otro informe' : 'Cargar informe de Softland'}</button>`;
   if (!softInforme) {
     cont.innerHTML = `<div class="table-card"><div class="empty-state"><h3>Cruce con Softland</h3>
@@ -1278,7 +1296,7 @@ function renderSoftland() {
     const fCorta = f => f ? f.split('-').reverse().join('/') : '—';
     cont.innerHTML = `
       <div class="docs-bar">
-        <div class="docs-pend ok" style="font-weight:500">Informe del ${fCorta(softInforme.periodo.desde)} al ${fCorta(softInforme.periodo.hasta)} · ${filas.length} recepciones · ${fmtCLP(totSoft)} neto <span class="text-muted">· cargado ${new Date(softInforme.cargado).toLocaleDateString('es-CL')}</span></div>
+        <div class="docs-pend ok" style="font-weight:500">Informe del ${fCorta(softInforme.periodo.desde)} al ${fCorta(softInforme.periodo.hasta)} · ${filas.length} recepciones · ${fmtCLP(totSoft)} neto <span class="text-muted">· cargado ${new Date(softInforme.cargado).toLocaleDateString('es-CL')}${softInforme.cargadoPor ? ' por ' + escapeHtml(softInforme.cargadoPor) : ''}${softSync === 'error' ? ' · <b style="color:#b45309">copia de este equipo (no se pudo consultar el compartido)</b>' : ''}</span></div>
         ${cargar}
       </div>
       <div class="summary-grid" style="margin-bottom:14px">
@@ -1305,7 +1323,7 @@ function renderSoftland() {
       ${soloWeb.length ? `<h3 style="font-size:15px;margin:20px 0 8px">Registradas en la web sin recepción en Softland (${soloWeb.length})</h3>
         ${soloWeb.map(d => `<div class="doc-card"><div class="doc-card-main"><div class="doc-card-top"><span class="product-name">${escapeHtml(docLabel(d))}</span><span class="suc-badge${d.sucursal ? '' : ' suc-vacia'}" style="margin:0;">${escapeHtml(d.sucursal || 'Varias')}</span></div><div class="text-muted">${escapeHtml(d.proveedor)} · ${fCorta(d.fecha)}</div></div>
           <div class="doc-card-side"><div class="doc-card-total">${fmtCLP(d.total)}</div><div class="cuadre-badge cuadre-gris">Falta en Softland</div></div></div>`).join('')}` : ''}
-      <p class="text-muted" style="font-size:12px;margin-top:12px">Softland informa montos netos (sin IVA). Se comparan con el neto de la factura registrada; si no tiene neto, con el total / 1,19. El informe queda guardado en este equipo hasta que cargues otro.</p>`;
+      <p class="text-muted" style="font-size:12px;margin-top:12px">Softland informa montos netos (sin IVA). Se comparan con el neto de la factura registrada; si no tiene neto, con el total / 1,19. El informe queda compartido para todos hasta que alguien cargue otro.</p>`;
   }
   root.getElementById('btn-softland').addEventListener('click', () => root.getElementById('softland-input').click());
 }
@@ -1317,7 +1335,14 @@ root.getElementById('softland-input').addEventListener('change', async e => {
     const res = SoftlandRecepciones.parse(XLSX.read(await f.arrayBuffer(), { type: 'array' }), XLSX);
     const docs = res.docs.filter(x => !/devoluci/i.test(x.concepto));
     if (!docs.length) throw new Error('El informe no trae recepciones de compras (solo devoluciones)');
-    softInforme = { periodo: res.periodo, docs, archivo: f.name, cargado: Date.now() };
+    const nuevo = { periodo: res.periodo, docs, archivo: f.name, cargado: Date.now() };
+    let quien = '';
+    try { quien = localStorage.getItem('wl_nc_quien') || localStorage.getItem('wl_rc_quien') || ''; } catch {}
+    const r = await fetch(SOFT_API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'inf_guardar', tipo: 'compras', informe: nuevo, quien }) });
+    const d = await r.json().catch(() => ({ ok: false, error: 'HTTP ' + r.status }));
+    if (!d.ok) throw new Error('no se pudo compartir: ' + (d.error || ''));
+    softInforme = Object.assign(nuevo, { cargado: d.cargado || nuevo.cargado, cargadoPor: quien });
+    softSync = 'ok';
     try { localStorage.setItem(SOFT_KEY, JSON.stringify(softInforme)); } catch {}
     renderSoftland();
   } catch (err) { alert('No se pudo leer el informe: ' + err.message); }

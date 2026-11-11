@@ -36,11 +36,11 @@ const ComprasSection = (() => {
   }
 
   async function buildShadowApp() {
-    cargarFuentes();
+    // usa la fuente de la plataforma: ya no se cargan Fraunces / Geist / JetBrains Mono
     hostEl = document.createElement('div');
     hostEl.id = 'comprasHost';
     shadowRoot = hostEl.attachShadow({ mode: 'open' });
-    shadowRoot.innerHTML = '<div style="padding:24px; color:#5b6b7a;">Cargando Compras Nacionales...</div>';
+    shadowRoot.innerHTML = '<div style="padding:24px; color:#5b6b7a;">Cargando Control de Gas...</div>';
 
     const [css, markup, logic] = await Promise.all([
       fetchText('style.css'),

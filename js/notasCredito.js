@@ -1,5 +1,5 @@
 // =====================================================
-// SECCIÓN: NOTAS DE CRÉDITO — v4 (+ bot de Telegram + lectura con Gemini + informe de devoluciones Softland)
+// SECCIÓN: NOTAS DE CRÉDITO — v5 (+ bot de Telegram + lectura con Gemini + devoluciones Softland + solicitud presencial / origen)
 // Reemplaza el grupo de Telegram: solicitud → devolución en bodega → NC emitida (timbrada),
 // con respaldos en Drive (solicitud, foto de bodega, PDF timbrado) e historial de quién hizo qué.
 // Cruza con Control de Despachos (factura registrada / N/C marcada).
@@ -46,6 +46,9 @@ const NotasCreditoSection = (() => {
   const diasDesde = iso => iso ? dia(hoy || hoyLocal()) - dia(iso) : null;
   // Bodega de Control de Despachos ("" = Aldunate, "SAN FRANCISCO", "VIEL, SAN IGNACIO"…) -> nombre de esta sección
   const bodegaDeCF = b => { const u = txt(String(b || '').split(',')[0]); return !u ? 'Aldunate' : u.includes('FRANCISCO') ? 'SF 918' : u.includes('VIEL') ? 'Viel' : u.includes('IGNACIO') ? 'San Ignacio' : u.includes('CONCHA') ? 'Stgo Concha' : ''; };
+  // Origen de la solicitud. Las NC anteriores al campo se deducen del historial.
+  const ORIGENES = ['Telegram', 'Presencial', 'Web', 'Softland'];
+  const origenDe = n => n.origen || (/Importado desde Telegram|Telegram ·/.test(n.historial || '') ? 'Telegram' : /Softland ·/.test(n.historial || '') ? 'Softland' : 'Web');
   const lec = s => { try { return s ? JSON.parse(s) : null; } catch (e) { return null; } };
   const urlDoc = n => n.fotoUrl || n.solicitudUrl || '';
   const lecturaPendiente = n => { const d = lec(n.lecturaDoc), c = lec(n.lecturaNc); return (urlDoc(n) && (!d || d.url !== urlDoc(n))) || (n.ncUrl && (!c || c.url !== n.ncUrl)); };
@@ -94,6 +97,7 @@ const NotasCreditoSection = (() => {
           <button class="nc-b" id="nc-ref">🔄</button>
           <button class="nc-b" id="nc-imp">📥 Importar Telegram</button>
           <button class="nc-b" id="nc-soft" title="Informe de Guías de Recepción · Devolución de Cliente">📥 Informe Softland</button>
+          <button class="nc-b" id="nc-pres" title="Solicitud hecha en persona (sin pasar por el grupo)">🏬 Solicitud presencial</button>
           <button class="nc-b nc-pri" id="nc-new">➕ Nueva solicitud</button>
         </div>
       </div>
@@ -120,6 +124,7 @@ const NotasCreditoSection = (() => {
     $('#nc-quien').addEventListener('change', e => setQuien(e.target.value.trim()));
     $('#nc-ref').addEventListener('click', () => { cargar(); cargarCF(); });
     $('#nc-new').addEventListener('click', () => abrirForm(null));
+    $('#nc-pres').addEventListener('click', abrirPresencial);
     $('#nc-imp').addEventListener('click', abrirImport);
     $('#nc-soft').addEventListener('click', abrirSoftland);
     $('.nc-tabs').addEventListener('click', e => { const t = e.target.closest('[data-tab]'); if (t) { st.tab = t.dataset.tab; dibujar(); } });
@@ -193,9 +198,9 @@ const NotasCreditoSection = (() => {
       const [lbl, cls] = EST[n.estado] || ['—', ''];
       const d = POR_EMITIR.includes(n.estado) ? diasDesde(n.fechaSolicitud) : null;
       return `<button class="nc-item${st.sel === n.id ? ' cur' : ''}" data-id="${esc(n.id)}">
-        <div class="nc-it-top"><i class="nc-dot ${cls}"></i><b>${esc(docCorto(n))}</b>${n.tipo ? `<span class="nc-tipo">${esc(n.tipo)}</span>` : ''}<span class="nc-it-r">${n.montoDoc ? plata(n.montoDoc) : ''}</span></div>
+        <div class="nc-it-top"><i class="nc-dot ${cls}"></i><b>${esc(docCorto(n))}</b>${n.tipo ? `<span class="nc-tipo">${esc(n.tipo)}</span>` : ''}${origenDe(n) === 'Presencial' ? '<span class="nc-tipo nc-pres">🏬 Presencial</span>' : ''}<span class="nc-it-r">${n.montoDoc ? plata(n.montoDoc) : ''}</span></div>
         <small>${esc(n.cliente || 'Sin cliente')}</small>
-        <small>${esc(lbl)}${n.motivo ? ' · ' + esc(n.motivo) : ''}${d !== null ? ` · <span class="${d > 3 ? 'nc-late' : ''}">${d === 0 ? 'hoy' : d + (d === 1 ? ' día' : ' días')}</span>` : n.estado === 'EMITIDA' ? ' · ' + fCorta(n.fechaEmision) : ''}</small>
+        <small>${esc(lbl)}${n.motivo ? ' · ' + esc(n.motivo) : ''}${d !== null ? ` · <span class="${d > 3 ? 'nc-late' : ''}">${d <= 0 ? 'hoy' : d + (d === 1 ? ' día' : ' días')}</span>` : n.estado === 'EMITIDA' ? ' · ' + fCorta(n.fechaEmision) : ''}</small>
       </button>`;
     }).join('') || `<p class="nc-empty">${notas.length ? 'Ninguna NC coincide' : 'Aún no hay notas de crédito. Crea una o importa el historial de Telegram.'}</p>`;
   }
@@ -246,6 +251,7 @@ const NotasCreditoSection = (() => {
           <div><span>Bodega</span><b>${esc(n.bodega || '—')}</b></div>
           <div><span>Fecha documento</span><b>${fCorta(n.fechaDoc)}</b></div>
           <div><span>Folio NC</span><b>${esc(n.folioNc || '—')}</b></div>
+          <div><span>Origen</span><b>${esc(origenDe(n))}</b></div>
           ${n.facturaSustituta ? `<div><span>Factura sustituta</span><b>${esc(n.facturaSustituta)}</b></div>` : ''}
         </div>
         ${cfHtml ? `<p class="nc-cf">${cfHtml}</p>` : ''}
@@ -397,6 +403,7 @@ const NotasCreditoSection = (() => {
         <label id="f-mnc-w">Monto NC ($)<input class="nc-in" id="f-mnc" inputmode="numeric" value="${esc(n ? n.montoNc : '')}"></label>
         <label>Solicitado por<input class="nc-in" id="f-sol" list="nc-nombres" value="${esc(n ? n.solicitadoPor : q)}"></label>
         <label>Fecha solicitud<input class="nc-in" id="f-fsol" type="date" value="${esc(n ? n.fechaSolicitud : hoyLocal())}"></label>
+        <label>Origen<select class="nc-in" id="f-orig">${ORIGENES.map(o => `<option>${o}</option>`).join('')}</select></label>
         <label class="nc-check nc-span2"><input type="checkbox" id="f-dev" ${n && String(n.requiereDev).toUpperCase() === 'SI' ? 'checked' : ''}> Requiere devolución o retiro de material en bodega</label>
         <label class="nc-span2">Observación<input class="nc-in" id="f-obs" value="${esc(n ? n.obs : '')}"></label>
       </div>
@@ -408,7 +415,7 @@ const NotasCreditoSection = (() => {
       const x = {
         id: n ? n.id : '', docTipo: v(dd, '#f-tipo-doc'), docNum: v(dd, '#f-num').replace(/\D/g, ''), fechaDoc: v(dd, '#f-fdoc'), bodega: v(dd, '#f-bod'),
         cliente: v(dd, '#f-cli'), tipo: v(dd, '#f-tipo'), motivo: mot, montoDoc: num(v(dd, '#f-mdoc')) ?? '', montoNc: v(dd, '#f-tipo') === 'Parcial' ? (num(v(dd, '#f-mnc')) ?? '') : '',
-        solicitadoPor: v(dd, '#f-sol'), fechaSolicitud: v(dd, '#f-fsol'), requiereDev: dd.querySelector('#f-dev').checked ? 'SI' : '', obs: v(dd, '#f-obs')
+        solicitadoPor: v(dd, '#f-sol'), fechaSolicitud: v(dd, '#f-fsol'), requiereDev: dd.querySelector('#f-dev').checked ? 'SI' : '', obs: v(dd, '#f-obs'), origen: v(dd, '#f-orig')
       };
       if (!x.docNum) throw new Error('Falta el N° de documento');
       const fi = dd.querySelector('#f-arch');
@@ -426,6 +433,7 @@ const NotasCreditoSection = (() => {
     d.querySelector('#f-tipo-doc').value = n && n.docTipo === 'Boleta' ? 'Boleta' : 'Factura';
     d.querySelector('#f-bod').value = n && BODEGAS.includes(n.bodega) ? n.bodega : '';
     d.querySelector('#f-tipo').value = n ? n.tipo || '' : '';
+    d.querySelector('#f-orig').value = n ? origenDe(n) : 'Web';
     d.querySelector('#f-mot').value = motivoOtro ? 'Otro' : n ? n.motivo || '' : '';
     d.querySelector('#f-sol').setAttribute('list', 'nc-nombres2');
     const sync = () => {
@@ -453,6 +461,52 @@ const NotasCreditoSection = (() => {
     d.querySelector('#f-tipo-doc').addEventListener('change', buscar);
     buscar();
     if (!n) d.querySelector('#f-num').focus();
+  }
+
+  // ============ SOLICITUD PRESENCIAL (comercial pide en persona, sin pasar por el grupo) ============
+  function abrirPresencial() {
+    const d = abrirDlg('Solicitud presencial de NC', `
+      <p class="nc-p" style="margin-top:0">Para las NC que comercial pide en persona (por ejemplo en SF 918) y no pasan por el grupo de Telegram.</p>
+      <div class="nc-grid nc-grid2">
+        <label>Documento<select class="nc-in" id="p-doc"><option>Factura</option><option>Boleta</option></select></label>
+        <label>N° documento<input class="nc-in" id="p-num" inputmode="numeric" autocomplete="off"></label>
+        <label>Tipo de NC<select class="nc-in" id="p-tipo"><option>Completa</option><option>Parcial</option></select></label>
+        <label id="p-mnc-w" style="visibility:hidden">Monto NC ($)<input class="nc-in" id="p-mnc" inputmode="numeric"></label>
+        <label>Motivo<select class="nc-in" id="p-mot"><option value="">—</option>${MOTIVOS.map(m => `<option>${m}</option>`).join('')}</select></label>
+        <label>Bodega<select class="nc-in" id="p-bod">${BODEGAS.map(b => `<option${b === 'SF 918' ? ' selected' : ''}>${b}</option>`).join('')}</select></label>
+        <label>Solicitado por (comercial)<input class="nc-in" id="p-sol" list="nc-nombres"></label>
+        <label>Recibió la solicitud<input class="nc-in" id="p-quien" list="nc-nombres" value="${esc(quien())}"></label>
+        <label class="nc-check nc-span2"><input type="checkbox" id="p-dev"> Requiere devolución o retiro de material</label>
+        <label class="nc-span2">Observación<input class="nc-in" id="p-obs"></label>
+      </div>
+      <p class="nc-cfhint" id="p-cf"></p>
+      ${fileUI('p-arch', '📷 Foto de la factura o de la solicitud (opcional)')}`, 'Registrar solicitud', async dd => {
+      const q = v(dd, '#p-quien'); if (!q) throw new Error('Indica quién recibe la solicitud');
+      setQuien(q);
+      const num_ = v(dd, '#p-num').replace(/\D/g, ''); if (!num_) throw new Error('Falta el N° de documento');
+      const x = { docTipo: v(dd, '#p-doc'), docNum: num_, tipo: v(dd, '#p-tipo'), motivo: v(dd, '#p-mot'), bodega: v(dd, '#p-bod'),
+        montoNc: v(dd, '#p-tipo') === 'Parcial' ? (num(v(dd, '#p-mnc')) ?? '') : '', solicitadoPor: v(dd, '#p-sol') || q,
+        fechaSolicitud: hoyLocal(), requiereDev: dd.querySelector('#p-dev').checked ? 'SI' : '', obs: v(dd, '#p-obs'), origen: 'Presencial' };
+      const reg = cf && x.docTipo === 'Factura' ? cf.get(num_) : null;
+      if (reg) { x.fechaDoc = dmyIso(reg.fecha); }
+      const fi = dd.querySelector('#p-arch');
+      const archivo = fi.files[0] ? await prepararArchivo(fi.files[0]) : null;
+      let r;
+      try { r = await post({ action: 'nc_guardar', n: x, archivo, quien: q }); }
+      catch (e2) { if (!/Ya existe una NC activa/.test(e2.message) || !confirm(e2.message)) throw e2; r = await post({ action: 'nc_guardar', n: x, archivo, quien: q, forzar: true }); }
+      st.sel = r.id; st.filtro = 'emitir'; st.tab = 'bandeja';
+      toast('Solicitud presencial registrada');
+      await cargar();
+    });
+    const sync = () => { d.querySelector('#p-mnc-w').style.visibility = d.querySelector('#p-tipo').value === 'Parcial' ? 'visible' : 'hidden'; };
+    d.querySelector('#p-tipo').addEventListener('change', sync);
+    d.querySelector('#p-num').addEventListener('input', () => {
+      const n_ = v(d, '#p-num'), el = d.querySelector('#p-cf');
+      const ya = notas.filter(x => x.docNum === n_ && x.estado !== 'ANULADA');
+      const reg = cf && n_ ? cf.get(n_) : null;
+      el.innerHTML = (reg ? `✓ En Control de Despachos: ${esc(reg.fecha)}${reg.bodega ? ' · ' + esc(reg.bodega) : ''}` : '') + (ya.length ? ` <b class="nc-late">Ya tiene NC (${ya.map(x => EST[x.estado][0]).join(', ')})</b>` : '');
+    });
+    d.querySelector('#p-num').focus();
   }
 
   // ============ PASOS: BODEGA / EMITIR ============
@@ -538,6 +592,13 @@ const NotasCreditoSection = (() => {
       const max = Math.max(1, ...arr.map(a => a[1].n));
       return arr.map(([k, x]) => `<div class="nc-barrow"><span>${esc(k)}</span><div class="nc-bar"><i style="width:${x.n / max * 100}%"></i></div><b>${x.n}</b><em>${x.$ ? plata(x.$) : ''}</em></div>`).join('') || '<p class="nc-empty">Sin datos en el período</p>';
     };
+    const grupoFn = fn => {
+      const g = new Map();
+      base.forEach(n => { const k = fn(n) || 'Sin dato'; const x = g.get(k) || { n: 0, $: 0 }; x.n++; x.$ += monto(n); g.set(k, x); });
+      const arr = [...g.entries()].sort((a, b) => b[1].n - a[1].n);
+      const max = Math.max(1, ...arr.map(a => a[1].n));
+      return arr.map(([k, x]) => `<div class="nc-barrow"><span>${esc(k)}</span><div class="nc-bar"><i style="width:${x.n / max * 100}%"></i></div><b>${x.n}</b><em>${x.$ ? plata(x.$) : ''}</em></div>`).join('') || '<p class="nc-empty">Sin datos en el período</p>';
+    };
     const devsPorBodega = () => {
       const g = new Map();
       notas.forEach(n => devsDe(n).forEach(v => { if (st.periodo !== 'todo' && !String(v.fecha).startsWith(st.periodo === 'mes' ? mes : mesAnt)) return; const x = g.get(v.bodega) || { n: 0, $: 0 }; x.n++; x.$ += Number(v.total) || 0; g.set(v.bodega, x); }));
@@ -570,6 +631,7 @@ const NotasCreditoSection = (() => {
         <div class="nc-card"><h3 class="nc-h3">Por bodega</h3>${grupo('bodega')}<h3 class="nc-h3 nc-mt">Completa / Parcial</h3>${grupo('tipo')}</div>
         <div class="nc-card"><h3 class="nc-h3">Por quién solicita</h3>${grupo('solicitadoPor')}</div>
         <div class="nc-card"><h3 class="nc-h3">Clientes con más NC</h3>${grupo('cliente', 10)}</div>
+        <div class="nc-card"><h3 class="nc-h3">Por origen de la solicitud</h3>${grupoFn(n => origenDe(n))}</div>
         <div class="nc-card"><h3 class="nc-h3">Devoluciones Softland por bodega</h3>${devsPorBodega()}</div>
         <div class="nc-card"><h3 class="nc-h3">Por vendedor <span class="nc-dim">(de la factura leída)</span></h3>${grupoLec(base, d => d.vendedor)}</div>
         <div class="nc-card"><h3 class="nc-h3">Productos en facturas con NC <span class="nc-dim">(de la factura leída)</span></h3>${productosNC(base)}</div>
@@ -811,6 +873,7 @@ const NotasCreditoSection = (() => {
       .nc-item small{display:block;color:#5b6b7a;font-size:12px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
       .nc-tipo{font-size:10px;font-weight:700;text-transform:uppercase;color:#5b6b7a;background:#f3f4f6;border-radius:4px;padding:1px 5px}
       .nc-late{color:#c2410c;font-weight:700}
+      .nc-tipo.nc-pres{background:#e0f2fe;color:#075985}
       .nc-dot{display:inline-block;width:9px;height:9px;border-radius:50%;flex-shrink:0;background:#cbd5e1}
       .nc-dot.sol{background:#2563eb}.nc-dot.dev{background:#ea580c}.nc-dot.bod{background:#9333ea}.nc-dot.emi{background:#16a34a}.nc-dot.anu{background:#9ca3af}
       .nc-est{display:inline-block;font-size:11px;font-weight:700;border-radius:999px;padding:2px 9px;vertical-align:middle}

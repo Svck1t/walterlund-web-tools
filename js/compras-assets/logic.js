@@ -1,4 +1,4 @@
-// Lógica de Control de Compras (de control-ingresos-wl.vercel.app), adaptada para
+// Lógica de Control de Gas (antes "Compras Nacionales"; de control-ingresos-wl.vercel.app), adaptada para
 // correr dentro del Shadow DOM de walterlund-web-tools:
 // - document.getElementById/querySelectorAll -> root.* (root = shadow root)
 // - URL del Apps Script fija (se quitó la pantalla de configuración y el modal de URL)
@@ -142,10 +142,9 @@ function getMesesDisponibles() {
 // ----------- Render -----------
 function render() {
   renderFiltros();
-  ['lista', 'resumen', 'dashboard', 'documentos', 'softland'].forEach(v => root.getElementById('vista-' + v).classList.toggle('hidden', v !== vista));
-  root.getElementById('summary-grid').classList.toggle('hidden', vista === 'dashboard' || vista === 'documentos' || vista === 'softland');
+  ['lista', 'resumen', 'dashboard', 'documentos'].forEach(v => root.getElementById('vista-' + v).classList.toggle('hidden', v !== vista));
+  root.getElementById('summary-grid').classList.toggle('hidden', vista === 'dashboard' || vista === 'documentos');
   if (vista === 'dashboard') renderDashboard();
-  else if (vista === 'softland') renderSoftland();
   else if (vista === 'documentos') renderDocumentos();
   else { renderSummary(); vista === 'lista' ? renderLista() : renderResumen(); }
   root.getElementById('pap-count').textContent = eliminados.length;
@@ -1229,124 +1228,6 @@ function exportarCSV() {
   a.href = url; a.download = `compras_${filtros.mes || 'todas'}.csv`;
   a.click(); URL.revokeObjectURL(url);
 }
-
-// ----------- Cruce con el informe de Softland ("Informe de Guías de Recepción", Compra con Factura) -----------
-// El informe se lee en el navegador (SoftlandRecepciones, js/softlandRecepciones.js) y se guarda en Drive
-// (Apps Script anexo, /api/despachos) para que todos los equipos vean el mismo. Este equipo guarda una copia por si falla la red.
-// No modifica la planilla de compras: solo compara las facturas registradas aquí con lo ingresado en Softland.
-const SOFT_KEY = 'compras-softland-informe';
-const SOFT_API = '/api/despachos';
-let softInforme = (() => { try { return JSON.parse(localStorage.getItem(SOFT_KEY) || 'null'); } catch { return null; } })();
-let softSync = 'pendiente'; // pendiente | ok | error
-async function softTraer() {
-  try {
-    const r = await fetch(`${SOFT_API}?m=inf&tipo=compras`, { cache: 'no-store' });
-    const d = await r.json();
-    if (!d.ok) throw new Error(d.error || 'sin respuesta');
-    if (d.informe && (!softInforme || (d.informe.cargado || 0) >= (softInforme.cargado || 0))) {
-      softInforme = d.informe;
-      try { localStorage.setItem(SOFT_KEY, JSON.stringify(softInforme)); } catch {}
-    }
-    softSync = 'ok';
-  } catch (e) { console.error('Informe Softland:', e); softSync = 'error'; }
-  if (vista === 'softland') renderSoftland();
-}
-const soloDig = s => String(s || '').replace(/\D/g, '').replace(/^0+/, '');
-const BOD_SUC = { 'SF 918': 'San Francisco', 'Aldunate': 'Aldunate', 'Viel': 'Viel', 'San Ignacio': 'San Ignacio' };
-function provParecido(a, b) {
-  const ta = normProv(a).split(' ').filter(w => w.length > 3 && !['ltda', 'limitada', 'spa', 'comercial', 'sociedad', 'servicios'].includes(w));
-  const tb = new Set(normProv(b).split(' '));
-  return !ta.length || ta.some(w => tb.has(w));
-}
-function cruceSoftland() {
-  const inf = softInforme;
-  const facturas = documentos.filter(d => d.tipo === 'factura');
-  const usadas = new Set();
-  const filas = inf.docs.map(x => {
-    const cands = facturas.filter(d => soloDig(d.numero) === soloDig(x.dcto));
-    const d = cands.find(c => provParecido(c.proveedor, x.origen)) || cands[0] || null;
-    if (d) usadas.add(d.id);
-    let estado, cls, txt;
-    const netoWeb = d ? (d.neto || Math.round(d.total / 1.19)) : 0;
-    const dif = d ? Math.round(netoWeb - x.total) : 0;
-    if (!d) { estado = 'solo-softland'; cls = 'cuadre-mal'; txt = 'No está registrada en la web'; }
-    else if (!provParecido(d.proveedor, x.origen)) { estado = 'proveedor'; cls = 'cuadre-mal'; txt = 'Mismo N°, otro proveedor'; }
-    else if (Math.abs(dif) <= Math.max(10, x.total * 0.005)) { estado = 'ok'; cls = 'cuadre-ok'; txt = 'Cuadra ✓'; }
-    else { estado = 'dif'; cls = 'cuadre-mal'; txt = (dif > 0 ? 'Web mayor por ' : 'Softland mayor por ') + fmtCLP(Math.abs(dif)) + (d.neto ? ' (neto)' : ' (neto estimado)'); }
-    const sucOk = !d || !d.sucursal || !BOD_SUC[x.bodega] || BOD_SUC[x.bodega] === d.sucursal;
-    return { x, d, estado, cls, txt, netoWeb, sucOk };
-  });
-  const enPeriodo = f => (!inf.periodo.desde || f >= inf.periodo.desde) && (!inf.periodo.hasta || f <= inf.periodo.hasta);
-  const soloWeb = facturas.filter(d => !usadas.has(d.id) && enPeriodo(d.fecha)).sort((a, b) => a.fecha.localeCompare(b.fecha));
-  return { filas, soloWeb };
-}
-function renderSoftland() {
-  const cont = root.getElementById('softland-content');
-  if (softSync === 'pendiente') { softSync = 'cargando'; softTraer(); }
-  if (!softInforme && softSync === 'cargando') { cont.innerHTML = '<div class="table-card"><div class="empty-state"><p>Cargando el último informe…</p></div></div>'; return; }
-  const cargar = `<button class="btn btn-primary" id="btn-softland"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> ${softInforme ? 'Cargar otro informe' : 'Cargar informe de Softland'}</button>`;
-  if (!softInforme) {
-    cont.innerHTML = `<div class="table-card"><div class="empty-state"><h3>Cruce con Softland</h3>
-      <p>Carga el <b>Informe de Guías de Recepción</b> exportado de Softland (concepto <i>Compra con Factura</i>, .xls). Se compara con las facturas registradas aquí: cuáles cuadran, cuáles tienen diferencias y cuáles faltan en uno u otro lado.</p>
-      <div style="margin-top:14px">${cargar}</div></div></div>`;
-  } else {
-    const { filas, soloWeb } = cruceSoftland();
-    const n = k => filas.filter(f => f.estado === k).length;
-    const totSoft = filas.reduce((s, f) => s + f.x.total, 0);
-    const fCorta = f => f ? f.split('-').reverse().join('/') : '—';
-    cont.innerHTML = `
-      <div class="docs-bar">
-        <div class="docs-pend ok" style="font-weight:500">Informe del ${fCorta(softInforme.periodo.desde)} al ${fCorta(softInforme.periodo.hasta)} · ${filas.length} recepciones · ${fmtCLP(totSoft)} neto <span class="text-muted">· cargado ${new Date(softInforme.cargado).toLocaleDateString('es-CL')}${softInforme.cargadoPor ? ' por ' + escapeHtml(softInforme.cargadoPor) : ''}${softSync === 'error' ? ' · <b style="color:#b45309">copia de este equipo (no se pudo consultar el compartido)</b>' : ''}</span></div>
-        ${cargar}
-      </div>
-      <div class="summary-grid" style="margin-bottom:14px">
-        <div class="summary-card"><div class="label-row"><span class="dot" style="background:var(--emerald-dot)"></span><span class="label">Cuadran</span></div><div class="value">${n('ok')}</div><div class="sub">factura web = recepción Softland</div></div>
-        <div class="summary-card"><div class="label-row"><span class="dot" style="background:var(--amber-dot)"></span><span class="label">Con diferencias</span></div><div class="value">${n('dif') + n('proveedor')}</div><div class="sub">monto o proveedor distinto</div></div>
-        <div class="summary-card"><div class="label-row"><span class="dot" style="background:var(--sky-dot)"></span><span class="label">Solo en Softland</span></div><div class="value">${n('solo-softland')}</div><div class="sub">falta registrar en la web</div></div>
-        <div class="summary-card"><div class="label-row"><span class="label">Solo en la web</span></div><div class="value">${soloWeb.length}</div><div class="sub">sin recepción en Softland</div></div>
-      </div>
-      ${filas.sort((a, b) => (a.estado === 'ok') - (b.estado === 'ok') || a.x.fecha.localeCompare(b.x.fecha)).map(f => `
-      <div class="doc-card">
-        <div class="doc-card-main">
-          <div class="doc-card-top"><span class="product-name">Factura N° ${escapeHtml(f.x.dcto)}</span><span class="suc-badge" style="margin:0;">${escapeHtml(f.x.bodega)}</span></div>
-          <div class="text-muted">${escapeHtml(f.x.origen)} · recepción N° ${escapeHtml(f.x.folio)} · ${fCorta(f.x.fecha)}</div>
-          ${f.d ? `<div class="doc-card-vales">En la web: ${escapeHtml(docLabel(f.d))} · ${escapeHtml(f.d.proveedor)} · ${fCorta(f.d.fecha)} · neto ${fmtCLP(f.netoWeb)}${f.sucOk ? '' : ` · <b style="color:#b45309">sucursal ${escapeHtml(f.d.sucursal)} ≠ bodega ${escapeHtml(f.x.bodega)}</b>`}</div>` : ''}
-          <details style="margin-top:6px"><summary class="text-muted" style="cursor:pointer;font-size:12px">${f.x.lineas.length} ${f.x.lineas.length === 1 ? 'producto' : 'productos'} en Softland</summary>
-            <table style="width:100%;font-size:12px;margin-top:6px;border-collapse:collapse">${f.x.lineas.map(l => `<tr><td style="padding:3px 6px 3px 0"><b>${escapeHtml(l.codigo)}</b></td><td style="padding:3px 6px">${escapeHtml(l.descripcion)}</td><td style="padding:3px 6px;text-align:right;white-space:nowrap">${fmtNum(l.cantidad)} ${escapeHtml(l.um)}</td><td style="padding:3px 6px;text-align:right;white-space:nowrap">${fmtCLP(l.precio)}</td><td style="padding:3px 0;text-align:right;white-space:nowrap">${fmtCLP(l.total)}</td></tr>`).join('')}</table>
-          </details>
-        </div>
-        <div class="doc-card-side">
-          <div class="doc-card-total">${fmtCLP(f.x.total)}</div>
-          <div class="cuadre-badge ${f.cls}">${escapeHtml(f.txt)}</div>
-        </div>
-      </div>`).join('')}
-      ${soloWeb.length ? `<h3 style="font-size:15px;margin:20px 0 8px">Registradas en la web sin recepción en Softland (${soloWeb.length})</h3>
-        ${soloWeb.map(d => `<div class="doc-card"><div class="doc-card-main"><div class="doc-card-top"><span class="product-name">${escapeHtml(docLabel(d))}</span><span class="suc-badge${d.sucursal ? '' : ' suc-vacia'}" style="margin:0;">${escapeHtml(d.sucursal || 'Varias')}</span></div><div class="text-muted">${escapeHtml(d.proveedor)} · ${fCorta(d.fecha)}</div></div>
-          <div class="doc-card-side"><div class="doc-card-total">${fmtCLP(d.total)}</div><div class="cuadre-badge cuadre-gris">Falta en Softland</div></div></div>`).join('')}` : ''}
-      <p class="text-muted" style="font-size:12px;margin-top:12px">Softland informa montos netos (sin IVA). Se comparan con el neto de la factura registrada; si no tiene neto, con el total / 1,19. El informe queda compartido para todos hasta que alguien cargue otro.</p>`;
-  }
-  root.getElementById('btn-softland').addEventListener('click', () => root.getElementById('softland-input').click());
-}
-root.getElementById('softland-input').addEventListener('change', async e => {
-  const f = e.target.files[0]; e.target.value = '';
-  if (!f) return;
-  try {
-    if (typeof XLSX === 'undefined' || typeof SoftlandRecepciones === 'undefined') throw new Error('No se cargó el lector de Excel');
-    const res = SoftlandRecepciones.parse(XLSX.read(await f.arrayBuffer(), { type: 'array' }), XLSX);
-    const docs = res.docs.filter(x => !/devoluci/i.test(x.concepto));
-    if (!docs.length) throw new Error('El informe no trae recepciones de compras (solo devoluciones)');
-    const nuevo = { periodo: res.periodo, docs, archivo: f.name, cargado: Date.now() };
-    let quien = '';
-    try { quien = localStorage.getItem('wl_nc_quien') || localStorage.getItem('wl_rc_quien') || ''; } catch {}
-    const r = await fetch(SOFT_API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'inf_guardar', tipo: 'compras', informe: nuevo, quien }) });
-    const d = await r.json().catch(() => ({ ok: false, error: 'HTTP ' + r.status }));
-    if (!d.ok) throw new Error('no se pudo compartir: ' + (d.error || ''));
-    softInforme = Object.assign(nuevo, { cargado: d.cargado || nuevo.cargado, cargadoPor: quien });
-    softSync = 'ok';
-    try { localStorage.setItem(SOFT_KEY, JSON.stringify(softInforme)); } catch {}
-    renderSoftland();
-  } catch (err) { alert('No se pudo leer el informe: ' + err.message); }
-});
 
 // ----------- Eventos -----------
 

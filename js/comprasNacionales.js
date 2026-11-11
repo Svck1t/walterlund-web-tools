@@ -1,5 +1,5 @@
 // =====================================================
-// SECCIÓN: COMPRAS NACIONALES — v1 (mercadería, sin digitar nada)
+// SECCIÓN: COMPRAS NACIONALES — v2 (mercadería, sin digitar nada; vista por año con comparación año a año)
 // Se alimenta del "Informe de Guías de Recepción" de Softland (concepto Compra con Factura), que se carga
 // una vez al mes y queda compartido en Drive (Apps Script anexo, /api/despachos?m=inf&tipo=compras).
 // Une todos los informes cargados (sin duplicar guías) y muestra: resumen del mes, proveedores, recepciones y productos.
@@ -8,7 +8,7 @@ const ComprasNacionalesSection = (() => {
   const API = '/api/despachos';
   const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
   let docs = [], informes = [], cargado = false, error = '', root = null;
-  const st = { mes: '', tab: 'resumen', q: '', bodega: '' };
+  const st = { vista: 'anio', anio: '', mes: '', tab: 'resumen', q: '', bodega: '' };
 
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const plata = v => '$' + Math.round(Number(v) || 0).toLocaleString('es-CL');
@@ -34,6 +34,8 @@ const ComprasNacionalesSection = (() => {
       docs = [...porFolio.values()].sort((a, b) => b.fecha.localeCompare(a.fecha));
       const meses = [...new Set(docs.map(x => x.fecha.slice(0, 7)))].sort().reverse();
       if (!meses.includes(st.mes)) st.mes = meses[0] || '';
+      const anios = [...new Set(docs.map(x => x.fecha.slice(0, 4)))].sort().reverse();
+      if (!anios.includes(st.anio)) st.anio = anios[0] || '';
       cargado = true;
     } catch (e) { console.error('Compras nacionales:', e); error = e.message; }
     dibujar();
@@ -53,6 +55,7 @@ const ComprasNacionalesSection = (() => {
       if (!d.ok) throw new Error(d.error || 'No se pudo guardar');
       toast(`Informe cargado: ${compras.length} recepciones del ${fCorta(res.periodo.desde)} al ${fCorta(res.periodo.hasta)}`);
       st.mes = (res.periodo.hasta || compras[0].fecha).slice(0, 7);
+      st.anio = st.mes.slice(0, 4);
       await cargar();
     } catch (e) { toast('No se pudo cargar el informe: ' + e.message, true); }
   }
@@ -71,10 +74,13 @@ const ComprasNacionalesSection = (() => {
     root.querySelector('#cn-file').addEventListener('change', e => { const f = e.target.files[0]; e.target.value = ''; if (f) subir(f); });
     root.querySelector('#cn-body').addEventListener('click', e => {
       const t = e.target.closest('[data-tab]'); if (t) { st.tab = t.dataset.tab; dibujar(); return; }
+      const v = e.target.closest('[data-vista]'); if (v) { st.vista = v.dataset.vista; if (st.vista === 'mes' && !st.mes.startsWith(st.anio)) st.mes = mesesDe(st.anio)[0] || st.mes; dibujar(); return; }
+      const c = e.target.closest('[data-ir-mes]'); if (c) { st.vista = 'mes'; st.mes = c.dataset.irMes; st.anio = st.mes.slice(0, 4); dibujar(); return; }
       const p = e.target.closest('[data-prov]'); if (p) { st.tab = 'recepciones'; st.q = p.dataset.prov; dibujar(); }
     });
     root.querySelector('#cn-body').addEventListener('change', e => {
-      if (e.target.id === 'cn-mes') { st.mes = e.target.value; dibujar(); }
+      if (e.target.id === 'cn-mes') { st.mes = e.target.value; st.anio = st.mes.slice(0, 4); dibujar(); }
+      if (e.target.id === 'cn-anio') { st.anio = e.target.value; dibujar(); }
       if (e.target.id === 'cn-bod') { st.bodega = e.target.value; dibujar(); }
     });
     root.querySelector('#cn-body').addEventListener('input', e => { if (e.target.id === 'cn-q') { st.q = e.target.value; dibujarTab(); } });
@@ -82,7 +88,18 @@ const ComprasNacionalesSection = (() => {
     cargar();
   }
 
+  // sirve para un mes ('2026-10') o un año entero ('2026')
   const delMes = ym => docs.filter(x => x.fecha.startsWith(ym) && (!st.bodega || x.bodega === st.bodega));
+  const per = () => st.vista === 'anio' ? st.anio : st.mes;
+  const mesesDe = y => [...new Set(docs.filter(x => x.fecha.startsWith(y)).map(x => x.fecha.slice(0, 7)))].sort().reverse();
+  const MES3 = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+  const millones = v => v ? '$' + (v / 1e6).toFixed(1).replace('.', ',') + ' M' : '';
+  // mismo tramo del año anterior: si el año va hasta octubre, se compara contra ene–oct del año anterior
+  function tramoAnterior(y) {
+    const hasta = mesesDe(y)[0]; if (!hasta) return { lista: [], hasta: '12' };
+    const mm = hasta.slice(5, 7), ya = String(Number(y) - 1);
+    return { lista: delMes(ya).filter(x => x.fecha.slice(5, 7) <= mm), hasta: mm, ya };
+  }
   function agrupar(lista, key, val) {
     const g = new Map();
     lista.forEach(x => { const k = key(x); const o = g.get(k) || { k, total: 0, n: 0 }; o.total += val(x); o.n++; g.set(k, o); });
@@ -97,18 +114,29 @@ const ComprasNacionalesSection = (() => {
     if (!docs.length) { body.innerHTML = `<div class="cn-card cn-empty"><b>Aún no hay informes cargados.</b><br>Exporta de Softland el <i>Informe de Guías de Recepción</i> con concepto <i>Compra con Factura</i> y cárgalo con el botón de arriba. Cada mes que cargues se suma al historial.</div>`; return; }
     const meses = [...new Set(docs.map(x => x.fecha.slice(0, 7)))].sort().reverse();
     const bodegas = [...new Set(docs.map(x => x.bodega))].sort();
-    const act = delMes(st.mes), ant = delMes(mesAnt(st.mes));
+    const anios = [...new Set(docs.map(x => x.fecha.slice(0, 4)))].sort().reverse();
+    const esAnio = st.vista === 'anio';
+    const act = delMes(per());
+    let ant, cmp;
+    if (esAnio) {
+      const t = tramoAnterior(st.anio); ant = t.lista;
+      cmp = t.hasta === '12' ? `vs ${t.ya}` : `vs ene–${MES3[Number(t.hasta) - 1].toLowerCase()} ${t.ya}`;
+    } else { ant = delMes(mesAnt(st.mes)); cmp = `vs ${mesLbl(mesAnt(st.mes)).split(' ')[0]}`; }
     const tot = sum(act, x => x.total), totAnt = sum(ant, x => x.total);
+    const mismoMesAA = !esAnio ? sum(delMes(`${Number(st.mes.slice(0, 4)) - 1}${st.mes.slice(4)}`), x => x.total) : 0;
     const ult = informes.slice().sort((a, b) => (b.cargado || 0) - (a.cargado || 0))[0];
     body.innerHTML = `
       <div class="cn-bar-top">
-        <select class="cn-in cn-sel" id="cn-mes">${meses.map(m => `<option value="${m}"${m === st.mes ? ' selected' : ''}>${mesLbl(m)}</option>`).join('')}</select>
+        <div class="cn-tabs cn-seg">${[['anio', 'Por año'], ['mes', 'Por mes']].map(([k, l]) => `<button data-vista="${k}" class="${st.vista === k ? 'on' : ''}">${l}</button>`).join('')}</div>
+        ${esAnio
+          ? `<select class="cn-in" id="cn-anio">${anios.map(a => `<option${a === st.anio ? ' selected' : ''}>${a}</option>`).join('')}</select>`
+          : `<select class="cn-in cn-sel" id="cn-mes">${meses.map(m => `<option value="${m}"${m === st.mes ? ' selected' : ''}>${mesLbl(m)}</option>`).join('')}</select>`}
         <select class="cn-in" id="cn-bod"><option value="">Todas las bodegas</option>${bodegas.map(b => `<option${b === st.bodega ? ' selected' : ''}>${esc(b)}</option>`).join('')}</select>
         <span class="cn-meta">${informes.length} ${informes.length === 1 ? 'informe cargado' : 'informes cargados'}${ult ? ` · último ${new Date(ult.cargado).toLocaleDateString('es-CL')}${ult.cargadoPor ? ' por ' + esc(ult.cargadoPor) : ''}` : ''}</span>
       </div>
       <div class="cn-kpis">
-        <div class="cn-kpi"><span>Compras del mes (neto)</span><strong>${plata(tot)}</strong>${totAnt ? `<small class="${tot >= totAnt ? 'cn-up' : 'cn-down'}">${var_(tot, totAnt)} vs ${mesLbl(mesAnt(st.mes)).split(' ')[0]}</small>` : ''}</div>
-        <div class="cn-kpi"><span>Recepciones</span><strong>${act.length}</strong>${ant.length ? `<small>${ant.length} el mes anterior</small>` : ''}</div>
+        <div class="cn-kpi"><span>Compras ${esAnio ? 'del año' : 'del mes'} (neto)</span><strong>${plata(tot)}</strong>${totAnt ? `<small class="${tot >= totAnt ? 'cn-up' : 'cn-down'}">${var_(tot, totAnt)} ${cmp}</small>` : (esAnio ? '<small>Sin datos del año anterior</small>' : '')}${mismoMesAA ? `<small class="${tot >= mismoMesAA ? 'cn-up' : 'cn-down'}">${var_(tot, mismoMesAA)} vs ${mesLbl(st.mes).split(' ')[0]} ${Number(st.mes.slice(0, 4)) - 1}</small>` : ''}</div>
+        <div class="cn-kpi"><span>Recepciones</span><strong>${act.length}</strong>${ant.length ? `<small>${ant.length} ${esAnio ? cmp.replace('vs ', 'en ') : 'el mes anterior'}</small>` : ''}</div>
         <div class="cn-kpi"><span>Proveedores</span><strong>${new Set(act.map(x => x.origen)).size}</strong></div>
         <div class="cn-kpi"><span>Productos distintos</span><strong>${new Set(act.flatMap(x => x.lineas.map(l => l.codigo))).size}</strong></div>
       </div>
@@ -119,9 +147,23 @@ const ComprasNacionalesSection = (() => {
 
   function dibujarTab() {
     const el = root.querySelector('#cn-tab'); if (!el) return;
-    const act = delMes(st.mes);
-    if (!act.length) { el.innerHTML = '<p class="cn-empty">Sin recepciones en este mes con el filtro elegido.</p>'; return; }
-    if (st.tab === 'resumen') {
+    const act = delMes(per());
+    if (!act.length) { el.innerHTML = `<p class="cn-empty">Sin recepciones en este ${st.vista === 'anio' ? 'año' : 'mes'} con el filtro elegido.</p>`; return; }
+    if (st.tab === 'resumen' && st.vista === 'anio') {
+      // año vs año: cada mes con la barra del año elegido (azul) y la del año anterior (gris)
+      const y = st.anio, ya = String(Number(y) - 1);
+      const cols = MES3.map((l, i) => { const mm = String(i + 1).padStart(2, '0'); return { l, mm, a: sum(delMes(`${y}-${mm}`), x => x.total), b: sum(delMes(`${ya}-${mm}`), x => x.total) }; });
+      const max = Math.max(1, ...cols.flatMap(c => [c.a, c.b]));
+      const porAnio = agrupar(docs.filter(x => !st.bodega || x.bodega === st.bodega), x => x.fecha.slice(0, 4), x => x.total).sort((a, b) => b.k.localeCompare(a.k));
+      el.innerHTML = `<div class="cn-grid">
+        <div class="cn-card cn-wide"><h3>Compras por mes · ${y} vs ${ya}</h3>
+          <div class="cn-ley"><span><i class="cn-ley-a"></i>${y}</span><span><i class="cn-ley-b"></i>${ya}</span></div>
+          <div class="cn-cols">${cols.map(c => `<div class="cn-col cn-col2${c.a ? ' cn-click' : ''}"${c.a ? ` data-ir-mes="${y}-${c.mm}" title="Ver ${c.l} ${y}"` : ''}><b>${millones(c.a)}</b><div class="cn-colbar"><i class="cn-b2" style="height:${c.b / max * 100}%" title="${c.l} ${ya}: ${plata(c.b)}"></i><i class="cn-a2" style="height:${c.a / max * 100}%" title="${c.l} ${y}: ${plata(c.a)}"></i></div><span>${c.l}</span></div>`).join('')}</div>
+          <p class="cn-hint">Clic en un mes para ver su detalle.</p></div>
+        <div class="cn-card"><h3>Por proveedor · ${y}</h3>${barras(agrupar(act, x => x.origen, x => x.total).slice(0, 10), true)}<p class="cn-hint">Clic en un proveedor para ver sus recepciones.</p></div>
+        <div class="cn-card"><h3>Por bodega · ${y}</h3>${barras(agrupar(act, x => x.bodega, x => x.total))}<h3 style="margin-top:18px">Total por año</h3>${barras(porAnio)}</div>
+      </div>`;
+    } else if (st.tab === 'resumen') {
       // evolución mensual (todos los meses cargados)
       const meses = [...new Set(docs.map(x => x.fecha.slice(0, 7)))].sort().slice(-12);
       const porMes = meses.map(m => ({ k: m, total: sum(delMes(m), x => x.total) }));
@@ -188,7 +230,11 @@ const ComprasNacionalesSection = (() => {
       .cn-col{flex:1;max-width:96px;display:flex;flex-direction:column;align-items:center;gap:4px;height:100%;min-width:0}
       .cn-col b{font-size:10.5px;color:#5b6b7a;white-space:nowrap}
       .cn-colbar{flex:1;width:70%;max-width:56px;display:flex;align-items:flex-end}.cn-colbar i{display:block;width:100%;background:#cbd5e1;border-radius:4px 4px 0 0;min-height:2px}
-      .cn-col.on .cn-colbar i{background:#1565c0}.cn-col span{font-size:11.5px;color:#5b6b7a;text-transform:capitalize}
+      .cn-col.on .cn-colbar i{background:#1565c0}
+      .cn-seg{margin-bottom:0}.cn-seg button{padding:6px 12px;font-size:13px}
+      .cn-col2 .cn-colbar{gap:3px;width:80%}.cn-col2 .cn-colbar i{flex:1;width:auto}.cn-col2 .cn-colbar i.cn-a2{background:#1565c0}
+      .cn-ley{display:flex;gap:14px;font-size:12px;color:#5b6b7a;margin:-4px 0 6px}.cn-ley i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+      .cn-ley-a{background:#1565c0}.cn-ley-b{background:#cbd5e1}.cn-col span{font-size:11.5px;color:#5b6b7a;text-transform:capitalize}
       .cn-rec{margin-bottom:8px;padding:0}.cn-rec summary{display:flex;justify-content:space-between;gap:12px;padding:12px 14px;cursor:pointer;list-style:none}
       .cn-rec summary::-webkit-details-marker{display:none}.cn-rec[open] summary{border-bottom:1px solid #eef0f3}
       .cn-rec summary small{display:block;color:#5b6b7a;font-size:12px;margin-top:2px}.cn-r{text-align:right;flex-shrink:0}

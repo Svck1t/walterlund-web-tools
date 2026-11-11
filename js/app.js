@@ -30,6 +30,7 @@ document.addEventListener('DOMContentLoaded', () => {
     cart: '<circle cx="9" cy="20" r="1.5"/><circle cx="18" cy="20" r="1.5"/><path d="M2 3h3l2.7 12.4a1 1 0 0 0 1 .8h9.6a1 1 0 0 0 1-.8L21 7H6"/>',
     ship: '<path d="M3 15l1.5 4.5a1 1 0 0 0 1 .5h13a1 1 0 0 0 1-.5L21 15H3z"/><path d="M5 15V9h14v6"/><path d="M9 9V5h6v4"/><path d="M12 2v3"/>',
     'receipt-x': '<path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1Z"/><path d="m9.5 9.5 5 5"/><path d="m14.5 9.5-5 5"/>',
+    flame: '<path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.07-2.14-.22-4.05 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.15.43-2.29 1-3a2.5 2.5 0 0 0 2.5 2.5z"/>',
     chevron: '<path d="m6 9 6 6 6-6"/>'
   };
   document.querySelectorAll('[data-icon]').forEach(el => {
@@ -56,7 +57,8 @@ document.addEventListener('DOMContentLoaded', () => {
     'solicitud-productos': 'Solicitud de productos',
     recepcion: 'Recepción de contenedores',
     traslados: 'Control de Traslados',
-    compras: 'Compras Nacionales',
+    compras: 'Control de Gas',
+    'compras-nacionales': 'Compras nacionales',
     stock: 'Stock',
     reposicion: 'Reposición de Productos',
     descargas: 'Descargas',
@@ -101,6 +103,9 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'reposicion':
         ReposicionSection.render(content);
+        break;
+      case 'compras-nacionales':
+        ComprasNacionalesSection.render(content);
         break;
       case 'compras':
         ComprasSection.render(content);

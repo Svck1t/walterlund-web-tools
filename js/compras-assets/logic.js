@@ -767,6 +767,7 @@ async function openModal(id) {
     root.getElementById('f-unidad').value = e.unidad;
     root.getElementById('f-costo').value = e.costoUnitario;
     root.getElementById('f-estado').value = e.estado;
+    root.getElementById('f-estado').disabled = false; // al editar se puede pasar a Facturado
     root.getElementById('f-tipo').value = e.tipoDoc || 'vale';
     root.getElementById('f-referencia').value = e.referencia;
     root.getElementById('f-notas').value = e.notas;
@@ -779,7 +780,8 @@ async function openModal(id) {
     root.getElementById('f-cantidad').value = '';
     root.getElementById('f-unidad').value = 'unidad';
     root.getElementById('f-costo').value = '';
-    root.getElementById('f-estado').value = 'pendiente';
+    root.getElementById('f-estado').value = 'recibido'; // todo registro nuevo entra como Recibido
+    root.getElementById('f-estado').disabled = true;     // se cambia a Facturado después (editar o en la lista)
     root.getElementById('f-tipo').value = 'vale';
     root.getElementById('f-referencia').value = '';
     root.getElementById('f-notas').value = '';

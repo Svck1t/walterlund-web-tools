@@ -327,3 +327,68 @@
   .prov-sug { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; font-size: 12px; }
   .sug-chip { border: 1px solid #f59e0b; background: #fffbeb; color: #92400e; border-radius: 999px; padding: 4px 10px; font-size: 12px; font-family: inherit; cursor: pointer; }
   @media (max-width: 700px) { .ac-item { padding: 12px; } .ac-det { font-size: 10px; } }
+
+  /* Registros: Por fecha / Por proveedor */
+  .seg { display: inline-flex; gap: 2px; padding: 3px; border: 1px solid var(--line, #e5e7eb); border-radius: 9px; background: var(--surface, #fff); }
+  .seg-btn { border: 0; background: none; padding: 6px 14px; border-radius: 7px; font: inherit; font-size: 13px; font-weight: 500; color: var(--ink-soft, #6b7280); cursor: pointer; }
+  .seg-btn.active { background: var(--ink, #111827); color: #fff; }
+  .dash-sub { font-size: 12px; color: var(--ink-soft, #6b7280); margin: -4px 0 10px; }
+
+  /* =====================================================================
+     TEMA WALTERLUND — misma fuente, colores y forma que el resto de la plataforma
+     (va al final para pisar el estilo original de la app de gas)
+     ===================================================================== */
+  :host {
+    --bg: transparent; --card: #ffffff;
+    --border: #e1e5ea; --border-strong: #d4d9e0;
+    --text: #1c2733; --text-muted: #5b6b7a; --text-faint: #8a97a5;
+    --hover: #f5f7fa;
+    --primary: #1565c0; --primary-hover: #0f529e;
+    --font-wl: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  .cc-app, .modal-backdrop { font-family: var(--font-wl); }
+  .cc-app { background: transparent; border: 0; border-radius: 0; overflow: visible; }
+  /* todo lo que usaba Fraunces / JetBrains Mono pasa a la fuente de la plataforma, con números tabulares */
+  .font-display, .font-mono, .title, td.mono, tfoot td, tfoot td.total, .empty-state h3, .proveedor-title, .proveedor-total,
+  .proveedor-breakdown, .item-detail, .item-subtotal, .modal-header h2, .subtotal-preview .value, .suc-badge, .dash-bar-val,
+  .dash-col-val, .doc-item-num, .tipo-badge, .doc-card-total, .vale-monto, .cuadre-box b, .vp-monto, .summary-card .value {
+    font-family: var(--font-wl); letter-spacing: 0; font-variant-numeric: tabular-nums;
+  }
+
+  /* Encabezado como el de las demás secciones (título 22 px, sin franja blanca) */
+  header { background: transparent; border-bottom: 0; }
+  .container { max-width: none; padding: 0; }
+  .header-inner { padding: 0 0 18px; align-items: flex-start; }
+  .title { font-size: 22px; font-weight: 700; line-height: 1.25; }
+  main { padding: 0 0 12px; }
+
+  /* Pestañas y botones */
+  .tabs { background: #fff; border: 1px solid var(--border); border-radius: 10px; }
+  .tab { font-size: 14px; font-weight: 600; padding: 7px 14px; border-radius: 7px; }
+  .tab.active { background: var(--primary); color: #fff; box-shadow: none; }
+  .btn { font-size: 13px; font-weight: 600; }
+  .btn-secondary { border-color: var(--border-strong); }
+  .seg-btn.active { background: #1c2733; }
+
+  /* Tarjetas de resumen como los KPI de la plataforma: blancas con borde izquierdo de color */
+  .summary-card { border-radius: 10px; border-left: 4px solid var(--primary); }
+  .summary-card.highlight { background: #fff; color: var(--text); border-color: var(--border); border-left-color: var(--primary); }
+  .summary-card.highlight .label, .summary-card.highlight .sub { color: var(--text-muted); }
+  .summary-card .label { text-transform: none; letter-spacing: 0; font-size: 12px; }
+  .summary-card .value { font-size: 22px; }
+
+  /* Tablas, filtros y tarjetas */
+  .table-card, .filters, .proveedor-card, .dash-panel, .doc-card { border-radius: 10px; border-color: var(--border); }
+  thead th, th { background: #f5f7fa; color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: .03em; }
+  tbody tr:hover { background: #f5f8fc; }
+  tfoot td { font-weight: 700; }
+  .input:focus, select.input:focus, textarea.input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(21,101,192,.15); }
+  .proveedor-title { font-size: 16px; font-weight: 700; }
+  .proveedor-total { font-size: 18px; }
+  .dash-titulo { font-family: var(--font-wl); }
+  .dash-bar { background: var(--primary); }
+  .dash-col.actual .dash-col-bar { background: var(--primary); }
+  .modal-header h2 { font-size: 18px; font-weight: 700; }
+  .link-btn { color: var(--primary); }
+  .dash-bar.suc { background: #1565c0; }
+  .dash-bar { background: #5b6b7a; }

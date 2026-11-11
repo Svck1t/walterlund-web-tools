@@ -17,6 +17,7 @@ let eliminados = [];   // papelera
 let editingId = null;
 let confirmDeleteId = null;
 let vista = 'lista';
+let agruparPor = 'fecha'; // pestaña Registros: 'fecha' (lista) o 'proveedor' (antes Resumen)
 let filtros = { mes: monthOf(today()), sucursal: '', proveedor: '', estado: 'todos', busqueda: '' };
 
 // Sucursales que recepcionan compras. Cada equipo recuerda la última sucursal usada.
@@ -142,11 +143,16 @@ function getMesesDisponibles() {
 // ----------- Render -----------
 function render() {
   renderFiltros();
-  ['lista', 'resumen', 'dashboard', 'documentos'].forEach(v => root.getElementById('vista-' + v).classList.toggle('hidden', v !== vista));
-  root.getElementById('summary-grid').classList.toggle('hidden', vista === 'dashboard' || vista === 'documentos');
+  if (vista !== 'dashboard') vista = 'lista';
+  ['lista', 'dashboard'].forEach(v => root.getElementById('vista-' + v).classList.toggle('hidden', v !== vista));
+  root.getElementById('summary-grid').classList.toggle('hidden', vista === 'dashboard');
   if (vista === 'dashboard') renderDashboard();
-  else if (vista === 'documentos') renderDocumentos();
-  else { renderSummary(); vista === 'lista' ? renderLista() : renderResumen(); }
+  else {
+    renderSummary();
+    root.querySelectorAll('[data-agrupar]').forEach(b => b.classList.toggle('active', b.dataset.agrupar === agruparPor));
+    root.getElementById('btn-proveedores').classList.toggle('hidden', agruparPor !== 'proveedor');
+    agruparPor === 'proveedor' ? renderResumen() : renderLista();
+  }
   root.getElementById('pap-count').textContent = eliminados.length;
   root.getElementById('total-registros').textContent = (n => n === 1 ? '1 registro total' : n + ' registros totales')(new Set(entries.map(grupoDe)).size);
 }
@@ -192,6 +198,7 @@ function renderFiltros() {
 function renderLista() {
   const list = getFiltered();
   const cont = root.getElementById('lista-content');
+  cont.className = 'table-card';
   if (list.length === 0) {
     cont.innerHTML = emptyStateHtml();
     root.getElementById('empty-add')?.addEventListener('click', () => openModal());
@@ -293,7 +300,8 @@ async function guardarGrupo(grupo, nuevas, image, mimeType) {
 
 function renderResumen() {
   const list = getFiltered();
-  const cont = root.getElementById('resumen-content');
+  const cont = root.getElementById('lista-content');
+  cont.className = 'resumen-list';
   if (list.length === 0) {
     cont.innerHTML = '<div class="table-card">' + emptyStateHtml() + '</div>';
     root.getElementById('empty-add')?.addEventListener('click', () => openModal());
@@ -357,22 +365,34 @@ function renderDashboard() {
   const mes = filtros.mes || monthOf(today());
   const base = getFiltered({ sinMes: true });                       // respeta sucursal/proveedor/estado/búsqueda
   const enPeriodo = e => todos || monthOf(e.fecha) === mes;
+  const mesTodas = () => getFiltered({ sinMes: true, sinSucursal: true }).filter(enPeriodo);
   const delMes = base.filter(enPeriodo);
   const previo = todos ? [] : base.filter(e => monthOf(e.fecha) === mesAnterior(mes));
   const mesesConDatos = new Set(delMes.map(e => monthOf(e.fecha)).filter(Boolean)).size;
   const sum = l => l.reduce((s, e) => s + e.cantidad * e.costoUnitario, 0);
   const total = sum(delMes), totalPrev = sum(previo);
   const variacion = totalPrev > 0 ? (total - totalPrev) / totalPrev * 100 : null;
-  const porFacturar = delMes.filter(e => e.estado !== 'facturado');
   const docsMes = agruparDocs(delMes);
   const conFoto = docsMes.filter(d => d.fotoUrl).length;
-  const nPorFacturar = new Set(porFacturar.map(grupoDe)).size;
+  // Producto principal del período (normalmente el gas de grúa): consumo y precio promedio por unidad
+  const topProd = agrupar(delMes, e => e.producto)[0];
+  const deTop = l => topProd ? l.filter(e => e.producto === topProd.nombre) : [];
+  const unidadTop = (() => { const c = {}; deTop(delMes).forEach(e => { c[e.unidad] = (c[e.unidad] || 0) + 1; }); return Object.keys(c).sort((a, b) => c[b] - c[a])[0] || ''; })();
+  const cant = l => l.reduce((s, e) => s + (Number(e.cantidad) || 0), 0);
+  const precioProm = l => { const q = cant(l); return q ? sum(l) / q : 0; };
+  const pTop = precioProm(deTop(delMes)), pTopPrev = precioProm(deTop(previo));
+  const varP = pTopPrev > 0 ? (pTop - pTopPrev) / pTopPrev * 100 : null;
+  const consumoSuc = (() => {
+    const m = new Map();
+    deTop(mesTodas()).forEach(e => { const k = e.sucursal || 'Sin sucursal'; m.set(k, (m.get(k) || 0) + (Number(e.cantidad) || 0)); });
+    return [...m.entries()].map(([nombre, valor]) => ({ nombre, valor })).sort((a, b) => b.valor - a.valor);
+  })();
 
   // Por sucursal: mismo mes y filtros, pero siempre todas las sucursales
-  const mesTodas = getFiltered({ sinMes: true, sinSucursal: true }).filter(enPeriodo);
-  const porSuc = agrupar(mesTodas, e => e.sucursal || 'Sin sucursal');
+  const mesTodasL = mesTodas();
+  const porSuc = agrupar(mesTodasL, e => e.sucursal || 'Sin sucursal');
   SUCURSALES.forEach(s => { if (!porSuc.some(x => x.nombre === s)) porSuc.push({ nombre: s, valor: 0 }); });
-  const totalTodas = sum(mesTodas);
+  const totalTodas = sum(mesTodasL);
 
   // Tendencia: 6 meses hasta el mes elegido, o 12 meses en "Todos los meses"
   const nCols = todos ? 12 : 6;
@@ -395,9 +415,9 @@ function renderDashboard() {
         <div class="sub">${(n => n + (n === 1 ? ' proveedor' : ' proveedores'))(new Set(delMes.map(e => e.proveedor)).size)}</div>
       </div>
       <div class="summary-card">
-        <div class="label-row"><span class="dot" style="background:var(--amber-dot)"></span><span class="label">Por facturar</span></div>
-        <div class="value">${fmtCLP(sum(porFacturar))}</div>
-        <div class="sub">${nPorFacturar} ${nPorFacturar === 1 ? 'registro' : 'registros'} pendiente o recibido</div>
+        <div class="label-row"><span class="dot" style="background:var(--amber-dot)"></span><span class="label">Precio promedio${unidadTop ? ' por ' + escapeHtml(unidadTop) : ''}</span></div>
+        <div class="value">${topProd ? fmtCLP(pTop) : '—'}</div>
+        <div class="sub">${topProd ? escapeHtml(topProd.nombre) + (varP === null ? '' : ' · ' + (varP >= 0 ? '▲ ' : '▼ ') + Math.abs(varP).toFixed(1) + '%') : 'Sin datos'}</div>
       </div>
       <div class="summary-card">
         <div class="label-row"><span class="label">Con foto</span></div>
@@ -406,9 +426,13 @@ function renderDashboard() {
       </div>
     </div>
     <div class="dash-grid">
-      ${panelVales()}
+      ${topProd ? `<div class="dash-panel">
+        <div class="dash-panel-title">Consumo por sucursal</div>
+        <div class="dash-sub">${escapeHtml(topProd.nombre)} · cantidad${unidadTop ? ' en ' + escapeHtml(unidadTop) : ''}</div>
+        ${barrasCant(consumoSuc, unidadTop)}
+      </div>` : ''}
       <div class="dash-panel">
-        <div class="dash-panel-title">Por sucursal</div>
+        <div class="dash-panel-title">Gasto por sucursal</div>
         ${barras(porSuc, totalTodas, 'suc')}
       </div>
       <div class="dash-panel">
@@ -431,7 +455,17 @@ function renderDashboard() {
         ${barras(agrupar(delMes, e => e.producto).slice(0, 6), total)}
       </div>
     </div>`;
-  cont.querySelector('[data-goto]')?.addEventListener('click', () => irA('documentos'));
+}
+// Barras de cantidades (no pesos)
+function barrasCant(lista, unidad) {
+  if (!lista.length) return '<div class="dash-vacio">Sin datos en este período</div>';
+  const max = Math.max(...lista.map(x => x.valor), 1), tot = lista.reduce((s, x) => s + x.valor, 0);
+  return lista.map(x => `
+    <div class="dash-bar-row">
+      <div class="dash-bar-label" title="${escapeHtml(x.nombre)}">${escapeHtml(x.nombre)}</div>
+      <div class="dash-bar-track"><div class="dash-bar suc" style="width:${(x.valor / max * 100).toFixed(1)}%"></div></div>
+      <div class="dash-bar-val">${fmtNum(x.valor)} ${escapeHtml(unidad || '')}${tot ? `<span>${Math.round(x.valor / tot * 100)}%</span>` : ''}</div>
+    </div>`).join('');
 }
 
 // ----------- Autocompletar: proveedores existentes y productos del proveedor -----------
@@ -908,11 +942,8 @@ function docLabel(d) { return (d.tipo === 'boleta' ? 'Boleta' : 'Factura') + ' N
 function tipoBadge(d) {
   if (d.tipoDoc === 'boleta') return '<div class="tipo-badge tipo-ok">Boleta</div>';
   if (d.tipoDoc === 'factura') return '<div class="tipo-badge tipo-ok">Factura</div>';
-  if (d.facturaId) {
-    const f = documentos.find(x => x.id === d.facturaId);
-    return `<div class="tipo-badge tipo-ok">Vale · ${f ? escapeHtml(docLabel(f)) : 'facturado'}</div>`;
-  }
-  return '<div class="tipo-badge tipo-pend">Vale · sin factura</div>';
+  // Sin la pestaña Facturas, los vales ya no muestran si tienen factura asociada: el estado lo dice
+  return '<div class="tipo-badge">Vale</div>';
 }
 function valesPendientes(lista = entries) { return agruparDocs(lista).filter(d => d.tipoDoc === 'vale' && !d.facturaId); }
 function diasDesde(f) { return Math.max(0, Math.floor((new Date(today() + 'T12:00:00') - new Date(f + 'T12:00:00')) / 86400000)); }
@@ -1253,6 +1284,7 @@ autocompletar(root.getElementById('d-proveedor'), fuenteProveedores);
 root.getElementById('pap-close').addEventListener('click', cerrarPapelera);
 root.getElementById('modal-papelera').addEventListener('click', e => { if (e.target.id === 'modal-papelera') cerrarPapelera(); });
 root.getElementById('btn-proveedores').addEventListener('click', abrirProveedores);
+root.querySelectorAll('[data-agrupar]').forEach(b => b.addEventListener('click', () => { agruparPor = b.dataset.agrupar; render(); }));
 root.getElementById('prov-close').addEventListener('click', cerrarProveedores);
 root.getElementById('modal-prov').addEventListener('click', e => { if (e.target.id === 'modal-prov') cerrarProveedores(); });
 root.getElementById('doc-close').addEventListener('click', cerrarDoc);

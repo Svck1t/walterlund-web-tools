@@ -11,7 +11,7 @@
 
 const ComprasSection = (() => {
 
-  const ASSETS_BASE = 'js/compras-assets/';
+  const ASSETS_BASE = '/js/compras-assets/'; // absoluto: sirve igual desde la web y desde /gas
   const FONTS_URL = 'https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Geist:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap';
 
   // Host y shadow root se crean una sola vez y se reutilizan entre visitas

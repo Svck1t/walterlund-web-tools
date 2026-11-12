@@ -80,13 +80,6 @@ const ReposicionSection = (() => {
     return ReposicionAnalysis.preventivos(allRecords, obtenerMinimo);
   }
   // Mínimos guardados vacíos o no numéricos (antes se leían como 0)
-  function minimosInvalidos() {
-    const all = NivelesMinimosStore.getAll();
-    return Object.keys(all).filter(c => ['sanFco', 'aldunate'].some(b => {
-      const v = all[c] && all[c][b] ? all[c][b].min : null;
-      return v !== null && v !== undefined && ReposicionAnalysis.minimoValido(v) === null && String(v).trim() !== '';
-    }));
-  }
 
   // ---------- Estructura general ----------
 
@@ -173,7 +166,6 @@ const ReposicionSection = (() => {
     const filas = filasAnalisis();
     const r = ReposicionAnalysis.resumen(filas);
     const prev = filasPreventivas();
-    const invalidos = minimosInvalidos();
 
     const cards = `
       <div class="reposicion-summary">
@@ -193,14 +185,9 @@ const ReposicionSection = (() => {
           <span class="reposicion-card-label">Cerca del mínimo (preventivo)</span>
           <span class="reposicion-card-value">${prev.length.toLocaleString('es-CL')}</span>
         </div>
-      </div>
-      ${invalidos.length ? `<p style="color:#b45309; font-size:13px; margin:-6px 0 12px;">⚠️ ${invalidos.length} producto(s) tienen un nivel mínimo guardado que no es un número; se está usando el umbral por defecto (${ReposicionAnalysis.UMBRAL_STOCK_BAJO_DEFAULT}). Revísalos en "Niveles Mínimos": ${invalidos.slice(0, 8).join(', ')}${invalidos.length > 8 ? '…' : ''}</p>` : ''}`;
+      </div>`;
 
-    const nivelesNota = `
-      <p style="color:#6b7280; font-size:13px; margin:-6px 0 16px;">
-        Umbral por defecto: ${ReposicionAnalysis.UMBRAL_STOCK_BAJO_DEFAULT} unidades.
-        ${NivelesMinimosStore.countConfigurados() > 0 ? `${NivelesMinimosStore.countConfigurados()} producto(s) con nivel mínimo personalizado — configúralos en la pestaña "Niveles Mínimos".` : 'Puedes personalizar el umbral por producto en la pestaña "Niveles Mínimos".'}
-      </p>`;
+    const nivelesNota = '';
 
     if (filas.length === 0 && filtroEstado !== 'preventivo' && !prev.length) {
       return `
@@ -366,9 +353,9 @@ const ReposicionSection = (() => {
     const r = allRecords.find(x => norm(x.codigo) === t) || allRecords.find(x => norm(x.codigo).includes(t) || norm(x.nombre).includes(t));
     if (!r) return `<span style="color:#b91c1c;">No encontré "${term}" en el stock cargado. Si el producto no aparece en el export de Softland, la reposición no lo puede ver.</span>`;
     const d = ReposicionAnalysis.diagnosticar(r, obtenerMinimo);
-    const fuenteTxt = { configurado: 'configurado', defecto: 'por defecto', invalido: 'mínimo guardado inválido, usa el por defecto' };
+    const fuenteTxt = { configurado: 'configurado', defecto: 'por defecto', invalido: 'mínimo guardado inválido, usa el por defecto', excluido: 'no se repone' };
     const filasB = d.bodegas.map(b => `<tr><td>${b.label}</td><td style="text-align:right;"><b>${b.stock.toLocaleString('es-CL')}</b></td><td style="text-align:right; color:#6b7280;">${b.min.toLocaleString('es-CL')}${b.fuente === 'configurado' ? '' : ` <span style="font-size:12px;">(${fuenteTxt[b.fuente]})</span>`}</td>
-      <td>${b.bajo ? '<span class="badge badge-warn">Bajo el mínimo</span>' : b.cerca ? '<span class="badge badge-warn" style="opacity:.75;">Cerca del mínimo</span>' : '<span class="badge badge-ok">Sobre el mínimo</span>'}</td></tr>`).join('');
+      <td>${b.fuente === 'excluido' ? '<span class="badge">No se repone</span>' : b.bajo ? '<span class="badge badge-warn">Bajo el mínimo</span>' : b.cerca ? '<span class="badge badge-warn" style="opacity:.75;">Cerca del mínimo</span>' : '<span class="badge badge-ok">Sobre el mínimo</span>'}</td></tr>`).join('');
     const conclusion = d.filas.length
       ? d.filas.map(f => f.resuelto ? `Sugerido: ${f.origenLabel} → ${f.destinoLabel}, ${f.cantidad.toLocaleString('es-CL')} ${r.unidad || ''}.` : `${f.destinoLabel} está bajo el mínimo, pero ni VIEL ni la otra bodega tienen stock para enviar (Evaluar compra).`).join('<br>')
       : `No aparece porque ninguna de las dos bodegas está en su mínimo o bajo él (se repone cuando el stock es ≤ al mínimo).${d.bodegas.some(b => b.cerca) ? ' Está <b>cerca</b>: aparece en Estado → Preventivo.' : ''} Si un pedido grande puede vaciarla antes de la próxima revisión, conviene subir el mínimo.`;
@@ -509,13 +496,13 @@ const ReposicionSection = (() => {
           <td>${p.nombre}</td>
           <td>${p.unidad}</td>
           <td style="text-align:right;">
-            <input type="number" min="0" step="1" class="nivel-input nivel-sanfco-min" placeholder="30" value="${sanFcoMin}" />
+            <input type="number" min="-1" step="1" class="nivel-input nivel-sanfco-min" title="-1 = no reponer en esta bodega" placeholder="30" value="${sanFcoMin}" />
           </td>
           <td style="text-align:right;">
             <input type="number" min="0" step="1" class="nivel-input nivel-sanfco-max" placeholder="—" value="${sanFcoMax}" />
           </td>
           <td style="text-align:right;">
-            <input type="number" min="0" step="1" class="nivel-input nivel-aldunate-min" placeholder="30" value="${aldunateMin}" />
+            <input type="number" min="-1" step="1" class="nivel-input nivel-aldunate-min" title="-1 = no reponer en esta bodega" placeholder="30" value="${aldunateMin}" />
           </td>
           <td style="text-align:right;">
             <input type="number" min="0" step="1" class="nivel-input nivel-aldunate-max" placeholder="—" value="${aldunateMax}" />

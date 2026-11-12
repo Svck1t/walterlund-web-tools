@@ -66,12 +66,14 @@ const ReposicionAnalysis = (() => {
    */
   // Un mínimo vacío ('') o no numérico NO es 0: es "sin configurar" y usa el umbral por defecto.
   // (Antes Number('') daba 0 y el producto solo aparecía cuando ya se había agotado.)
+  // Un mínimo negativo (ej. -1) significa "no reponer en esta bodega": nunca aparece en las sugerencias.
   function minimoValido(v) {
     if (v === null || v === undefined) return null;
     if (typeof v === 'string' && v.trim() === '') return null;
     const n = Number(String(v).replace(',', '.'));
-    return isNaN(n) || n < 0 ? null : n;
+    return isNaN(n) ? null : n;
   }
+  const excluido = min => min < 0;
   function umbralPara(codigo, bodega, obtenerMinimo) {
     const custom = obtenerMinimo ? minimoValido(obtenerMinimo(codigo, bodega)) : null;
     return custom !== null ? custom : UMBRAL_STOCK_BAJO_DEFAULT;
@@ -80,7 +82,8 @@ const ReposicionAnalysis = (() => {
     if (!obtenerMinimo) return 'defecto';
     const v = obtenerMinimo(codigo, bodega);
     if (v === null || v === undefined) return 'defecto';
-    return minimoValido(v) === null ? 'invalido' : 'configurado';
+    const n = minimoValido(v);
+    return n === null ? 'invalido' : n < 0 ? 'excluido' : 'configurado';
   }
 
   /** Cuánto puede dar un centro de distribución sin bajar del 70% de su stock actual.
@@ -107,7 +110,7 @@ const ReposicionAnalysis = (() => {
     };
 
     const destinosBajos = ['sanFco', 'aldunate']
-      .filter(d => record[d] <= umbrales[d] * factor)
+      .filter(d => !excluido(umbrales[d]) && record[d] <= umbrales[d] * factor)
       .sort((a, b) => record[a] - record[b]); // más crítico (menos stock) primero
 
     // Cuánto de VIEL le toca a cada destino bajo
@@ -201,8 +204,8 @@ const ReposicionAnalysis = (() => {
     const bod = ['sanFco', 'aldunate'].map(b => {
       const min = umbralPara(record.codigo, b, obtenerMinimo);
       const fuente = fuenteUmbral(record.codigo, b, obtenerMinimo);
-      const bajo = record[b] <= min;
-      const cerca = !bajo && record[b] <= min * MARGEN_PREVENTIVO;
+      const bajo = !excluido(min) && record[b] <= min;
+      const cerca = !excluido(min) && !bajo && record[b] <= min * MARGEN_PREVENTIVO;
       return { bodega: b, label: BODEGA_LABEL[b], stock: record[b], min, fuente, bajo, cerca };
     });
     const filas = evaluarRecord(record, obtenerMinimo);

@@ -1122,3 +1122,17 @@ table.stock-bodegas th { letter-spacing: 0; position: sticky; top: 0; z-index: 2
 /* La barra lateral nunca se achica por contenido ancho; el contenido se adapta */
 .sidebar { flex-shrink: 0; }
 .main { min-width: 0; }
+
+/* ============ MODO NOCHE (lo activa js/theme.js) ============
+   Se invierte toda la página: blanco → gris oscuro (#121212), negro → gris claro.
+   Fotos, videos y el sidebar (que ya es oscuro) llevan el contra-filtro para verse igual que siempre. */
+@media screen {
+  html.dark { filter: invert(.93) hue-rotate(180deg); background: #fff; }
+  html.dark img,
+  html.dark video,
+  html.dark picture,
+  html.dark .sidebar,
+  html.dark .sidebar-backdrop { filter: invert(1) contrast(1.163) hue-rotate(180deg); }
+  /* dentro del sidebar ya está corregido: no volver a invertir */
+  html.dark .sidebar img { filter: none; }
+}

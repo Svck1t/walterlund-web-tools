@@ -51,3 +51,17 @@ quedan intactos.
 - Conectar `Exportar` a una generación real de Excel/CSV.
 - Definir origen de datos de Familia si no viene desde el mismo Excel.
 - `git init`, repo en GitHub y deploy en Vercel (paso 6-9 del flujo original).
+
+## Producción · Kao Chimigraf
+
+Reemplaza los Excel de fórmulas Kao (Chimigraf y Engatel): maestro de materias primas,
+colores con su fórmula, calculadora (kg → cantidades, descontar stock +merma, costo y margen)
+y producciones cargadas desde el "Informe de Guías de Recepción" de Softland.
+
+Activar la base de datos (una vez):
+1. Google Sheet nueva "Producción Kao" → Extensiones → Apps Script → pegar `gas/ProduccionKaoAPI.gs`.
+2. Implementar como aplicación web (ejecutar como: yo · acceso: cualquier usuario) y copiar la URL `/exec`.
+3. Pegarla en `api/kao.js` (`APPS_SCRIPT_URL`) y desplegar.
+4. En la web: Producción → Kao Chimigraf → "Cargar datos iniciales" (usa `data/kao-seed.json`).
+
+Mientras no esté configurada, la sección funciona en modo vista previa con `data/kao-seed.json` (no guarda cambios).

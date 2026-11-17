@@ -18,10 +18,10 @@ const ProduccionKaoSection = (() => {
   const ENVASES_STD = ['TAMBOR 200', 'BIDON 5 LITROS CON TAPA', 'IBC', 'BALDES CON TAPA'];
 
   let root = null;
-  let D = { config: {}, materias: [], colores: [], producciones: [] };
+  let D = { config: {}, materias: [], colores: [], producciones: [], ordenes: [] };
   let modo = 'api';          // 'api' | 'local' (vista previa sin guardar)
   let errorCarga = '';
-  let tab = 'resumen';
+  let tab = 'orden';
   let anio = '';
   let fCliente = '';
   let busqueda = '';
@@ -90,12 +90,12 @@ const ProduccionKaoSection = (() => {
       if (d.sinConfigurar || r.status === 404) throw Object.assign(new Error(d.error || 'API sin configurar'), { local: true });
       if (!d.ok) throw new Error(d.error || 'Error al leer la base');
       modo = 'api';
-      D = { config: d.config || {}, materias: d.materias || [], colores: d.colores || [], producciones: d.producciones || [] };
+      D = { config: d.config || {}, materias: d.materias || [], colores: d.colores || [], producciones: d.producciones || [], ordenes: d.ordenes || [] };
     } catch (err) {
       if (!err.local) errorCarga = err.message;
       modo = 'local';
       const s = await (await fetch(SEED_URL, { cache: 'no-store' })).json();
-      D = { config: s.config, materias: s.materias, colores: s.colores, producciones: s.producciones.map((p, i) => ({ id: 'L' + i, ...p })) };
+      D = { config: s.config, materias: s.materias, colores: s.colores, producciones: s.producciones.map((p, i) => ({ id: 'L' + i, ...p })), ordenes: [] };
     }
     indexar();
     if (!anio || !anios().includes(anio)) anio = anios()[0] || '';
@@ -333,12 +333,12 @@ const ProduccionKaoSection = (() => {
         <div class="pk-head-btns">
           <label class="pk-btn pk-btn-sec">📤 Cargar informe Softland<input type="file" id="pk-file" accept=".xls,.xlsx" hidden></label>
           <label class="pk-btn pk-btn-sec" title="CSV exportado desde Outlook con los correos INGRESAR Y FACTURAR">✉️ Clientes desde correos<input type="file" id="pk-mail" accept=".csv" hidden></label>
-          <button class="pk-btn" data-act="nuevo-color">＋ Nuevo color</button>
+
         </div>
       </div>
       <div id="pk-aviso" class="pk-aviso" hidden></div>
       <div class="pk-tabs">
-        ${[['resumen', 'Resumen'], ['producciones', 'Producciones'], ['colores', 'Colores y fórmulas'], ['maestro', 'Maestro']].map(([k, t]) => `<button class="pk-tab" data-tab="${k}">${t}</button>`).join('')}
+        ${[['orden', '＋ Nueva orden'], ['ordenes', 'Órdenes'], ['resumen', 'Resumen'], ['producciones', 'Producciones'], ['colores', 'Colores y fórmulas'], ['maestro', 'Maestro']].map(([k, t]) => `<button class="pk-tab" data-tab="${k}">${t}</button>`).join('')}
       </div>
       <div id="pk-body"><div class="pk-card pk-vacio">Cargando datos…</div></div>
     </div>`;
@@ -360,6 +360,8 @@ const ProduccionKaoSection = (() => {
     charts.forEach(c => c.destroy()); charts = [];
     const body = root.querySelector('#pk-body');
     if (colorAbierto) { body.innerHTML = banner + fichaColor(); return; }
+    if (tab === 'orden') body.innerHTML = banner + vistaOrden();
+    if (tab === 'ordenes') body.innerHTML = banner + vistaOrdenes();
     if (tab === 'resumen') { body.innerHTML = banner + resumen(); graficosResumen(); }
     if (tab === 'producciones') body.innerHTML = banner + producciones();
     if (tab === 'colores') body.innerHTML = banner + listaColores();
@@ -485,7 +487,8 @@ const ProduccionKaoSection = (() => {
     return `<div class="pk-filtros">
         <label>Estado<select data-f="estado">${[['activos', 'Activos'], ['inactivos', 'Inactivos'], ['todos', 'Todos']].map(([k, t]) => `<option value="${k}" ${k === fEstado ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
         ${selCliente()}
-        <input id="pk-buscar" class="pk-search" type="search" placeholder="Buscar código, color o cliente" value="${esc(busqueda)}"></div>
+        <input id="pk-buscar" class="pk-search" type="search" placeholder="Buscar código, color o cliente" value="${esc(busqueda)}">
+        <button class="pk-btn" data-act="nuevo-color">＋ Nuevo color</button></div>
       <p class="pk-sub">${nf(lista.length)} colores · inactivo = sin producción desde ${fCorta(cfg().inactivoDesde)} (se puede forzar a mano en la ficha) · toca un color para abrir su fórmula</p>
       <div class="pk-table-wrap"><table class="pk-table pk-click">
         <thead><tr><th>Código</th><th>Color</th><th>Cliente</th><th>Origen</th><th class="num">Prod.</th><th class="num">Kg</th><th>Última</th><th>Estado</th></tr></thead>
@@ -645,11 +648,317 @@ const ProduccionKaoSection = (() => {
   }
 
   // =====================================================
+  // ÓRDENES DE PRODUCCIÓN (flujo paso a paso)
+  //  1. Cliente  2. Colores  3. Formulación y envases  4. Revisar, guardar e imprimir
+  // =====================================================
+  const hoyLocal = () => new Date().toLocaleDateString('sv-SE'); // AAAA-MM-DD en hora local
+  const PASOS = ['Cliente', 'Colores', 'Formulación', 'Revisar e imprimir'];
+  const ESTADOS_OP = { pendiente: 'Pendiente', produccion: 'En producción', producida: 'Producida', anulada: 'Anulada' };
+  let wiz = null;            // { paso, cliente, items:[{colorId, kg, batch, envases:{}}], obs, fecha }
+  let qCli = '', qCol = '';
+  let ordenAbierta = null;
+  let fEstOrd = 'abiertas';
+
+  // color aproximado para la muestra visual, según el nombre
+  const SWATCH = [
+    [/TRANSPARENTE|BARNIZ|CREMA|LIMPIADOR/, 'transp'], [/BLANCO|OPACO/, '#f8f8f6'], [/NEGRO/, '#1f1f1f'],
+    [/COOL GRAY|GRIS|GRAY/, '#8d9196'], [/PLATA|SILVER/, '#c0c4c8'], [/ORO|DORADO|GOLD/, '#c9a227'],
+    [/BURDEO|BORDEAUX|VINO/, '#7b1f2e'], [/CAFE|MARRON|CHOCOLATE/, '#6d4c41'],
+    [/NARANJA|ORANGE/, '#f28c28'], [/AMARILLO|YELLOW/, '#f5c518'],
+    [/MAGENTA|RUBINE|RHODAMINE/, '#c2185b'], [/FUCSIA/, '#d81b78'], [/ROSA|ROSADO|PINK/, '#f06292'],
+    [/WARM RED|ROJO|RED|185|032|199/, '#d32f2f'],
+    [/LILA|LAVANDA/, '#b39ddb'], [/VIOLETA|PURPURA|PURPLE|MORADO/, '#7b3fa0'],
+    [/CYAN|CELESTE|TURQUESA|PROCESS BLUE/, '#1fa5d8'], [/AZUL|BLUE|REFLEX|REFLEJO/, '#1e4fa3'],
+    [/VERDE OSCURO/, '#1b5e20'], [/VERDE CLARO/, '#7cb342'], [/VERDE|GREEN/, '#2e7d32']
+  ];
+  const swatchColor = nombre => { const n = norm(nombre); const s = SWATCH.find(([re]) => re.test(n)); return s ? s[1] : '#b0b7c3'; };
+  const swatch = (nombre, cls = '') => { const c = swatchColor(nombre); return `<span class="pk-sw ${cls} ${c === 'transp' ? 'pk-sw-transp' : ''}" style="${c === 'transp' ? '' : '--sw:' + c}"></span>`; };
+
+  // clientes con sus estadísticas (de producciones y colores)
+  function clientesStats() {
+    const m = new Map();
+    const get = c => { if (!m.has(c)) m.set(c, { cliente: c, n: 0, kg: 0, ultima: '', codigos: new Set() }); return m.get(c); };
+    D.producciones.forEach(p => { const c = clienteProd(p); if (!c) return; const s = get(c); s.n++; s.kg += num(p.kg); if (p.fecha > s.ultima) s.ultima = p.fecha; s.codigos.add(p.codigo); });
+    D.colores.forEach(c => { if (c.cliente) get(c.cliente); });
+    (D.ordenes || []).forEach(o => { if (o.cliente) get(o.cliente); });
+    return [...m.values()].sort((a, b) => b.ultima.localeCompare(a.ultima) || b.kg - a.kg);
+  }
+
+  // colores que el cliente ha producido (o tiene asignados), con historial
+  function coloresDeCliente(cli) {
+    const porCod = new Map();
+    D.producciones.filter(p => clienteProd(p) === cli).forEach(p => {
+      const s = porCod.get(p.codigo) || { n: 0, kg: 0, ultima: '', ultimoKg: 0 };
+      s.n++; s.kg += num(p.kg);
+      if (p.fecha >= s.ultima) { s.ultima = p.fecha; s.ultimoKg = num(p.kg); }
+      porCod.set(p.codigo, s);
+    });
+    const lista = [];
+    porCod.forEach((s, cod) => { const c = colorDe(cod); if (c) lista.push({ c, ...s }); });
+    D.colores.filter(c => c.cliente === cli && !lista.some(x => x.c.id === c.id)).forEach(c => lista.push({ c, n: 0, kg: 0, ultima: '', ultimoKg: 0 }));
+    return lista.sort((a, b) => b.ultima.localeCompare(a.ultima) || norm(a.c.nombre).localeCompare(norm(b.c.nombre)));
+  }
+
+  function nuevaOrden() {
+    wiz = null;
+    qCli = ''; qCol = ''; tab = 'orden'; colorAbierto = null; ordenAbierta = null; dibujar();
+  }
+
+  function envaseSugerido(c, kg) {
+    if (c.envase && c.envase.mp) return { [c.envase.mp]: Math.ceil(kg / (c.envase.kg || 1)) };
+    return {};
+  }
+
+  function stepper() {
+    return `<div class="pk-steps">${PASOS.map((p, i) => {
+      const n = i + 1, st = n < wiz.paso ? 'hecho' : n === wiz.paso ? 'actual' : '';
+      const clic = n < wiz.paso ? `data-act="ir-paso" data-paso="${n}"` : '';
+      return `<button class="pk-step ${st}" ${clic} ${clic ? '' : 'disabled'}><span>${n < wiz.paso ? '✓' : n}</span>${p}</button>`;
+    }).join('<i></i>')}</div>`;
+  }
+
+  function vistaOrden() {
+    if (!wiz) wiz = { paso: 1, cliente: '', items: [], obs: '', fecha: hoyLocal() };
+    const pie = (atras, sig, sigTxt, ok = true) => `<div class="pk-wiz-pie">
+      ${atras ? `<button class="pk-btn pk-btn-sec" data-act="ir-paso" data-paso="${wiz.paso - 1}">← Atrás</button>` : '<span></span>'}
+      ${sig ? `<button class="pk-btn pk-btn-grande" data-act="ir-paso" data-paso="${wiz.paso + 1}" ${ok ? '' : 'disabled'}>${sigTxt} →</button>` : ''}</div>`;
+    const resumenCli = wiz.cliente ? `<div class="pk-wiz-ctx">Cliente: <b>${esc(wiz.cliente)}</b>${wiz.items.length ? ` · ${nf(wiz.items.length)} color${wiz.items.length > 1 ? 'es' : ''} · ${nf(wiz.items.reduce((a, it) => a + (it.kg || 0), 0), 1)} kg` : ''}</div>` : '';
+
+    // ---------- Paso 1: cliente ----------
+    if (wiz.paso === 1) {
+      const q = norm(qCli);
+      const lista = clientesStats().filter(s => !q || norm(s.cliente).includes(q));
+      return stepper() + `<div class="pk-wiz-card">
+        <h2>¿Para qué cliente es la producción?</h2>
+        <p class="pk-sub">Busca el cliente que aparece en el correo de solicitud.</p>
+        <input id="pk-qcli" class="pk-search pk-search-grande" type="search" placeholder="Buscar cliente…" value="${esc(qCli)}" autocomplete="off">
+        <div class="pk-cli-grid">
+          ${lista.map(s => `<button class="pk-cli ${s.cliente === wiz.cliente ? 'sel' : ''}" data-act="elegir-cliente" data-cli="${esc(s.cliente)}">
+              <b>${esc(s.cliente)}</b>
+              <span>${s.n ? `${nf(s.codigos.size)} colores · ${nf(s.n)} producciones` : 'Sin producciones registradas'}</span>
+              <small>${s.ultima ? 'Última: ' + fCorta(s.ultima) + ' · ' + nf(s.kg) + ' kg' : '&nbsp;'}</small></button>`).join('')}
+          ${q && !lista.some(s => norm(s.cliente) === q) ? `<button class="pk-cli pk-cli-nuevo" data-act="elegir-cliente" data-cli="${esc(qCli.trim().toUpperCase())}"><b>＋ ${esc(qCli.trim().toUpperCase())}</b><span>Cliente nuevo</span><small>&nbsp;</small></button>` : ''}
+        </div>
+        ${!lista.length && !q ? '<p class="pk-vacio">Todavía no hay clientes. Escribe el nombre para crear uno.</p>' : ''}
+      </div>`;
+    }
+
+    // ---------- Paso 2: colores ----------
+    if (wiz.paso === 2) {
+      const hist = coloresDeCliente(wiz.cliente);
+      const sel = new Set(wiz.items.map(it => it.colorId));
+      const q = norm(qCol);
+      const otros = q ? D.colores.filter(c => !hist.some(h => h.c.id === c.id) && norm([c.codigo, c.nombre].join(' ')).includes(q)).slice(0, 24) : [];
+      const card = (c, info) => `<button class="pk-col ${sel.has(c.id) ? 'sel' : ''}" data-act="toggle-color" data-id="${esc(c.id)}">
+          ${swatch(c.nombre)}<div><b>${esc(c.nombre)}</b><span>${esc(c.codigo || 'sin código')}</span>${info}</div><em>${sel.has(c.id) ? '✓' : '＋'}</em></button>`;
+      return stepper() + resumenCli + `<div class="pk-wiz-card">
+        <h2>¿Qué colores vas a producir?</h2>
+        <p class="pk-sub">Marca los colores del correo. Abajo puedes buscar colores que este cliente no ha pedido antes.</p>
+        <h3>Colores que ha pedido ${esc(wiz.cliente)}</h3>
+        ${hist.length ? `<div class="pk-col-grid">${hist.map(h => card(h.c, h.n ? `<small>${nf(h.n)} veces · última ${fCorta(h.ultima)} · ${nf(h.ultimoKg, 1)} kg</small>` : '<small>Asignado al cliente</small>')).join('')}</div>`
+          : '<p class="pk-vacio">Este cliente aún no tiene colores. Búscalos abajo.</p>'}
+        <h3 class="pk-mt">Buscar otro color</h3>
+        <input id="pk-qcol" class="pk-search" type="search" placeholder="Nombre o código del color…" value="${esc(qCol)}" autocomplete="off">
+        ${otros.length ? `<div class="pk-col-grid pk-mt-s">${otros.map(c => card(c, `<small>${activo(c) ? '' : 'Inactivo · '}${esc(c.cliente || 'sin cliente')}</small>`)).join('')}</div>` : q ? '<p class="pk-sub">Sin resultados. Si es un color nuevo, créalo en "Colores y fórmulas".</p>' : ''}
+      </div>` + pie(true, true, 'Continuar', wiz.items.length > 0);
+    }
+
+    // ---------- Paso 3: formulación ----------
+    if (wiz.paso === 3) {
+      const envases = D.materias.filter(m => m.tipo === 'ENVASE');
+      const bloques = wiz.items.map((it, idx) => {
+        const c = D.colores.find(x => x.id === it.colorId); if (!c) return '';
+        const R = calcular(c, it.kg || 0, it.envases);
+        const sumOk = Math.abs(R.sumPct - 1) < 0.0005;
+        return `<div class="pk-wiz-card pk-item">
+          <div class="pk-item-head">${swatch(c.nombre, 'pk-sw-xl')}
+            <div><h2>${esc(c.nombre)}</h2><span class="pk-sub">Código ${esc(c.codigo || '—')}</span></div>
+            <label class="pk-kg-big">Kg a producir<input class="pk-in" data-it="${idx}" data-k="kg" inputmode="decimal" value="${String(it.kg ?? '').replace('.', ',')}"></label>
+            <button class="pk-x" data-act="quitar-item" data-i="${idx}" title="Quitar color">✕</button></div>
+          ${it.kg > 0 ? `<table class="pk-table pk-ftable">
+            <thead><tr><th>Código</th><th>Materia prima</th><th class="num">%</th><th class="num">Kg a pesar</th><th class="num">Descontar stock<br><small>+${pct(cfg().merma, 0)} merma</small></th></tr></thead>
+            <tbody>${R.filas.map(f => `<tr><td class="pk-gris">${esc(f.m.codigo || '—')}</td><td><b>${esc(f.m.descripcion)}</b></td><td class="num">${pct(f.pct, 2)}</td>
+              <td class="num pk-pesar">${nf(f.teo, 3)}</td><td class="num">${nf(f.descontar, 1)}</td></tr>`).join('')}
+              <tr class="pk-tot"><td colspan="2">TOTAL</td><td class="num ${sumOk ? '' : 'pk-mal'}">${pct(R.sumPct, 2)}</td><td class="num">${nf(it.kg * R.sumPct, 3)}</td><td class="num">${nf(R.filas.reduce((a, f) => a + f.descontar, 0), 1)}</td></tr></tbody></table>
+            ${sumOk ? '' : `<p class="pk-mal">⚠️ La fórmula suma ${pct(R.sumPct, 2)}. Revísala en "Colores y fórmulas" antes de producir.</p>`}
+            <h3 class="pk-mt">Envases</h3>
+            <div class="pk-env-grid">${envases.map(m => `<label class="pk-env ${it.envases[m.id] ? 'on' : ''}"><span>${esc(m.descripcion)}</span>
+              <div class="pk-env-ctrl"><button data-act="env-menos" data-i="${idx}" data-mp="${esc(m.id)}">−</button>
+              <input class="pk-in" data-it="${idx}" data-env-it="${esc(m.id)}" inputmode="numeric" value="${it.envases[m.id] || ''}" placeholder="0">
+              <button data-act="env-mas" data-i="${idx}" data-mp="${esc(m.id)}">+</button></div></label>`).join('')}</div>
+            <div class="pk-item-cost">Costo estimado ${usd(R.costoKg)}/kg · ${clp(R.costoKgClp)}/kg${R.margen !== null ? ` · margen <b class="${R.margen < 0 ? 'pk-mal' : 'pk-ok'}">${pct(R.margen)}</b>` : ''}</div>`
+          : '<p class="pk-sub">Ingresa los kilos para ver la formulación.</p>'}
+        </div>`;
+      }).join('');
+      const ok = wiz.items.length && wiz.items.every(it => it.kg > 0);
+      return stepper() + resumenCli + bloques + pie(true, true, 'Revisar orden', ok);
+    }
+
+    // ---------- Paso 4: revisar ----------
+    const filas = wiz.items.map((it, idx) => {
+      const c = D.colores.find(x => x.id === it.colorId) || { nombre: '?' };
+      const env = Object.entries(it.envases).filter(([, n]) => n > 0).map(([id, n]) => `${nf(n)} × ${esc((MP.get(id) || {}).descripcion || id)}`).join('<br>') || '<span class="pk-gris">Sin envases</span>';
+      return `<tr><td>${swatch(c.nombre)} <b>${esc(c.nombre)}</b><br><small class="pk-gris">${esc(c.codigo || '')}</small></td>
+        <td class="num"><b>${nf(it.kg, 1)}</b></td><td>${env}</td>
+        <td><input class="pk-in pk-in-batch" data-it="${idx}" data-k="batch" value="${esc(it.batch || '')}" placeholder="Opcional"></td></tr>`;
+    }).join('');
+    const consumo = consumoOrden(wiz);
+    return stepper() + resumenCli + `<div class="pk-wiz-card">
+        <h2>Revisa la orden</h2>
+        <div class="pk-form pk-mt-s">
+          <label>Fecha<input class="pk-in" type="date" data-w="fecha" value="${esc(wiz.fecha)}"></label>
+          <label class="pk-ancho">Observaciones para el técnico<input class="pk-in" data-w="obs" value="${esc(wiz.obs)}" placeholder="Ej: con despacho, urgente, revisar tono…"></label>
+        </div>
+        <table class="pk-table pk-mt"><thead><tr><th>Color</th><th class="num">Kg</th><th>Envases</th><th>Batch</th></tr></thead><tbody>${filas}
+          <tr class="pk-tot"><td>TOTAL</td><td class="num">${nf(wiz.items.reduce((a, it) => a + it.kg, 0), 1)}</td><td colspan="2"></td></tr></tbody></table>
+        <details class="pk-mt"><summary><b>Descuento de stock de la orden</b> (${nf(consumo.length)} productos)</summary>${tablaConsumo(consumo)}</details>
+      </div>
+      <div class="pk-wiz-pie"><button class="pk-btn pk-btn-sec" data-act="ir-paso" data-paso="3">← Atrás</button>
+        <div class="pk-head-btns"><button class="pk-btn pk-btn-sec pk-btn-grande" data-act="guardar-orden">Solo guardar</button>
+        <button class="pk-btn pk-btn-grande" data-act="guardar-imprimir">🖨️ Guardar e imprimir</button></div></div>`;
+  }
+
+  // consumo total de materias primas y envases de una orden (para descontar stock)
+  function consumoOrden(o) {
+    const m = new Map();
+    o.items.forEach(it => {
+      const c = D.colores.find(x => x.id === it.colorId) || (it.snapshot ? it.snapshot : null); if (!c) return;
+      const R = calcular(c, it.kg || 0, it.envases);
+      R.filas.forEach(f => { const x = m.get(f.mp) || { m: f.m, cant: 0, um: 'kg' }; x.cant += f.teo * (1 + cfg().merma); m.set(f.mp, x); });
+      R.env.forEach(e => { const x = m.get(e.mp) || { m: e.m, cant: 0, um: 'un' }; x.cant += e.n; m.set(e.mp, x); });
+    });
+    return [...m.values()].sort((a, b) => (a.um === b.um ? 0 : a.um === 'un' ? 1 : -1) || norm(a.m.descripcion).localeCompare(norm(b.m.descripcion)));
+  }
+  const tablaConsumo = cons => `<table class="pk-table pk-mini pk-mt-s"><thead><tr><th>Código</th><th>Producto</th><th class="num">Cantidad</th><th>UM</th></tr></thead><tbody>
+    ${cons.map(x => `<tr><td>${esc(x.m.codigo || '—')}</td><td>${esc(x.m.descripcion)}</td><td class="num"><b>${x.um === 'kg' ? nf(Math.round(x.cant * 10) / 10, 1) : nf(x.cant)}</b></td><td>${x.um}</td></tr>`).join('')}</tbody></table>`;
+
+  function irPaso(n) {
+    if (n === 2 && !wiz.cliente) return;
+    if (n === 3 && !wiz.items.length) return;
+    if (n === 4 && !wiz.items.every(it => it.kg > 0)) return;
+    wiz.paso = n; dibujar(); window.scrollTo(0, 0);
+  }
+
+  async function guardarOrden(imprimirDespues = false) {
+    const o = { id: wiz.id || '', numero: wiz.numero || '', fecha: wiz.fecha, cliente: wiz.cliente, estado: wiz.estado || 'pendiente', obs: wiz.obs,
+      items: wiz.items.map(it => { const c = D.colores.find(x => x.id === it.colorId) || {}; return { ...it, codigo: c.codigo || '', nombre: c.nombre || '' }; }) };
+    try {
+      aviso('Guardando orden…');
+      const d = await api('guardarOrden', { item: o });
+      o.id = d.id || o.id || 'O' + Date.now();
+      o.numero = d.numero || o.numero || siguienteNumero(o.fecha);
+      D.ordenes = (D.ordenes || []).filter(x => x.id !== o.id).concat(o);
+      wiz = null; ordenAbierta = o.id; tab = 'ordenes'; dibujar();
+      if (imprimirDespues) imprimir(o);
+      aviso(`✅ Orden ${esc(o.numero)} guardada${modo === 'local' ? ' (vista previa, no se guarda)' : ''}. Ya puedes imprimirla.`, 'ok');
+    } catch (err) {
+      aviso(/no válida/i.test(err.message) ? '⚠️ Falta actualizar el Apps Script: pega la versión nueva de gas/ProduccionKaoAPI.gs y crea una nueva versión de la implementación.' : '⚠️ ' + esc(err.message), 'err');
+    }
+  }
+  function siguienteNumero(fecha) {
+    const y = String(fecha).slice(0, 4);
+    const n = (D.ordenes || []).filter(o => String(o.numero).startsWith('OP-' + y)).map(o => Number(String(o.numero).split('-')[2]) || 0);
+    return `OP-${y}-${String((n.length ? Math.max(...n) : 0) + 1).padStart(3, '0')}`;
+  }
+
+  // ---------- Lista de órdenes ----------
+  function vistaOrdenes() {
+    if (ordenAbierta) return detalleOrden();
+    const lista = (D.ordenes || []).filter(o => fEstOrd === 'todas' || (fEstOrd === 'abiertas' ? ['pendiente', 'produccion'].includes(o.estado) : o.estado === fEstOrd))
+      .sort((a, b) => String(b.fecha).localeCompare(String(a.fecha)) || String(b.numero).localeCompare(String(a.numero)));
+    return `<div class="pk-filtros"><label>Estado<select data-f="estord">${[['abiertas', 'Pendientes y en producción'], ['producida', 'Producidas'], ['anulada', 'Anuladas'], ['todas', 'Todas']].map(([k, t]) => `<option value="${k}" ${k === fEstOrd ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
+        <button class="pk-btn" data-act="nueva-orden">＋ Nueva orden</button></div>
+      ${lista.length ? `<div class="pk-ord-list">${lista.map(o => `<button class="pk-ord" data-act="abrir-orden" data-id="${esc(o.id)}">
+          <div class="pk-ord-top"><b>${esc(o.numero || '—')}</b><span class="pk-est pk-est-${esc(o.estado)}">${ESTADOS_OP[o.estado] || o.estado}</span></div>
+          <div class="pk-ord-cli">${esc(o.cliente)}</div>
+          <div class="pk-ord-sw">${o.items.map(it => swatch(it.nombre)).join('')}</div>
+          <small>${fCorta(o.fecha)} · ${nf(o.items.length)} color${o.items.length > 1 ? 'es' : ''} · ${nf(o.items.reduce((a, it) => a + num(it.kg), 0), 1)} kg</small></button>`).join('')}</div>`
+        : `<div class="pk-wiz-card pk-vacio">No hay órdenes ${fEstOrd === 'abiertas' ? 'abiertas' : 'en este estado'}.<br><br><button class="pk-btn pk-btn-grande" data-act="nueva-orden">＋ Crear orden de producción</button></div>`}`;
+  }
+
+  function detalleOrden() {
+    const o = (D.ordenes || []).find(x => x.id === ordenAbierta); if (!o) { ordenAbierta = null; return vistaOrdenes(); }
+    return `<div class="pk-ficha-head"><button class="pk-btn pk-btn-sec" data-act="cerrar-orden">← Órdenes</button>
+        <h2>${esc(o.numero)} · ${esc(o.cliente)}</h2>
+        <div class="pk-head-btns"><button class="pk-btn pk-btn-sec" data-act="editar-orden">✏️ Editar</button><button class="pk-btn" data-act="imprimir-orden">🖨️ Imprimir formulación</button></div></div>
+      <div class="pk-wiz-card">
+        <div class="pk-ficha-info">
+          <div><span>Fecha</span><b>${fCorta(o.fecha)}</b></div>
+          <div><span>Kg totales</span><b>${nf(o.items.reduce((a, it) => a + num(it.kg), 0), 1)}</b></div>
+          <div><span>Estado</span><b><select class="pk-in" data-ord-estado="${esc(o.id)}">${Object.entries(ESTADOS_OP).map(([k, t]) => `<option value="${k}" ${k === o.estado ? 'selected' : ''}>${t}</option>`).join('')}</select></b></div>
+        </div>
+        ${o.obs ? `<p class="pk-sub pk-mt-s">📝 ${esc(o.obs)}</p>` : ''}
+        <table class="pk-table pk-mt"><thead><tr><th>Color</th><th class="num">Kg</th><th>Envases</th><th>Batch</th></tr></thead><tbody>
+        ${o.items.map(it => `<tr><td>${swatch(it.nombre)} <b>${esc(it.nombre)}</b> <small class="pk-gris">${esc(it.codigo)}</small></td><td class="num">${nf(it.kg, 1)}</td>
+          <td>${Object.entries(it.envases || {}).filter(([, n]) => n > 0).map(([id, n]) => `${nf(n)} × ${esc((MP.get(id) || {}).descripcion || id)}`).join('<br>') || '—'}</td><td>${esc(it.batch || '—')}</td></tr>`).join('')}</tbody></table>
+        <h3 class="pk-mt">Descuento de stock</h3>${tablaConsumo(consumoOrden(o))}
+      </div>
+      <p class="pk-mt"><button class="pk-btn pk-btn-peligro" data-act="borrar-orden">Eliminar orden</button></p>`;
+  }
+
+  async function cambiarEstadoOrden(id, estado) {
+    const o = (D.ordenes || []).find(x => x.id === id); if (!o) return;
+    o.estado = estado;
+    try { await api('guardarOrden', { item: o }); aviso('✅ Estado actualizado', 'ok'); } catch (err) { aviso('⚠️ ' + esc(err.message), 'err'); }
+  }
+
+  // ---------- Impresión ----------
+  function imprimir(o) {
+    const k = cfg();
+    const hoja = it => {
+      const c = D.colores.find(x => x.id === it.colorId); if (!c) return '';
+      const R = calcular(c, num(it.kg), it.envases || {});
+      const env = R.env.length ? R.env.map(e => `<tr><td class="ck">☐</td><td>${esc(e.m.codigo || '')}</td><td>${esc(e.m.descripcion)}</td><td class="n"><b>${nf(e.n)}</b> un</td></tr>`).join('') : '<tr><td colspan="4" class="gris">Sin envases indicados</td></tr>';
+      const sw = swatchColor(c.nombre);
+      return `<section class="hoja">
+        <header><div><div class="marca">WALTER LUND</div><div class="tit">Orden de producción · Kao Chimigraf</div></div>
+          <div class="op"><b>${esc(o.numero || 'BORRADOR')}</b><span>${fCorta(o.fecha)}</span></div></header>
+        <div class="cab">
+          <div class="sw ${sw === 'transp' ? 'transp' : ''}" style="${sw === 'transp' ? '' : 'background:' + sw}"></div>
+          <div class="cn"><small>Color</small><h1>${esc(c.nombre)}</h1><span>Código ${esc(c.codigo || '—')}${it.batch ? ' · Batch ' + esc(it.batch) : ''}</span></div>
+          <div class="kg"><small>Producir</small><b>${nf(num(it.kg), num(it.kg) % 1 ? 1 : 0)}</b><span>kg</span></div>
+        </div>
+        <div class="cli"><span>Cliente</span><b>${esc(o.cliente)}</b>${o.obs ? `<span>Obs.</span><b>${esc(o.obs)}</b>` : ''}</div>
+        <h2>Formulación</h2>
+        <table><thead><tr><th class="ck">✓</th><th>Código</th><th>Materia prima</th><th class="n">%</th><th class="n">Kg a pesar</th><th class="n">Kg real</th></tr></thead>
+          <tbody>${R.filas.map(f => `<tr><td class="ck">☐</td><td>${esc(f.m.codigo || '')}</td><td><b>${esc(f.m.descripcion)}</b></td><td class="n">${pct(f.pct, 2)}</td><td class="n big">${nf(f.teo, 3)}</td><td class="n linea"></td></tr>`).join('')}
+          <tr class="tot"><td></td><td colspan="2">TOTAL</td><td class="n">${pct(R.sumPct, 2)}</td><td class="n big">${nf(num(it.kg) * R.sumPct, 3)}</td><td class="n linea"></td></tr></tbody></table>
+        <h2>Envases</h2>
+        <table><tbody>${env}</tbody></table>
+        <div class="firmas">
+          <div><span>Kg obtenidos</span></div><div><span>Fecha y hora de término</span></div><div><span>Técnico (nombre y firma)</span></div>
+        </div>
+        <div class="obs"><span>Observaciones del técnico</span></div>
+        <footer>Impreso ${new Date().toLocaleString('es-CL')} · Merma considerada para stock: ${pct(k.merma, 0)}</footer>
+      </section>`;
+    };
+    const cons = consumoOrden(o);
+    const resumen = `<section class="hoja">
+        <header><div><div class="marca">WALTER LUND</div><div class="tit">Descuento de stock · Kao Chimigraf</div></div>
+          <div class="op"><b>${esc(o.numero || 'BORRADOR')}</b><span>${fCorta(o.fecha)}</span></div></header>
+        <div class="cli"><span>Cliente</span><b>${esc(o.cliente)}</b><span>Colores</span><b>${o.items.map(it => esc(it.nombre || (D.colores.find(x => x.id === it.colorId) || {}).nombre) + ' (' + nf(num(it.kg), 1) + ' kg)').join(' · ')}</b></div>
+        <h2>Productos a descontar (incluye ${pct(k.merma, 0)} de merma)</h2>
+        <table><thead><tr><th>Código</th><th>Producto</th><th class="n">Cantidad</th><th>UM</th></tr></thead>
+          <tbody>${cons.map(x => `<tr><td>${esc(x.m.codigo || '—')}</td><td>${esc(x.m.descripcion)}</td><td class="n big">${x.um === 'kg' ? nf(Math.round(x.cant * 10) / 10, 1) : nf(x.cant)}</td><td>${x.um}</td></tr>`).join('')}</tbody></table>
+        <footer>Impreso ${new Date().toLocaleString('es-CL')}</footer></section>`;
+    let el = document.getElementById('pk-print');
+    if (!el) { el = document.createElement('div'); el.id = 'pk-print'; document.body.appendChild(el); }
+    el.innerHTML = o.items.map(hoja).join('') + resumen;
+    setTimeout(() => window.print(), 50);
+  }
+
+  // =====================================================
   // EVENTOS
   // =====================================================
   async function onClick(e) {
     const t = e.target.closest('[data-tab]');
-    if (t) { tab = t.dataset.tab; colorAbierto = null; editando = false; busqueda = ''; visibles = PAGINA; dibujar(); return; }
+    if (t) {
+      if (t.dataset.tab === 'orden' && tab === 'orden' && wiz && wiz.paso > 1) {
+        if (!confirm('¿Empezar una orden nueva? Se pierde la que estás armando.')) return;
+        wiz = null;
+      }
+      tab = t.dataset.tab; colorAbierto = null; editando = false; ordenAbierta = null; busqueda = ''; visibles = PAGINA; dibujar(); return;
+    }
     const fila = e.target.closest('tr[data-color]');
     if (fila) { abrirColor(fila.dataset.color); return; }
     const a = e.target.closest('[data-act]'); if (!a) return;
@@ -687,13 +996,53 @@ const ProduccionKaoSection = (() => {
       try { await api('guardarMateria', { item: m }); D.materias.push(m); indexar(); dibujar(); } catch (err) { aviso('⚠️ ' + esc(err.message), 'err'); }
     }
     if (act === 'nueva-prod') nuevaProduccion();
+    // --- órdenes ---
+    if (act === 'nueva-orden') nuevaOrden();
+    if (act === 'elegir-cliente') { if (wiz.cliente !== a.dataset.cli) wiz.items = []; wiz.cliente = a.dataset.cli; qCol = ''; irPaso(2); }
+    if (act === 'ir-paso') irPaso(Number(a.dataset.paso));
+    if (act === 'toggle-color') {
+      const id = a.dataset.id, i = wiz.items.findIndex(it => it.colorId === id);
+      if (i >= 0) wiz.items.splice(i, 1);
+      else {
+        const c = D.colores.find(x => x.id === id);
+        const h = coloresDeCliente(wiz.cliente).find(x => x.c.id === id);
+        const kg = h && h.ultimoKg ? h.ultimoKg : 0;
+        wiz.items.push({ colorId: id, kg, batch: '', envases: envaseSugerido(c, kg) });
+      }
+      dibujar();
+    }
+    if (act === 'quitar-item') { wiz.items.splice(Number(a.dataset.i), 1); if (!wiz.items.length) wiz.paso = 2; dibujar(); }
+    if (act === 'env-mas' || act === 'env-menos') {
+      e.preventDefault();
+      const it = wiz.items[Number(a.dataset.i)], mp = a.dataset.mp;
+      const n = Math.max(0, (it.envases[mp] || 0) + (act === 'env-mas' ? 1 : -1));
+      if (n) it.envases[mp] = n; else delete it.envases[mp];
+      dibujar();
+    }
+    if (act === 'imprimir-wiz') imprimir({ numero: wiz.numero || '', fecha: wiz.fecha, cliente: wiz.cliente, obs: wiz.obs, items: wiz.items.map(it => ({ ...it, nombre: (D.colores.find(x => x.id === it.colorId) || {}).nombre })) });
+    if (act === 'guardar-orden') guardarOrden();
+    if (act === 'guardar-imprimir') guardarOrden(true);
+    if (act === 'abrir-orden') { ordenAbierta = a.dataset.id; dibujar(); window.scrollTo(0, 0); }
+    if (act === 'cerrar-orden') { ordenAbierta = null; dibujar(); }
+    if (act === 'imprimir-orden') { const o = D.ordenes.find(x => x.id === ordenAbierta); if (o) imprimir(o); }
+    if (act === 'editar-orden') {
+      const o = D.ordenes.find(x => x.id === ordenAbierta); if (!o) return;
+      wiz = { ...JSON.parse(JSON.stringify(o)), paso: 3 };
+      wiz.items = wiz.items.filter(it => D.colores.some(c => c.id === it.colorId));
+      tab = 'orden'; ordenAbierta = null; dibujar();
+    }
+    if (act === 'borrar-orden') {
+      if (!confirm('¿Eliminar esta orden?')) return;
+      try { await api('borrarOrden', { id: ordenAbierta }); D.ordenes = D.ordenes.filter(o => o.id !== ordenAbierta); ordenAbierta = null; dibujar(); aviso('Orden eliminada', 'ok'); }
+      catch (err) { aviso('⚠️ ' + esc(err.message), 'err'); }
+    }
   }
 
   async function nuevaProduccion() {
     const cod = prompt('Código del color producido:'); if (!cod) return;
     const c = colorDe(cod.trim()); if (!c) { aviso('⚠️ No hay un color con el código ' + esc(cod), 'err'); return; }
     const kg = numIn(prompt(`Kg producidos de ${c.nombre}:`)); if (!kg) return;
-    const fecha = prompt('Fecha (AAAA-MM-DD):', new Date().toISOString().slice(0, 10)); if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha || '')) return;
+    const fecha = prompt('Fecha (AAAA-MM-DD):', new Date().toLocaleDateString('sv-SE')); if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha || '')) return;
     const folio = prompt('Folio de la guía de recepción (opcional):') || '';
     const p = { fecha, folio, codigo: c.codigo, descripcion: c.nombre, kg, pu: 0, total: 0, cliente: c.cliente || '', origen: 'manual', obs: '' };
     try { const d = await api('guardarProduccion', { item: p }); D.producciones.push({ id: d.id || 'L' + Date.now(), ...p }); indexar(); dibujar(); aviso('✅ Producción registrada', 'ok'); }
@@ -707,6 +1056,20 @@ const ProduccionKaoSection = (() => {
     if (el.dataset.f === 'anio') { anio = el.value; visibles = PAGINA; dibujar(); return; }
     if (el.dataset.f === 'cliente') { fCliente = el.value; visibles = PAGINA; dibujar(); return; }
     if (el.dataset.f === 'estado') { fEstado = el.value; dibujar(); return; }
+    if (el.dataset.f === 'estord') { fEstOrd = el.value; dibujar(); return; }
+    if (el.dataset.ordEstado) { cambiarEstadoOrden(el.dataset.ordEstado, el.value); return; }
+    if (wiz && el.dataset.w) { wiz[el.dataset.w] = el.value; return; }
+    if (wiz && el.dataset.it !== undefined) {
+      const it = wiz.items[Number(el.dataset.it)]; if (!it) return;
+      if (el.dataset.envIt) { const n = numIn(el.value); if (n) it.envases[el.dataset.envIt] = n; else delete it.envases[el.dataset.envIt]; dibujar(); return; }
+      if (el.dataset.k === 'batch') { it.batch = el.value.trim(); return; }
+      if (el.dataset.k === 'kg') {
+        it.kg = numIn(el.value) || 0;
+        const c = D.colores.find(x => x.id === it.colorId);
+        if (c && c.envase) it.envases = { ...it.envases, ...envaseSugerido(c, it.kg) };
+        dibujar(); return;
+      }
+    }
     if (el.dataset.prod) {
       const p = D.producciones.find(x => x.id === el.dataset.prod); if (!p) return;
       p.cliente = el.value.trim();
@@ -743,6 +1106,13 @@ const ProduccionKaoSection = (() => {
 
   let tBuscar = null;
   function onInput(e) {
+    if (e.target.id === 'pk-qcli' || e.target.id === 'pk-qcol') {
+      const id = e.target.id;
+      if (id === 'pk-qcli') qCli = e.target.value; else qCol = e.target.value;
+      clearTimeout(tBuscar);
+      tBuscar = setTimeout(() => { dibujar(); const b = root.querySelector('#' + id); if (b) { b.focus(); b.setSelectionRange(b.value.length, b.value.length); } }, 200);
+      return;
+    }
     if (e.target.id !== 'pk-buscar') return;
     busqueda = e.target.value; visibles = PAGINA;
     clearTimeout(tBuscar);
@@ -836,6 +1206,96 @@ const ProduccionKaoSection = (() => {
       .pk-prev-grid span{display:block;font-size:12px;color:#6b7280}.pk-prev-grid b{display:block;font-size:18px;margin-top:2px}
       .pk-prev-btns{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
       .pk-mas{margin:12px auto 0;display:block}
+      .pk-btn-grande{padding:13px 22px;font-size:15px}
+      .pk-mt-s{margin-top:10px}
+      .pk-steps{display:flex;align-items:center;gap:0;margin:0 0 18px;overflow-x:auto}
+      .pk-steps i{flex:1;min-width:16px;height:2px;background:#e5e7eb}
+      .pk-step{display:flex;align-items:center;gap:8px;background:none;border:0;padding:6px 8px;font-weight:600;color:#9ca3af;white-space:nowrap;font-size:14px}
+      .pk-step span{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:50%;background:#e5e7eb;color:#6b7280;font-size:13px}
+      .pk-step.actual{color:#1f2937}.pk-step.actual span{background:#4f5bd5;color:#fff;box-shadow:0 0 0 4px rgba(79,91,213,.18)}
+      .pk-step.hecho{color:#1e7b34;cursor:pointer}.pk-step.hecho span{background:#1e7b34;color:#fff}
+      .pk-wiz-card{background:#fff;border-radius:14px;padding:22px;box-shadow:0 1px 3px rgba(0,0,0,.08);margin-bottom:16px}
+      .pk-wiz-card h2{margin:0 0 4px;font-size:20px}
+      .pk-wiz-card h3{margin:18px 0 10px;font-size:14px;color:#374151;text-transform:uppercase;letter-spacing:.03em}
+      .pk-wiz-ctx{background:#eef2ff;color:#3730a3;border-radius:10px;padding:10px 14px;margin-bottom:14px;font-size:14px}
+      .pk-wiz-pie{display:flex;justify-content:space-between;align-items:center;gap:10px;position:sticky;bottom:0;background:linear-gradient(transparent,#f0f2f5 30%);padding:18px 0 6px;z-index:2}
+      .pk-search-grande{max-width:none;width:100%;font-size:17px;padding:13px 16px;margin:10px 0 16px}
+      .pk-cli-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px}
+      .pk-cli{display:flex;flex-direction:column;gap:4px;text-align:left;background:#fff;border:1.5px solid #e5e7eb;border-radius:12px;padding:16px;cursor:pointer;transition:.15s}
+      .pk-cli:hover{border-color:#667eea;box-shadow:0 4px 14px rgba(79,91,213,.12);transform:translateY(-1px)}
+      .pk-cli b{font-size:16px}.pk-cli span{font-size:13px;color:#4b5563}.pk-cli small{font-size:12px;color:#9ca3af}
+      .pk-cli.sel{border-color:#4f5bd5;background:#f5f6ff}
+      .pk-cli-nuevo{border-style:dashed;border-color:#1e7b34}.pk-cli-nuevo b{color:#1e7b34}
+      .pk-col-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px}
+      .pk-col{display:flex;align-items:center;gap:12px;text-align:left;background:#fff;border:1.5px solid #e5e7eb;border-radius:12px;padding:12px 14px;cursor:pointer;transition:.15s}
+      .pk-col:hover{border-color:#667eea}
+      .pk-col div{flex:1;min-width:0}.pk-col b{display:block;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+      .pk-col span{display:block;font-size:12px;color:#6b7280}.pk-col small{display:block;font-size:11px;color:#9ca3af;margin-top:2px}
+      .pk-col em{font-style:normal;width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:#f3f4f6;color:#6b7280;font-weight:700}
+      .pk-col.sel{border-color:#1e7b34;background:#f0fdf4}.pk-col.sel em{background:#1e7b34;color:#fff}
+      .pk-sw{display:inline-block;flex:none;width:30px;height:30px;border-radius:50%;background:var(--sw);border:2px solid #fff;box-shadow:0 0 0 1px #d1d5db;vertical-align:middle}
+      .pk-sw-transp{background:repeating-conic-gradient(#e5e7eb 0 25%,#fff 0 50%) 0 0/10px 10px}
+      .pk-sw-xl{width:52px;height:52px}
+      .pk-ord-sw .pk-sw{width:18px;height:18px;margin-right:-5px}
+      .pk-item-head{display:flex;align-items:center;gap:14px;margin-bottom:14px}
+      .pk-item-head>div{flex:1}.pk-item-head h2{font-size:19px}
+      .pk-kg-big{display:flex;flex-direction:column;font-size:12px;color:#6b7280;gap:4px;font-weight:600}
+      .pk-kg-big input{width:130px;font-size:24px;font-weight:700;text-align:right;padding:8px 12px;border:2px solid #4f5bd5;border-radius:10px}
+      .pk-ftable td{padding:10px}
+      .pk-pesar{font-size:16px;font-weight:700;color:#1e3a8a;background:#eff6ff}
+      .pk-env-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px}
+      .pk-env{display:flex;flex-direction:column;gap:6px;border:1.5px solid #e5e7eb;border-radius:10px;padding:10px 12px;font-size:12px;color:#374151}
+      .pk-env.on{border-color:#1e7b34;background:#f0fdf4}
+      .pk-env-ctrl{display:flex;align-items:center;gap:6px}
+      .pk-env-ctrl button{width:32px;height:32px;border-radius:8px;border:1px solid #d1d5db;background:#fff;font-size:18px;cursor:pointer}
+      .pk-env-ctrl input{width:60px;text-align:center;font-size:15px;font-weight:700}
+      .pk-item-cost{margin-top:14px;font-size:12px;color:#6b7280;text-align:right}
+      .pk-in-batch{width:120px}
+      .pk-ord-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px}
+      .pk-ord{display:flex;flex-direction:column;gap:6px;text-align:left;background:#fff;border:1.5px solid #e5e7eb;border-radius:12px;padding:16px;cursor:pointer}
+      .pk-ord:hover{border-color:#667eea;box-shadow:0 4px 14px rgba(79,91,213,.12)}
+      .pk-ord-top{display:flex;justify-content:space-between;align-items:center}
+      .pk-ord-cli{font-size:16px;font-weight:700}.pk-ord small{color:#6b7280}
+      .pk-est{font-size:11px;font-weight:700;padding:3px 9px;border-radius:10px;background:#f1f5f9;color:#475569}
+      .pk-est-pendiente{background:#fef3c7;color:#92400e}.pk-est-produccion{background:#dbeafe;color:#1e40af}
+      .pk-est-producida{background:#dcfce7;color:#166534}.pk-est-anulada{background:#fee2e2;color:#991b1b}
+      #pk-print{display:none}
+      @media print{
+        @page{size:A4;margin:12mm}
+        html,body{background:#fff!important;margin:0!important;padding:0!important}
+        body>*:not(#pk-print){display:none!important}
+        #pk-print{display:block!important;font-family:Arial,Helvetica,sans-serif;color:#111}
+        #pk-print .hoja{page-break-after:always;break-after:page}
+        #pk-print .hoja:last-child{page-break-after:auto;break-after:auto}
+        #pk-print header{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:3px solid #111;padding-bottom:6px;margin-bottom:14px}
+        #pk-print .marca{font-weight:800;letter-spacing:.12em;font-size:13px}
+        #pk-print .tit{font-size:12px;color:#444}
+        #pk-print .op{text-align:right}#pk-print .op b{display:block;font-size:18px}#pk-print .op span{font-size:12px}
+        #pk-print .cab{display:flex;align-items:center;gap:16px;border:2px solid #111;border-radius:10px;padding:14px 18px}
+        #pk-print .sw{width:64px;height:64px;border-radius:50%;border:2px solid #111;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+        #pk-print .sw.transp{background:repeating-conic-gradient(#ddd 0 25%,#fff 0 50%) 0 0/12px 12px}
+        #pk-print .cn{flex:1}#pk-print .cn small,#pk-print .kg small{display:block;font-size:10px;text-transform:uppercase;color:#555;letter-spacing:.08em}
+        #pk-print .cn h1{margin:2px 0;font-size:26px}#pk-print .cn span{font-size:13px}
+        #pk-print .kg{text-align:right}#pk-print .kg b{font-size:40px;line-height:1}#pk-print .kg span{font-size:16px;font-weight:700;margin-left:4px}
+        #pk-print .cli{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:12px 0;font-size:13px}
+        #pk-print .cli span{color:#555}
+        #pk-print h2{font-size:13px;text-transform:uppercase;letter-spacing:.08em;margin:16px 0 6px;border-bottom:1px solid #999;padding-bottom:3px}
+        #pk-print table{width:100%;border-collapse:collapse;font-size:13px}
+        #pk-print th{background:#eee;text-align:left;padding:6px 8px;border:1px solid #999;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+        #pk-print td{padding:8px;border:1px solid #999}
+        #pk-print .n{text-align:right}#pk-print .big{font-size:17px;font-weight:800}
+        #pk-print .ck{width:26px;text-align:center;font-size:16px}
+        #pk-print .linea{width:90px}
+        #pk-print .tot td{font-weight:800;background:#f3f3f3;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+        #pk-print .gris{color:#777}
+        #pk-print .firmas{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-top:26px}
+        #pk-print .firmas div{border-bottom:1px solid #111;height:46px;position:relative}
+        #pk-print .firmas span,#pk-print .obs span{position:absolute;bottom:-17px;font-size:10px;color:#555}
+        #pk-print .obs{border:1px solid #999;height:80px;margin-top:30px;position:relative}
+        #pk-print .obs span{top:4px;left:8px;bottom:auto}
+        #pk-print footer{margin-top:14px;font-size:9px;color:#777}
+      }
+      @media (max-width:700px){.pk-item-head{flex-wrap:wrap}.pk-kg-big input{width:110px}.pk-wiz-card{padding:16px}.pk-step{font-size:0;gap:0}.pk-step span{font-size:13px}.pk-step.actual{font-size:13px;gap:6px}}
       @media (max-width:900px){.pk-grid2{grid-template-columns:1fr}.pk-head,.pk-ficha-head{flex-direction:column;align-items:stretch}.pk-prev-grid{grid-template-columns:1fr 1fr}.pk-form .pk-ancho{grid-column:auto}}
       @media (max-width:700px){.pk{padding:0}.pk-head h1{font-size:19px}.pk-kpis{grid-template-columns:1fr 1fr}.pk-kpi strong{font-size:20px}.pk-search{max-width:none;font-size:16px}.pk-filtros label{flex:1}}
     `;

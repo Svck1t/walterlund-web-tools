@@ -19,7 +19,8 @@ const HOJAS = {
   Colores: ['id', 'codigo', 'nombre', 'archivo', 'cliente', 'precio', 'estado', 'envase_mp', 'envase_kg', 'notas'],
   Formulas: ['color_id', 'mp_id', 'pct'],
   Producciones: ['id', 'fecha', 'folio', 'codigo', 'descripcion', 'kg', 'pu', 'total', 'cliente', 'origen', 'obs'],
-  Config: ['clave', 'valor']
+  Config: ['clave', 'valor'],
+  Ordenes: ['id', 'numero', 'fecha', 'cliente', 'estado', 'obs', 'items', 'creado']
 };
 
 function hoja_(nombre) {
@@ -30,7 +31,7 @@ function hoja_(nombre) {
     sh.getRange(1, 1, 1, HOJAS[nombre].length).setValues([HOJAS[nombre]]).setFontWeight('bold');
     sh.setFrozenRows(1);
     // códigos y folios como texto, para que Sheets no los convierta en números
-    const txt = { Materias: [2], Colores: [2], Producciones: [3, 4] }[nombre] || [];
+    const txt = { Materias: [2], Colores: [2], Producciones: [3, 4], Ordenes: [2] }[nombre] || [];
     txt.forEach(c => sh.getRange(2, c, sh.getMaxRows() - 1, 1).setNumberFormat('@'));
   }
   return sh;
@@ -89,6 +90,11 @@ function todo_() {
       envase: c.envase_mp ? { mp: String(c.envase_mp), kg: Number(c.envase_kg) || 1 } : null,
       formula: porColor[c.id] || []
     })),
+    ordenes: leer_('Ordenes').map(o => {
+      let items = [];
+      try { items = JSON.parse(o.items || '[]'); } catch (e) {}
+      return { id: String(o.id), numero: String(o.numero), fecha: o.fecha, cliente: o.cliente, estado: o.estado || 'pendiente', obs: o.obs || '', items };
+    }),
     producciones: leer_('Producciones').map(p => ({ ...p, id: String(p.id), folio: String(p.folio), codigo: String(p.codigo), kg: Number(p.kg), pu: Number(p.pu), total: Number(p.total) }))
   };
 }
@@ -184,6 +190,23 @@ function doPost(e) {
         }
         return json_({ ok: true });
       }
+      case 'guardarOrden': {
+        const o = b.item;
+        const actuales = leer_('Ordenes');
+        if (!o.id) o.id = 'O' + Date.now();
+        if (!o.numero) {
+          const y = String(o.fecha || '').slice(0, 4) || String(new Date().getFullYear());
+          const ns = actuales.map(x => String(x.numero)).filter(n => n.indexOf('OP-' + y + '-') === 0).map(n => Number(n.split('-')[2]) || 0);
+          o.numero = 'OP-' + y + '-' + ('00' + ((ns.length ? Math.max.apply(null, ns) : 0) + 1)).slice(-3);
+        }
+        const prev = actuales.find(x => String(x.id) === String(o.id));
+        upsert_('Ordenes', { id: o.id, numero: o.numero, fecha: o.fecha, cliente: o.cliente, estado: o.estado || 'pendiente', obs: o.obs || '',
+          items: JSON.stringify(o.items || []), creado: prev ? prev.creado : new Date() });
+        return json_({ ok: true, id: o.id, numero: o.numero });
+      }
+      case 'borrarOrden':
+        borrar_('Ordenes', f => String(f[0]) === String(b.id));
+        return json_({ ok: true });
       case 'borrarProduccion':
         borrar_('Producciones', f => String(f[0]) === String(b.id));
         return json_({ ok: true });

@@ -671,6 +671,7 @@ const ProduccionKaoSection = (() => {
     [/CYAN|CELESTE|TURQUESA|PROCESS BLUE/, '#1fa5d8'], [/AZUL|BLUE|REFLEX|REFLEJO/, '#1e4fa3'],
     [/VERDE OSCURO/, '#1b5e20'], [/VERDE CLARO/, '#7cb342'], [/VERDE|GREEN/, '#2e7d32']
   ];
+  const ordenAlfa = (a, b) => norm(a).localeCompare(norm(b), 'es', { numeric: true });
   const swatchColor = nombre => { const n = norm(nombre); const s = SWATCH.find(([re]) => re.test(n)); return s ? s[1] : '#b0b7c3'; };
   const swatch = (nombre, cls = '') => { const c = swatchColor(nombre); return `<span class="pk-sw ${cls} ${c === 'transp' ? 'pk-sw-transp' : ''}" style="${c === 'transp' ? '' : '--sw:' + c}"></span>`; };
 
@@ -693,10 +694,18 @@ const ProduccionKaoSection = (() => {
       if (p.fecha >= s.ultima) { s.ultima = p.fecha; s.ultimoKg = num(p.kg); }
       porCod.set(p.codigo, s);
     });
+    // un mismo código puede tener varias fichas (ej. Chimigraf y Engatel): se muestra una sola,
+    // la asignada a este cliente si existe
+    const ficha = cod => { const vs = D.colores.filter(c => c.codigo === cod); return vs.find(c => c.cliente === cli) || vs[0]; };
     const lista = [];
-    porCod.forEach((s, cod) => { const c = colorDe(cod); if (c) lista.push({ c, ...s }); });
-    D.colores.filter(c => c.cliente === cli && !lista.some(x => x.c.id === c.id)).forEach(c => lista.push({ c, n: 0, kg: 0, ultima: '', ultimoKg: 0 }));
-    return lista.sort((a, b) => b.ultima.localeCompare(a.ultima) || norm(a.c.nombre).localeCompare(norm(b.c.nombre)));
+    porCod.forEach((s, cod) => { const c = ficha(cod); if (c) lista.push({ c, ...s }); });
+    const vistos = new Set(lista.map(x => x.c.codigo));
+    D.colores.filter(c => c.cliente === cli).forEach(c => {
+      const k = c.codigo || 'id:' + c.id;
+      if (vistos.has(k)) return;
+      vistos.add(k); lista.push({ c, n: 0, kg: 0, ultima: '', ultimoKg: 0 });
+    });
+    return lista.sort((a, b) => ordenAlfa(a.c.nombre, b.c.nombre));
   }
 
   function nuevaOrden() {
@@ -748,7 +757,8 @@ const ProduccionKaoSection = (() => {
       const hist = coloresDeCliente(wiz.cliente);
       const sel = new Set(wiz.items.map(it => it.colorId));
       const q = norm(qCol);
-      const otros = q ? D.colores.filter(c => !hist.some(h => h.c.id === c.id) && norm([c.codigo, c.nombre].join(' ')).includes(q)).slice(0, 24) : [];
+      const otros = q ? D.colores.filter(c => !hist.some(h => h.c.id === c.id || (c.codigo && h.c.codigo === c.codigo)) && norm([c.codigo, c.nombre].join(' ')).includes(q))
+        .sort((a, b) => ordenAlfa(a.nombre, b.nombre)).slice(0, 24) : [];
       const card = (c, info) => `<button class="pk-col ${sel.has(c.id) ? 'sel' : ''}" data-act="toggle-color" data-id="${esc(c.id)}">
           ${swatch(c.nombre)}<div><b>${esc(c.nombre)}</b><span>${esc(c.codigo || 'sin código')}</span>${info}</div><em>${sel.has(c.id) ? '✓' : '＋'}</em></button>`;
       return stepper() + resumenCli + `<div class="pk-wiz-card">

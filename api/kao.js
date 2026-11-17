@@ -6,7 +6,7 @@
 //   GET  /api/kao   -> { ok, config, materias, colores, producciones }
 //   POST /api/kao   -> { action, ... }
 
-const APPS_SCRIPT_URL = 'PEGAR_URL_APPS_SCRIPT'; // termina en /exec
+const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxl4CJtX0rQO-Pttc_WJsZZST1-NFNJFy5QSRZdXnFGaaHOUn51CKylMP1N2cTldjVysQ/exec'; // termina en /exec
 
 module.exports = async (req, res) => {
   try {

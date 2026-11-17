@@ -33,6 +33,7 @@ const ProduccionKaoSection = (() => {
   let kgCalc = null;         // kg a producir en la calculadora
   let envCalc = {};          // mp_id -> unidades de envase en la calculadora
   let pendiente = null;      // importación esperando confirmación
+  let pendienteCorreos = null; // asignación de clientes desde correos esperando confirmación
   let charts = [];
 
   // ---------- utilidades ----------
@@ -210,6 +211,117 @@ const ProduccionKaoSection = (() => {
   }
 
   // =====================================================
+  // CLIENTES DESDE CORREOS (CSV exportado de Outlook)
+  // Lee las tablas de los correos "INGRESAR Y FACTURAR":
+  //   CLIENTE | DESCRIPCION | CODIGO | BATCH | KILOS | OBSERVACION
+  // y asigna el cliente a cada producción por código + kilos (en orden de batch).
+  // =====================================================
+  const ALIAS_CLI = {
+    'DIROLOA': 'DIROLA', 'DIROLA SPA': 'DIROLA', 'AYC': 'A&C', 'A Y C': 'A&C', 'SERVICIOS PUBLICITARIOS A&C': 'A&C',
+    'VALERIA RAMIREZ': 'VALERIA RAMIREZ ARRAU', 'VALERIA ARRAU': 'VALERIA RAMIREZ ARRAU', 'VALERIA ALEJANDRA ARRAU': 'VALERIA RAMIREZ ARRAU',
+    'VALERIA ALEJANDRA RAMIREZ ARRAU': 'VALERIA RAMIREZ ARRAU', 'MAXIPAPER': 'MAXI PAPER', 'JUAN CORDOVA': 'JUAN CORDOBA',
+    'COMERCIAL GRAF PACK': 'GRAF PACK', 'SOC. COMERCIAL GRAF. PACK': 'GRAF PACK', 'PRODUCTOS TORRE': 'TORRE', 'YAPAK': 'YAPACK'
+  };
+  const normCli = c => { const n = norm(c); return ALIAS_CLI[n] || n; };
+
+  function parsearCorreos(filas) {
+    const recs = new Map();
+    const esNum = t => /^\d+(?:[.,]\d+)?$/.test(t);
+    filas.forEach(f => {
+      const toks = String(f.Cuerpo || f.Body || '').split(/[\r\n\t]+/).map(t => t.trim()).filter(Boolean);
+      for (let i = 2; i + 1 < toks.length; i++) {
+        const t = toks[i];
+        if (!/^\d{8,11}$/.test(t) || /^[\d.,]+$/.test(toks[i - 1])) continue;
+        const a = toks[i + 1], b = toks[i + 2] || '';
+        let batch, kg;
+        if (/^\d{4,8}$/.test(a) && esNum(b)) { batch = a; kg = b; }
+        else if (esNum(a) && a.length <= 5) { batch = ''; kg = a; }
+        else continue;
+        const cli = toks[i - 2], desc = toks[i - 1];
+        if (/CODIGO|DESCRIPCION|BATCH|KILOS|OBSERVACION/i.test(cli + desc)) continue;
+        i += batch ? 2 : 1;
+        const anio = /^(2024|2025|2026|2027|2028)/.test(batch) && batch.length >= 6 ? batch.slice(0, 4) : '';
+        const r = { cliente: normCli(cli), descripcion: desc, codigo: t, batch, anio, ord: anio ? Number(batch.slice(4)) : 0, kg: Number(kg.replace(',', '.')) };
+        const k = batch ? t + '|' + batch : t + '|' + r.cliente + '|' + kg + '|' + recs.size;
+        if (!recs.has(k)) recs.set(k, r);
+      }
+    });
+    return [...recs.values()];
+  }
+
+  async function leerCorreos(file) {
+    aviso('Leyendo correos…');
+    try {
+      const wb = XLSX.read((await file.text()).replace(/^\uFEFF/, ''), { type: 'string' });
+      const filas = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '' });
+      const recs = parsearCorreos(filas);
+      if (!recs.length) throw new Error('No encontré tablas de "INGRESAR Y FACTURAR" en el archivo. ¿Es el CSV exportado de Outlook?');
+      const porCod = {};
+      recs.forEach(r => (porCod[r.codigo] = porCod[r.codigo] || []).push(r));
+      const prods = [], cuenta = { correo: 0, color: 0, ambiguo: 0 };
+      const codigos = [...new Set(D.producciones.filter(p => !p.cliente).map(p => p.codigo))];
+      codigos.forEach(cod => {
+        const todos = porCod[cod] || []; if (!todos.length) return;
+        const clis = new Set(todos.map(r => r.cliente));
+        const ps = D.producciones.filter(p => p.codigo === cod).sort((a, b) => String(a.fecha).localeCompare(String(b.fecha)) || String(a.folio).localeCompare(String(b.folio)));
+        const usados = new Set();
+        ps.forEach(p => {
+          const y = String(p.fecha).slice(0, 4);
+          const cand = todos.filter(r => !r.anio || r.anio === y).sort((a, b) => (a.anio ? 0 : 1) - (b.anio ? 0 : 1) || a.ord - b.ord);
+          const r = cand.find(r => !usados.has(r) && Math.abs(r.kg - num(p.kg)) < 0.01);
+          if (r) usados.add(r);
+          if (p.cliente) return;
+          if (r) { prods.push({ id: p.id, cliente: r.cliente }); cuenta.correo++; }
+          else if (clis.size === 1) { prods.push({ id: p.id, cliente: [...clis][0] }); cuenta.color++; }
+          else cuenta.ambiguo++;
+        });
+      });
+      const colores = D.colores.filter(c => !c.cliente && c.codigo && porCod[c.codigo]).map(c => {
+        const n = {}; porCod[c.codigo].forEach(r => { n[r.cliente] = (n[r.cliente] || 0) + 1; });
+        return { id: c.id, cliente: Object.entries(n).sort((a, b) => b[1] - a[1])[0][0] };
+      });
+      const conocidos = new Set(D.colores.map(c => c.codigo));
+      const sinColor = recs.filter(r => !conocidos.has(r.codigo));
+      pendienteCorreos = { archivo: file.name, correos: filas.length, solicitudes: recs.length, prods, colores, cuenta, sinColor,
+        clientes: [...new Set(recs.map(r => r.cliente))].sort() };
+      aviso(''); tab = 'producciones'; colorAbierto = null; dibujar();
+    } catch (err) { console.error(err); aviso('⚠️ ' + esc(err.message), 'err'); }
+  }
+
+  function previewCorreos() {
+    const p = pendienteCorreos; if (!p) return '';
+    return `<div class="pk-card pk-prev">
+      <h3>✉️ ${esc(p.archivo)}</h3>
+      <div class="pk-prev-grid">
+        <div><span>Solicitudes leídas</span><b>${nf(p.solicitudes)}</b></div>
+        <div><span>Producciones con cliente</span><b class="pk-ok">${nf(p.prods.length)}</b></div>
+        <div><span>Colores con cliente por defecto</span><b class="pk-ok">${nf(p.colores.length)}</b></div>
+        <div><span>Sin resolver</span><b>${nf(p.cuenta.ambiguo)}</b></div>
+      </div>
+      <p class="pk-sub">${nf(p.cuenta.correo)} calzan exacto con su correo (código + kilos) y ${nf(p.cuenta.color)} se asignan porque ese color solo lo pide un cliente. Solo se llenan producciones y colores que <b>no</b> tienen cliente; lo que ya asignaste a mano no se toca.</p>
+      <p class="pk-sub">Clientes encontrados: ${p.clientes.map(esc).join(' · ')}</p>
+      ${p.sinColor.length ? `<details><summary class="pk-sub">⚠️ ${nf(p.sinColor.length)} solicitudes con códigos que no tienen fórmula</summary>
+        <table class="pk-table pk-mini"><thead><tr><th>Cliente</th><th>Código</th><th>Descripción</th><th>Batch</th><th class="num">Kg</th></tr></thead><tbody>
+        ${p.sinColor.map(r => `<tr><td>${esc(r.cliente)}</td><td>${esc(r.codigo)}</td><td>${esc(r.descripcion)}</td><td>${esc(r.batch)}</td><td class="num">${nf(r.kg, 1)}</td></tr>`).join('')}</tbody></table></details>` : ''}
+      <div class="pk-prev-btns"><button class="pk-btn" data-act="confirmar-correos" ${p.prods.length || p.colores.length ? '' : 'disabled'}>Asignar clientes</button><button class="pk-btn pk-btn-sec" data-act="cancelar-correos">Cancelar</button></div>
+    </div>`;
+  }
+
+  async function confirmarCorreos() {
+    const p = pendienteCorreos; if (!p) return;
+    aviso('Guardando clientes…');
+    try {
+      for (let i = 0; i < p.prods.length; i += 400) await api('asignarClientes', { items: p.prods.slice(i, i + 400) });
+      if (p.colores.length) await api('asignarClientesColores', { items: p.colores });
+      const mp = new Map(p.prods.map(x => [x.id, x.cliente])), mc = new Map(p.colores.map(x => [x.id, x.cliente]));
+      D.producciones.forEach(x => { if (mp.has(x.id)) x.cliente = mp.get(x.id); });
+      D.colores.forEach(x => { if (mc.has(x.id)) x.cliente = mc.get(x.id); });
+      pendienteCorreos = null; indexar(); dibujar();
+      aviso(`✅ Clientes asignados a ${nf(p.prods.length)} producciones y ${nf(p.colores.length)} colores${modo === 'local' ? ' (vista previa, no se guardan)' : ''}.`, 'ok');
+    } catch (err) { aviso('⚠️ ' + esc(err.message), 'err'); }
+  }
+
+  // =====================================================
   // RENDER
   // =====================================================
   async function render(container) {
@@ -220,6 +332,7 @@ const ProduccionKaoSection = (() => {
         <div><h1>Producción · Kao Chimigraf</h1><p id="pk-meta">Cargando…</p></div>
         <div class="pk-head-btns">
           <label class="pk-btn pk-btn-sec">📤 Cargar informe Softland<input type="file" id="pk-file" accept=".xls,.xlsx" hidden></label>
+          <label class="pk-btn pk-btn-sec" title="CSV exportado desde Outlook con los correos INGRESAR Y FACTURAR">✉️ Clientes desde correos<input type="file" id="pk-mail" accept=".csv" hidden></label>
           <button class="pk-btn" data-act="nuevo-color">＋ Nuevo color</button>
         </div>
       </div>
@@ -344,7 +457,7 @@ const ProduccionKaoSection = (() => {
         <td><input class="pk-in pk-in-cli" list="pk-clientes" data-prod="${esc(p.id)}" value="${esc(p.cliente)}" placeholder="${esc(cDef || 'Sin cliente')}"></td>
       </tr>`;
     }).join('');
-    return preview() + `<div class="pk-filtros">${selAnio(true)}${selCliente()}
+    return previewCorreos() + preview() + `<div class="pk-filtros">${selAnio(true)}${selCliente()}
         <input id="pk-buscar" class="pk-search" type="search" placeholder="Buscar folio, código, color o cliente" value="${esc(busqueda)}">
         <button class="pk-btn pk-btn-sec" data-act="nueva-prod">＋ Producción manual</button></div>
       <datalist id="pk-clientes">${opts.map(c => `<option value="${esc(c)}">`).join('')}</datalist>
@@ -544,6 +657,8 @@ const ProduccionKaoSection = (() => {
     if (a.tagName === 'A') e.preventDefault();
     if (act === 'seed') cargarSeedEnBase();
     if (act === 'confirmar') confirmarImport();
+    if (act === 'confirmar-correos') confirmarCorreos();
+    if (act === 'cancelar-correos') { pendienteCorreos = null; dibujar(); }
     if (act === 'cancelar') { pendiente = null; dibujar(); }
     if (act === 'mas') { visibles += PAGINA; dibujar(); }
     if (act === 'abrir-codigo') { const c = colorDe(a.dataset.cod); if (c) abrirColor(c.id); }
@@ -588,6 +703,7 @@ const ProduccionKaoSection = (() => {
   async function onChange(e) {
     const el = e.target;
     if (el.id === 'pk-file' && el.files[0]) { leerArchivo(el.files[0]); el.value = ''; return; }
+    if (el.id === 'pk-mail' && el.files[0]) { leerCorreos(el.files[0]); el.value = ''; return; }
     if (el.dataset.f === 'anio') { anio = el.value; visibles = PAGINA; dibujar(); return; }
     if (el.dataset.f === 'cliente') { fCliente = el.value; visibles = PAGINA; dibujar(); return; }
     if (el.dataset.f === 'estado') { fEstado = el.value; dibujar(); return; }

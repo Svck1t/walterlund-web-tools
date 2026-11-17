@@ -171,6 +171,19 @@ function doPost(e) {
         }
         return json_({ ok: true });
       }
+      case 'asignarClientesColores': { // [{id, cliente}]
+        const sh = hoja_('Colores');
+        const n = sh.getLastRow() - 1;
+        if (n > 0) {
+          const col = HOJAS.Colores.indexOf('cliente') + 1;
+          const ids = sh.getRange(2, 1, n, 1).getValues().map(f => String(f[0]));
+          const rango = sh.getRange(2, col, n, 1);
+          const vals = rango.getValues();
+          (b.items || []).forEach(x => { const i = ids.indexOf(String(x.id)); if (i >= 0) vals[i][0] = x.cliente; });
+          rango.setValues(vals);
+        }
+        return json_({ ok: true });
+      }
       case 'borrarProduccion':
         borrar_('Producciones', f => String(f[0]) === String(b.id));
         return json_({ ok: true });

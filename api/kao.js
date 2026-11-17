@@ -15,9 +15,18 @@ module.exports = async (req, res) => {
       res.status(503).json({ ok: false, sinConfigurar: true, error: 'Falta configurar APPS_SCRIPT_URL en api/kao.js' });
       return;
     }
+    // Apps Script responde HTML (no JSON) cuando falla: permisos, script sin hoja, error interno.
+    const leer = async r => {
+      const t = await r.text();
+      try { return JSON.parse(t); } catch (_) {
+        const titulo = (t.match(/<title>([^<]*)<\/title>/i) || [])[1] || '';
+        const cuerpo = t.replace(/<style[\s\S]*?<\/style>|<script[\s\S]*?<\/script>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 300);
+        return { ok: false, error: `Apps Script respondió HTML (HTTP ${r.status}). ${titulo} — ${cuerpo}` };
+      }
+    };
     if (req.method === 'GET') {
       const r = await fetch(APPS_SCRIPT_URL);
-      res.status(200).json(await r.json());
+      res.status(200).json(await leer(r));
       return;
     }
     if (req.method === 'POST') {
@@ -26,7 +35,7 @@ module.exports = async (req, res) => {
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: typeof req.body === 'string' ? req.body : JSON.stringify(req.body),
       });
-      res.status(200).json(await r.json());
+      res.status(200).json(await leer(r));
       return;
     }
     res.status(405).json({ ok: false, error: 'Método no permitido' });

@@ -471,7 +471,34 @@ const ProduccionKaoSection = (() => {
   }
 
   // ---------- Colores ----------
+  // Duplicados exactos: mismo código + mismo nombre (sin signos) + misma fórmula.
+  // Se conserva la ficha con cliente asignado (o la primera). Las variantes (SUN, MIXTO, etc.) no se tocan.
+  function duplicados() {
+    const firma = c => [c.codigo, norm(c.nombre).replace(/[^A-Z0-9]/g, ''),
+      (c.formula || []).map(f => f.mp + ':' + Number(f.pct).toFixed(4)).sort().join(',')].join('|');
+    const grupos = new Map();
+    D.colores.filter(c => c.codigo).forEach(c => { const k = firma(c); grupos.set(k, (grupos.get(k) || []).concat(c)); });
+    const borrar = [];
+    grupos.forEach(g => {
+      if (g.length < 2) return;
+      const queda = g.find(c => c.cliente) || g[0];
+      g.forEach(c => { if (c !== queda) borrar.push(c); });
+    });
+    return borrar;
+  }
+
+  async function borrarDuplicados() {
+    const dups = duplicados(); if (!dups.length) return;
+    if (!confirm(`Se eliminarán ${dups.length} fichas repetidas. Queda una de cada color con su fórmula; las producciones no se tocan. ¿Continuar?`)) return;
+    let n = 0;
+    try {
+      for (const c of dups) { aviso(`Eliminando duplicados… ${n + 1} de ${dups.length}`); await api('borrarColor', { id: c.id }); D.colores = D.colores.filter(x => x.id !== c.id); n++; }
+      indexar(); dibujar(); aviso(`✅ ${nf(n)} duplicados eliminados${modo === 'local' ? ' (vista previa, no se guarda)' : ''}.`, 'ok');
+    } catch (err) { indexar(); dibujar(); aviso(`⚠️ ${esc(err.message)}. Se eliminaron ${n}; vuelve a apretar el botón para seguir.`, 'err'); }
+  }
+
   function listaColores() {
+    const dups = duplicados();
     const q = norm(busqueda);
     const lista = D.colores.filter(c => (fEstado === 'todos' || (fEstado === 'activos') === activo(c)) && pasaCliente(c.cliente)
       && (!q || norm([c.codigo, c.nombre, c.cliente, c.archivo].join(' ')).includes(q)))
@@ -481,7 +508,7 @@ const ProduccionKaoSection = (() => {
       const est = activo(c) ? '<span class="pk-badge ok">Activo</span>' : '<span class="pk-badge off">Inactivo</span>';
       return `<tr data-color="${esc(c.id)}">
         <td>${esc(c.codigo || '—')}</td><td><b>${esc(c.nombre)}</b>${c.estado ? ' <small class="pk-gris">(manual)</small>' : ''}</td>
-        <td>${esc(c.cliente || '—')}</td><td>${esc(c.archivo || '')}</td>
+        <td>${esc(c.cliente || '—')}</td>
         <td class="num">${s ? nf(s.n) : '0'}</td><td class="num">${s ? nf(s.kg, 1) : '0'}</td><td>${s ? fCorta(s.ultima) : '—'}</td><td>${est}</td></tr>`;
     }).join('');
     return `<div class="pk-filtros">
@@ -489,10 +516,11 @@ const ProduccionKaoSection = (() => {
         ${selCliente()}
         <input id="pk-buscar" class="pk-search" type="search" placeholder="Buscar código, color o cliente" value="${esc(busqueda)}">
         <button class="pk-btn" data-act="nuevo-color">＋ Nuevo color</button></div>
+      ${dups.length ? `<div class="pk-note">🧹 Hay <b>${nf(dups.length)} fichas duplicadas</b> (mismo código, mismo nombre y misma fórmula, venían repetidas de los dos Excel). <button class="pk-btn" data-act="borrar-duplicados">Eliminar duplicados</button></div>` : ''}
       <p class="pk-sub">${nf(lista.length)} colores · inactivo = sin producción desde ${fCorta(cfg().inactivoDesde)} (se puede forzar a mano en la ficha) · toca un color para abrir su fórmula</p>
       <div class="pk-table-wrap"><table class="pk-table pk-click">
-        <thead><tr><th>Código</th><th>Color</th><th>Cliente</th><th>Origen</th><th class="num">Prod.</th><th class="num">Kg</th><th>Última</th><th>Estado</th></tr></thead>
-        <tbody>${filas || '<tr><td colspan="8" class="pk-vacio">Sin colores para este filtro</td></tr>'}</tbody></table></div>`;
+        <thead><tr><th>Código</th><th>Color</th><th>Cliente</th><th class="num">Prod.</th><th class="num">Kg</th><th>Última</th><th>Estado</th></tr></thead>
+        <tbody>${filas || '<tr><td colspan="7" class="pk-vacio">Sin colores para este filtro</td></tr>'}</tbody></table></div>`;
   }
 
   // ---------- Ficha de color (calculadora + editor) ----------
@@ -694,17 +722,12 @@ const ProduccionKaoSection = (() => {
       if (p.fecha >= s.ultima) { s.ultima = p.fecha; s.ultimoKg = num(p.kg); }
       porCod.set(p.codigo, s);
     });
-    // un mismo código puede tener varias fichas (ej. Chimigraf y Engatel): se muestra una sola,
-    // la asignada a este cliente si existe
-    const ficha = cod => { const vs = D.colores.filter(c => c.codigo === cod); return vs.find(c => c.cliente === cli) || vs[0]; };
-    const lista = [];
-    porCod.forEach((s, cod) => { const c = ficha(cod); if (c) lista.push({ c, ...s }); });
-    const vistos = new Set(lista.map(x => x.c.codigo));
-    D.colores.filter(c => c.cliente === cli).forEach(c => {
-      const k = c.codigo || 'id:' + c.id;
-      if (vistos.has(k)) return;
-      vistos.add(k); lista.push({ c, n: 0, kg: 0, ultima: '', ultimoKg: 0 });
-    });
+    // todas las fichas de cada código (variantes como SUN o MIXTO tienen fórmula propia);
+    // los duplicados exactos se ocultan
+    const ocultos = new Set(duplicados().map(c => c.id));
+    const lista = [], vistos = new Set();
+    porCod.forEach((s, cod) => D.colores.filter(c => c.codigo === cod && !ocultos.has(c.id)).forEach(c => { vistos.add(c.id); lista.push({ c, ...s }); }));
+    D.colores.filter(c => c.cliente === cli && !vistos.has(c.id) && !ocultos.has(c.id)).forEach(c => lista.push({ c, n: 0, kg: 0, ultima: '', ultimoKg: 0 }));
     return lista.sort((a, b) => ordenAlfa(a.c.nombre, b.c.nombre));
   }
 
@@ -1006,6 +1029,7 @@ const ProduccionKaoSection = (() => {
       try { await api('guardarMateria', { item: m }); D.materias.push(m); indexar(); dibujar(); } catch (err) { aviso('⚠️ ' + esc(err.message), 'err'); }
     }
     if (act === 'nueva-prod') nuevaProduccion();
+    if (act === 'borrar-duplicados') borrarDuplicados();
     // --- órdenes ---
     if (act === 'nueva-orden') nuevaOrden();
     if (act === 'elegir-cliente') { if (wiz.cliente !== a.dataset.cli) wiz.items = []; wiz.cliente = a.dataset.cli; qCol = ''; irPaso(2); }

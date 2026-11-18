@@ -110,14 +110,19 @@ const RecepcionSection = (() => {
     }
     const hd = dia(hoy);
     let lista = imp.filter(x => !x.recepExcel || recDe(x.contenedor)).map(x => ({ x, f: x.llegada || x.eta || '' }));
-    if (!st.q) lista = lista.filter(o => o.f && Math.abs(dia(o.f) - hd) <= 3 || (recDe(o.x.contenedor) && recDe(o.x.contenedor).estado === 'EN_CURSO'));
+    // Sin búsqueda: solo lo del día, con el mismo criterio de "Hoy" en Control de Importaciones:
+    // llegada confirmada para hoy, llegadas atrasadas aún sin recepcionar (hasta 7 días) y recepciones en curso.
+    // Lo demás (ETA, próximos días) se encuentra buscando por N°.
+    const enCurso = x => { const r = recDe(x.contenedor); return r && r.estado === 'EN_CURSO'; };
+    const atrasado = x => x.llegada && dia(x.llegada) < hd && hd - dia(x.llegada) <= 7 && !recDe(x.contenedor);
+    if (!st.q) lista = lista.filter(o => (o.x.llegada && dia(o.x.llegada) === hd) || atrasado(o.x) || enCurso(o.x));
     lista = lista.filter(o => coincide(o.x.contenedor, [o.x.proveedor, o.x.material, o.x.bodega].join(' ')))
       .sort((a, b) => (a.f || '9').localeCompare(b.f || '9') || String(a.x.hora || '').localeCompare(String(b.x.hora || '')));
     const libre = st.q && norm(st.q).length >= 10 && !imp.some(x => key(x.contenedor) === key(st.q)) ? `<button class="rc-item rc-item-nuevo" data-cont="${esc(norm(st.q))}"><div><b>${esc(fmtCont(st.q))}</b><small>No está en Importaciones · registrar igual</small></div><div class="rc-item-r">➕</div></button>` : '';
     el.innerHTML = libre + (lista.map(({ x, f }) => {
-      const cuando = x.llegada ? `${dia(x.llegada) === hd ? 'Hoy' : fCorta(x.llegada)}${x.hora ? ' ' + esc(x.hora) : ''}` : x.eta ? `ETA ${fCorta(x.eta)}` : 'Sin fecha';
+      const cuando = x.llegada ? `${dia(x.llegada) === hd ? 'Hoy' : (atrasado(x) ? '<b class="rc-rojo">Atrasado</b> · ' : '') + fCorta(x.llegada)}${x.hora ? ' ' + esc(x.hora) : ''}` : x.eta ? `ETA ${fCorta(x.eta)}` : 'Sin fecha';
       return fila(x.contenedor, `${cuando} · ${esc(x.bodega || 'Por asignar')} · ${esc(x.proveedor || '')} · ${esc(x.material || '')}`, recDe(x.contenedor));
-    }).join('') || (libre ? '' : `<p class="rc-empty">${st.q ? 'Ningún contenedor coincide. Escribe el N° completo para registrarlo igual.' : 'No hay contenedores llegando entre hace 3 días y los próximos 3. Búscalo por N°.'}</p>`));
+    }).join('') || (libre ? '' : `<p class="rc-empty">${st.q ? 'Ningún contenedor coincide. Escribe el N° completo para registrarlo igual.' : 'Hoy no llegan contenedores según Control de Importaciones. Si llegó uno que no está en la lista, búscalo por N°.'}</p>`));
   }
   function estadoTag(r) {
     const d = J(r.danos, []).length;

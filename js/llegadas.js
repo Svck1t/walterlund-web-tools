@@ -86,6 +86,7 @@ const LlegadasSection = (() => {
     root.querySelector('.ll-tabs').addEventListener('click', e => { const t = e.target.closest('[data-v]'); if (t) { st.vista = t.dataset.v; dibujar(); } });
     root.querySelector('#ll-chips').addEventListener('click', e => { const t = e.target.closest('[data-f]'); if (t) { st.fase = t.dataset.f; dibujar(); } });
     root.querySelector('#ll-q').addEventListener('input', e => { st.q = e.target.value; dibujarCuerpo(); });
+    root.querySelector('#ll-body').addEventListener('click', e => { const t = e.target.closest('.ll-link[data-f]'); if (t) { st.fase = t.dataset.f; dibujar(); } });
     dibujar();
     cargar();
   }
@@ -133,6 +134,19 @@ const LlegadasSection = (() => {
     dibujarCuerpo();
   }
 
+  // Mensaje cuando la búsqueda no encuentra nada: deja claro que no hay llegadas informadas de ese producto
+  const coincideCont = (c, q) => txt([c.c, c.material, c.detalle, c.proveedor, ...(c.lineas || []).map(l => l[0] + ' ' + l[1])].join(' ')).includes(q);
+  function sinResultados(q, qTxt, queNo) {
+    if (!q) return `<p class="ll-empty">${queNo}</p>`;
+    const enOtras = st.fase !== 'todas' ? data.conts.filter(c => coincideCont(c, q)).length : 0;
+    return `<div class="ll-empty ll-sininfo">
+      <b>Sin información de llegada para "${esc(qTxt)}"</b>
+      <span>${enOtras
+        ? `No aparece en "${faseLbl[st.fase] || st.fase}", pero hay ${nf(enOtras)} contenedor${enOtras === 1 ? '' : 'es'} con este producto en otras fases. <button class="ll-link" data-f="todas">Ver todas</button>`
+        : 'Este producto no viene en ningún contenedor pendiente de recepción. Revisa el código o la descripción, o consulta con importaciones.'}</span>
+    </div>`;
+  }
+
   function dibujarCuerpo() {
     const body = root && root.querySelector('#ll-body');
     if (!body) return;
@@ -142,13 +156,14 @@ const LlegadasSection = (() => {
     if (st.vista === 'producto') {
       const ps = productos(conts).filter(p => !q || txt([p.cod, p.prod, ...p.conts.map(e => e.c.c + ' ' + e.c.proveedor)].join(' ')).includes(q));
       const sinPL = conts.filter(c => !c.lineas && (!q || txt([c.c, c.material, c.detalle, c.proveedor].join(' ')).includes(q)));
-      body.innerHTML = (ps.length ? `<div class="ll-list">${ps.map(prodHtml).join('')}</div>` : '<p class="ll-empty">Ningún producto coincide</p>') +
+      if (q && !ps.length && !sinPL.length) { body.innerHTML = sinResultados(q, st.q.trim(), 'Ningún producto coincide'); return; }
+      body.innerHTML = (ps.length ? `<div class="ll-list">${ps.map(prodHtml).join('')}</div>` : '<p class="ll-empty">Ningún producto coincide con detalle de packing list. Revisa los contenedores sin detalle más abajo.</p>') +
         (sinPL.length ? `<h3 class="ll-sub">Aún sin detalle de productos (${sinPL.length})</h3>
           <div class="ll-list">${sinPL.map(c => `<div class="ll-row ll-row-sin"><div><b>${esc(c.material || 'Sin material')}</b><small>${esc(c.detalle)}</small></div>
             <div class="ll-r"><span>${esc(c.c)}</span>${badge(c.fase)}<small>${cuando(c)}</small></div></div>`).join('')}</div>` : '');
     } else {
       const cs = conts.filter(c => !q || txt([c.c, c.material, c.detalle, c.proveedor, ...(c.lineas || []).map(l => l[0] + ' ' + l[1])].join(' ')).includes(q));
-      body.innerHTML = cs.length ? `<div class="ll-grid">${cs.map(contHtml).join('')}</div>` : '<p class="ll-empty">Ningún contenedor coincide</p>';
+      body.innerHTML = cs.length ? `<div class="ll-grid">${cs.map(contHtml).join('')}</div>` : sinResultados(q, st.q.trim(), 'Ningún contenedor coincide');
     }
   }
 
@@ -211,6 +226,10 @@ const LlegadasSection = (() => {
       .ll-meta{font-size:12px;color:#7c8a99;margin:0 0 12px}
       .ll-err{color:#b91c1c}
       .ll-empty{color:#7c8a99;padding:24px;text-align:center;background:#fff;border-radius:10px}
+      .ll-sininfo{display:flex;flex-direction:column;gap:6px;align-items:center;border:1px dashed #f0b4b4;background:#fff8f8}
+      .ll-sininfo b{color:#b91c1c;font-size:16px}
+      .ll-sininfo span{color:#5b6b7a;font-size:14px;max-width:560px}
+      .ll-link{border:0;background:none;color:#1565c0;font:inherit;font-weight:600;cursor:pointer;text-decoration:underline;padding:0}
       .ll-sub{font-size:15px;margin:22px 0 8px;color:#5b6b7a}
       .ll-list{background:#fff;border-radius:10px;box-shadow:0 1px 3px rgba(0,0,0,.06);overflow:hidden}
       .ll-row{display:flex;justify-content:space-between;gap:12px;padding:12px 14px;border-bottom:1px solid #eef0f3}

@@ -449,92 +449,137 @@
 
   function renderDashboard(data) {
     const el = root.getElementById("dashboard-content");
-    const filasMes = data.porMes
-      .map(
-        (m) => `
-      <tr>
-        <td>${m.mes}</td>
-        <td class="num">${m.total}</td>
-        <td>${m.normal}</td>
-        <td>${m.corte}</td>
-        <td>${m.bodega}</td>
-        <td>${m.valparaiso}</td>
-        <td>${m.guia}</td>
-        <td>${m.nc}</td>
-      </tr>`
-      )
-      .join("");
+    const meses = data.porMes || [];
+    const t = data.totalAnio || {};
+    const pt = data.porTipo || {};
+    const fmtPct = (n, d) => (d ? Math.round((n / d) * 100) : 0) + "%";
 
-    const t = data.totalAnio;
-    const pt = data.porTipo;
-    const etiquetasTipo = [
-      ["normal", "Normal"],
-      ["corte", "Corte"],
-      ["viel", "Viel"],
-      ["sanignacio", "San Ignacio"],
-      ["sanfrancisco", "San Francisco"],
-      ["retiro", "Retiro"],
-      ["transporte", "Transporte"],
-      ["valparaiso", "Valparaíso"],
-      ["guia", "Guía"],
-      ["nc", "Nota de Crédito"],
-      ["boleta", "Boleta"],
-      ["otros", "Otros"],
-    ];
-    const filasPorTipo = etiquetasTipo
-      .map(([key, label]) => `<tr><td>${label}</td><td class="num">${pt[key]}</td></tr>`)
-      .join("");
+    // Mes actual (si el año del dashboard es el actual) para comparar con el anterior
+    const hoy = new Date();
+    const idxMes = Number(data.anio) === hoy.getFullYear() ? hoy.getMonth() : meses.length - 1;
+    const mesAct = meses[idxMes] || { total: data.esteMes || 0 };
+    const mesAnt = meses[idxMes - 1];
+    let delta = "";
+    if (mesAnt) {
+      const dif = (mesAct.total || 0) - (mesAnt.total || 0);
+      const cls = dif > 0 ? "up" : dif < 0 ? "down" : "flat";
+      const flecha = dif > 0 ? "▲" : dif < 0 ? "▼" : "=";
+      delta = `<span class="delta ${cls}">${flecha} ${Math.abs(dif)}</span> vs ${mesAnt.mes.toLowerCase()}`;
+    }
+    const mesesConDatos = meses.filter((m) => m.total > 0).length;
+    const promedio = mesesConDatos ? (t.total / mesesConDatos).toFixed(1).replace(".", ",") : "0";
 
-    const filasUltimas = data.ultimas
-      .map(
-        (f) => `<tr><td class="num">${f.numero}</td><td>${f.fecha}</td><td>${f.hora || "-"}</td><td class="obs">${f.observacion || "-"}</td></tr>`
-      )
-      .join("");
+    // ----- Gráfico mensual (barras SVG) -----
+    const maxMes = Math.max(1, ...meses.map((m) => m.total || 0));
+    const escala = Math.ceil(maxMes / 10) * 10;
+    const W = 1100, H = 230, padL = 30, padB = 24, padT = 18;
+    const plotH = H - padB - padT;
+    const paso = (W - padL) / Math.max(1, meses.length);
+    const anchoBarra = Math.min(34, paso * 0.56);
+    const grid = [0, 0.5, 1].map((f) => {
+      const y = padT + plotH - plotH * f;
+      return `<line x1="${padL}" x2="${W}" y1="${y}" y2="${y}" class="g-grid"/><text x="${padL - 6}" y="${y + 4}" class="g-eje" text-anchor="end">${Math.round(escala * f)}</text>`;
+    }).join("");
+    const barras = meses.map((m, i) => {
+      const cx = padL + paso * i + paso / 2;
+      const h = escala ? (plotH * (m.total || 0)) / escala : 0;
+      const y = padT + plotH - h;
+      const r = Math.min(4, h / 2);
+      const actual = i === idxMes ? " actual" : "";
+      const barra = h > 0
+        ? `<path class="g-barra${actual}" d="M${cx - anchoBarra / 2},${padT + plotH} V${y + r} q0,-${r} ${r},-${r} H${cx + anchoBarra / 2 - r} q${r},0 ${r},${r} V${padT + plotH} Z"/>`
+        : "";
+      const valor = m.total > 0 ? `<text x="${cx}" y="${y - 5}" class="g-valor" text-anchor="middle">${m.total}</text>` : "";
+      return `<g class="g-col" data-i="${i}"><rect x="${cx - paso / 2}" y="${padT}" width="${paso}" height="${plotH}" class="g-hit"/>${barra}${valor}<text x="${cx}" y="${H - 8}" class="g-eje" text-anchor="middle">${m.mes.slice(0, 3)}</text></g>`;
+    }).join("");
+
+    // ----- Por bodega -----
+    const bodegas = [["viel", "Viel"], ["sanignacio", "San Ignacio"], ["sanfrancisco", "San Francisco"]];
+    const sumaBod = bodegas.reduce((a, [k]) => a + (pt[k] || 0), 0);
+    const tarjetasBodega = bodegas.map(([k, label]) => {
+      const n = pt[k] || 0;
+      return `<div class="bod-card">
+        <div class="bod-top"><span class="badge badge-bodega">${label}</span><span class="bod-pct">${fmtPct(n, sumaBod)}</span></div>
+        <div class="bod-num">${n}</div>
+        <div class="barra-track"><div class="barra-fill bod" style="width:${sumaBod ? (n / sumaBod) * 100 : 0}%"></div></div>
+      </div>`;
+    }).join("");
+
+    // ----- Por tipo (barras horizontales) -----
+    const tipos = [
+      ["normal", "Normal"], ["corte", "Corte"], ["retiro", "Retiro"], ["transporte", "Transporte"],
+      ["valparaiso", "Valparaíso"], ["guia", "Guía"], ["boleta", "Boleta"], ["nc", "Nota de Crédito"], ["otros", "Otros"],
+    ].map(([k, label]) => [label, pt[k] || 0]).sort((x, y) => y[1] - x[1]);
+    const maxTipo = Math.max(1, ...tipos.map((x) => x[1]));
+    const filasTipo = tipos.map(([label, n]) => `
+      <div class="hbar">
+        <span class="hbar-label">${label}</span>
+        <div class="barra-track"><div class="barra-fill" style="width:${(n / maxTipo) * 100}%"></div></div>
+        <span class="hbar-num">${n}</span>
+      </div>`).join("");
+
+    // ----- Detalle mensual (tabla plegable) -----
+    const filasMes = meses.map((m) => `
+      <tr class="${m.total ? "" : "fila-cero"}">
+        <td>${m.mes}</td><td class="num">${m.total}</td><td>${m.normal}</td><td>${m.corte}</td>
+        <td>${m.bodega}</td><td>${m.valparaiso}</td><td>${m.guia}</td><td>${m.nc}</td>
+      </tr>`).join("");
 
     el.innerHTML = `
       <div class="kpis">
-        <div class="kpi"><div class="num">${data.total}</div><div class="label">Facturas totales</div></div>
-        <div class="kpi"><div class="num">${data.esteMes}</div><div class="label">Este mes</div></div>
+        <div class="kpi"><div class="label">Facturas totales</div><div class="num">${data.total}</div><div class="kpi-sub">Año ${data.anio}: ${t.total ?? "-"}</div></div>
+        <div class="kpi"><div class="label">Este mes</div><div class="num">${data.esteMes}</div><div class="kpi-sub">${delta || "&nbsp;"}</div></div>
+        <div class="kpi"><div class="label">Promedio mensual</div><div class="num">${promedio}</div><div class="kpi-sub">${mesesConDatos} mes${mesesConDatos === 1 ? "" : "es"} con registros</div></div>
+        <div class="kpi"><div class="label">Con nota de crédito</div><div class="num">${t.nc ?? 0}</div><div class="kpi-sub">${fmtPct(t.nc || 0, t.total || 0)} de las facturas del año</div></div>
       </div>
 
-      <div class="tabla-wrap" style="margin-bottom:20px;">
-        <div style="padding:16px 16px 0;">
-          <h2 style="font-size:15px; margin:0 0 2px;">Resumen anual ${data.anio}</h2>
-          <p class="sub" style="margin-bottom:12px;">Detalle mes a mes por tipo de factura.</p>
+      <div class="card dash-card">
+        <div class="dash-head"><h2>Facturas por mes · ${data.anio}</h2><span class="sub">Pasa el mouse por una barra para ver el detalle</span></div>
+        <div class="grafico-wrap">
+          <svg viewBox="0 0 ${W} ${H}" class="grafico" role="img" aria-label="Facturas por mes ${data.anio}">${grid}${barras}</svg>
+          <div class="g-tooltip" hidden></div>
         </div>
-        <table class="listado">
-          <thead>
-            <tr><th>Mes</th><th>Total</th><th>Normal</th><th>Corte</th><th>Bodega</th><th>Valparaíso</th><th>Guía</th><th>N/C</th></tr>
-          </thead>
+      </div>
+
+      <div class="dash-grid">
+        <div class="card dash-card">
+          <div class="dash-head"><h2>Por bodega</h2><span class="sub">Histórico</span></div>
+          <div class="bod-grid">${tarjetasBodega}</div>
+        </div>
+        <div class="card dash-card">
+          <div class="dash-head"><h2>Por tipo</h2><span class="sub">Una factura puede tener varios tipos</span></div>
+          ${filasTipo}
+        </div>
+      </div>
+
+      <details class="tabla-wrap detalle-mensual">
+        <summary>Ver detalle mensual ${data.anio}</summary>
+        <table class="listado tabla-mensual">
+          <thead><tr><th>Mes</th><th>Total</th><th>Normal</th><th>Corte</th><th>Bodega</th><th>Valparaíso</th><th>Guía</th><th>N/C</th></tr></thead>
           <tbody>
             ${filasMes}
-            <tr style="background:var(--bg); font-weight:700;">
-              <td>TOTAL AÑO</td><td>${t.total}</td><td>${t.normal}</td><td>${t.corte}</td><td>${t.bodega}</td><td>${t.valparaiso}</td><td>${t.guia}</td><td>${t.nc}</td>
-            </tr>
+            <tr class="fila-total"><td>Total año</td><td>${t.total}</td><td>${t.normal}</td><td>${t.corte}</td><td>${t.bodega}</td><td>${t.valparaiso}</td><td>${t.guia}</td><td>${t.nc}</td></tr>
           </tbody>
         </table>
-      </div>
+      </details>`;
 
-      <div class="tabla-wrap" style="margin-bottom:20px;">
-        <div style="padding:16px 16px 0;">
-          <h2 style="font-size:15px; margin:0 0 2px;">Facturas por tipo (histórico)</h2>
-          <p class="sub" style="margin-bottom:12px;">Una factura puede tener varios tipos a la vez, por eso la suma puede ser mayor al total de facturas.</p>
-        </div>
-        <table class="listado">
-          <thead><tr><th>Tipo</th><th>Cantidad</th></tr></thead>
-          <tbody>${filasPorTipo}</tbody>
-        </table>
-      </div>
-
-      <div class="tabla-wrap">
-        <div style="padding:16px 16px 0;">
-          <h2 style="font-size:15px; margin:0 0 12px;">Últimas registradas</h2>
-        </div>
-        <table class="listado">
-          <thead><tr><th>N°</th><th>Fecha</th><th>Hora</th><th>Observación</th></tr></thead>
-          <tbody>${filasUltimas}</tbody>
-        </table>
-      </div>`;
+    // Tooltip del gráfico
+    const wrap = el.querySelector(".grafico-wrap");
+    const tip = el.querySelector(".g-tooltip");
+    el.querySelectorAll(".g-col").forEach((g) => {
+      g.addEventListener("mouseenter", () => {
+        const m = meses[g.dataset.i];
+        tip.innerHTML = `<b>${m.mes}</b><div>Total <span>${m.total}</span></div><div>Corte <span>${m.corte}</span></div><div>Valparaíso <span>${m.valparaiso}</span></div><div>Guía <span>${m.guia}</span></div><div>N/C <span>${m.nc}</span></div>`;
+        tip.hidden = false;
+        const rb = g.querySelector(".g-hit").getBoundingClientRect();
+        const rw = wrap.getBoundingClientRect();
+        let x = rb.left - rw.left + rb.width / 2 - tip.offsetWidth / 2;
+        x = Math.max(0, Math.min(x, rw.width - tip.offsetWidth));
+        tip.style.left = x + "px";
+        g.classList.add("hover");
+      });
+      g.addEventListener("mouseleave", () => { tip.hidden = true; g.classList.remove("hover"); });
+    });
   }
 
   async function cargarDashboard(forzar) {

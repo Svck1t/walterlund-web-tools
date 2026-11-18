@@ -35,6 +35,8 @@ const ProduccionKaoSection = (() => {
   let pendiente = null;      // importación esperando confirmación
   let pendienteCorreos = null; // asignación de clientes desde correos esperando confirmación
   let charts = [];
+  let seedAuto = false;
+  const LOGO_URL = '/img/logo-walter-lund.png';      // evita lanzar la carga automática de datos iniciales más de una vez
 
   // ---------- utilidades ----------
   const esc = s => String(s ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
@@ -82,13 +84,15 @@ const ProduccionKaoSection = (() => {
   const anios = () => [...new Set(D.producciones.map(p => String(p.fecha).slice(0, 4)))].sort().reverse();
 
   // ---------- datos ----------
-  async function cargar() {
+  async function cargar(intento = 1) {
     errorCarga = '';
     try {
       const r = await fetch(API_URL, { cache: 'no-store' });
       const d = await r.json().catch(() => ({ ok: false, sinConfigurar: r.status === 404, error: 'Respuesta no válida (' + r.status + ')' }));
       if (d.sinConfigurar || r.status === 404) throw Object.assign(new Error(d.error || 'API sin configurar'), { local: true });
       if (!d.ok) throw new Error(d.error || 'Error al leer la base');
+      // A veces el Apps Script responde vacío (hoja ocupada / arranque en frío): reintenta antes de darla por vacía
+      if (!(d.colores || []).length && intento < 3) { await new Promise(res => setTimeout(res, 1500 * intento)); return cargar(intento + 1); }
       modo = 'api';
       D = { config: d.config || {}, materias: d.materias || [], colores: d.colores || [], producciones: d.producciones || [], ordenes: d.ordenes || [] };
     } catch (err) {
@@ -97,8 +101,22 @@ const ProduccionKaoSection = (() => {
       const s = await (await fetch(SEED_URL, { cache: 'no-store' })).json();
       D = { config: s.config, materias: s.materias, colores: s.colores, producciones: s.producciones.map((p, i) => ({ id: 'L' + i, ...p })), ordenes: [] };
     }
+    unificarClientes();
     indexar();
     if (!anio || !anios().includes(anio)) anio = anios()[0] || '';
+  }
+
+  // Junta nombres repetidos de un mismo cliente (ej. YAPAK → YAPACK) según ALIAS_CLI
+  // y guarda la corrección en la planilla para que no vuelva a aparecer.
+  function unificarClientes() {
+    const canon = c => ALIAS_CLI[norm(c)];
+    const cols = [], prods = [];
+    D.colores.forEach(c => { const k = c.cliente && canon(c.cliente); if (k && k !== c.cliente) { c.cliente = k; cols.push({ id: c.id, cliente: k }); } });
+    D.producciones.forEach(p => { const k = p.cliente && canon(p.cliente); if (k && k !== p.cliente) { p.cliente = k; prods.push({ id: p.id, cliente: k }); } });
+    (D.ordenes || []).forEach(o => { const k = o.cliente && canon(o.cliente); if (k && k !== o.cliente) o.cliente = k; });
+    if (modo !== 'api') return;
+    if (cols.length) api('asignarClientesColores', { items: cols }).catch(err => console.warn('Kao clientes:', err));
+    if (prods.length) api('asignarClientes', { items: prods }).catch(err => console.warn('Kao clientes:', err));
   }
 
   async function api(action, payload) {
@@ -109,8 +127,8 @@ const ProduccionKaoSection = (() => {
     return d;
   }
 
-  async function cargarSeedEnBase() {
-    if (!confirm('Esto carga en la Google Sheet el maestro, las fórmulas de los dos Excel y las producciones 2026. ¿Continuar?')) return;
+  async function cargarSeedEnBase(auto = false) {
+    if (!auto && !confirm('Esto carga en la Google Sheet el maestro, las fórmulas de los dos Excel y las producciones 2026. ¿Continuar?')) return;
     aviso('Cargando datos iniciales…');
     try {
       const s = await (await fetch(SEED_URL, { cache: 'no-store' })).json();
@@ -355,7 +373,9 @@ const ProduccionKaoSection = (() => {
     root.querySelector('#pk-meta').innerHTML = `${nf(D.colores.length)} colores (${nf(nAct)} activos) · ${nf(D.materias.length)} materias primas · ${nf(D.producciones.length)} producciones registradas`;
     const banner = modo === 'local'
       ? `<div class="pk-note">👀 <b>Vista previa:</b> todavía no está conectada la Google Sheet${errorCarga ? ' (' + esc(errorCarga) + ')' : ''}. Puedes revisar y probar todo, pero los cambios <b>no se guardan</b>. Para activarlo: publica <code>gas/ProduccionKaoAPI.gs</code> y pega la URL en <code>api/kao.js</code>.</div>`
-      : (!D.colores.length ? `<div class="pk-note">La base está vacía. <button class="pk-btn" data-act="seed">Cargar datos iniciales</button></div>` : '');
+      : (!D.colores.length ? `<div class="pk-note">Cargando datos iniciales…</div>` : '');
+    // base vacía: se cargan los datos iniciales solos (el Apps Script rechaza el seed si la hoja ya tiene colores)
+    if (modo === 'api' && !D.colores.length && !seedAuto) { seedAuto = true; setTimeout(() => cargarSeedEnBase(true), 0); }
     root.querySelectorAll('.pk-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === tab && !colorAbierto));
     charts.forEach(c => c.destroy()); charts = [];
     const body = root.querySelector('#pk-body');
@@ -751,8 +771,9 @@ const ProduccionKaoSection = (() => {
 
   function vistaOrden() {
     if (!wiz) wiz = { paso: 1, cliente: '', items: [], obs: '', fecha: hoyLocal() };
-    const pie = (atras, sig, sigTxt, ok = true) => `<div class="pk-wiz-pie">
+    const pie = (atras, sig, sigTxt, ok = true, msg = '') => `<div class="pk-wiz-pie">
       ${atras ? `<button class="pk-btn pk-btn-sec" data-act="ir-paso" data-paso="${wiz.paso - 1}">← Atrás</button>` : '<span></span>'}
+      ${msg ? `<span class="pk-pie-msg">${msg}</span>` : ''}
       ${sig ? `<button class="pk-btn pk-btn-grande" data-act="ir-paso" data-paso="${wiz.paso + 1}" ${ok ? '' : 'disabled'}>${sigTxt} →</button>` : ''}</div>`;
     const resumenCli = wiz.cliente ? `<div class="pk-wiz-ctx">Cliente: <b>${esc(wiz.cliente)}</b>${wiz.items.length ? ` · ${nf(wiz.items.length)} color${wiz.items.length > 1 ? 'es' : ''} · ${nf(wiz.items.reduce((a, it) => a + (it.kg || 0), 0), 1)} kg` : ''}</div>` : '';
 
@@ -769,7 +790,8 @@ const ProduccionKaoSection = (() => {
               <b>${esc(s.cliente)}</b>
               <span>${s.n ? `${nf(s.codigos.size)} colores · ${nf(s.n)} producciones` : 'Sin producciones registradas'}</span>
               <small>${s.ultima ? 'Última: ' + fCorta(s.ultima) + ' · ' + nf(s.kg) + ' kg' : '&nbsp;'}</small></button>`).join('')}
-          ${q && !lista.some(s => norm(s.cliente) === q) ? `<button class="pk-cli pk-cli-nuevo" data-act="elegir-cliente" data-cli="${esc(qCli.trim().toUpperCase())}"><b>＋ ${esc(qCli.trim().toUpperCase())}</b><span>Cliente nuevo</span><small>&nbsp;</small></button>` : ''}
+          ${q && !lista.some(s => norm(s.cliente) === q) ? `<button class="pk-cli pk-cli-nuevo" data-act="elegir-cliente" data-cli="${esc(normCli(qCli))}"><b>＋ ${esc(normCli(qCli))}</b><span>Cliente nuevo</span><small>&nbsp;</small></button>`
+            : `<button class="pk-cli pk-cli-nuevo" data-act="nuevo-cliente"><b>＋ Nuevo cliente</b><span>Crear un cliente que aún no está</span><small>&nbsp;</small></button>`}
         </div>
         ${!lista.length && !q ? '<p class="pk-vacio">Todavía no hay clientes. Escribe el nombre para crear uno.</p>' : ''}
       </div>`;
@@ -823,8 +845,10 @@ const ProduccionKaoSection = (() => {
           : '<p class="pk-sub">Ingresa los kilos para ver la formulación.</p>'}
         </div>`;
       }).join('');
-      const ok = wiz.items.length && wiz.items.every(it => it.kg > 0);
-      return stepper() + resumenCli + bloques + pie(true, true, 'Revisar orden', ok);
+      const ok = wiz.items.length && wiz.items.every(it => it.kg > 0 && tieneEnvases(it));
+      const faltan = wiz.items.filter(it => it.kg > 0 && !tieneEnvases(it)).map(it => (D.colores.find(x => x.id === it.colorId) || {}).nombre).filter(Boolean);
+      const avisoEnv = faltan.length ? `⚠️ Falta indicar envases de <b>${faltan.map(esc).join(', ')}</b>` : '';
+      return stepper() + resumenCli + bloques + pie(true, true, 'Revisar orden', ok, avisoEnv);
     }
 
     // ---------- Paso 4: revisar ----------
@@ -844,7 +868,7 @@ const ProduccionKaoSection = (() => {
         </div>
         <table class="pk-table pk-mt"><thead><tr><th>Color</th><th class="num">Kg</th><th>Envases</th><th>Batch</th></tr></thead><tbody>${filas}
           <tr class="pk-tot"><td>TOTAL</td><td class="num">${nf(wiz.items.reduce((a, it) => a + it.kg, 0), 1)}</td><td colspan="2"></td></tr></tbody></table>
-        <details class="pk-mt"><summary><b>Descuento de stock de la orden</b> (${nf(consumo.length)} productos)</summary>${tablaConsumo(consumo)}</details>
+        <h3 class="pk-mt">Descuento de stock de la orden <small class="pk-gris">(${nf(consumo.length)} productos)</small></h3>${tablaConsumo(consumo)}
       </div>
       <div class="pk-wiz-pie"><button class="pk-btn pk-btn-sec" data-act="ir-paso" data-paso="3">← Atrás</button>
         <div class="pk-head-btns"><button class="pk-btn pk-btn-sec pk-btn-grande" data-act="guardar-orden">Solo guardar</button>
@@ -865,10 +889,12 @@ const ProduccionKaoSection = (() => {
   const tablaConsumo = cons => `<table class="pk-table pk-mini pk-mt-s"><thead><tr><th>Código</th><th>Producto</th><th class="num">Cantidad</th><th>UM</th></tr></thead><tbody>
     ${cons.map(x => `<tr><td>${esc(x.m.codigo || '—')}</td><td>${esc(x.m.descripcion)}</td><td class="num"><b>${x.um === 'kg' ? nf(Math.round(x.cant * 10) / 10, 1) : nf(x.cant)}</b></td><td>${x.um}</td></tr>`).join('')}</tbody></table>`;
 
+  const tieneEnvases = it => Object.values(it.envases || {}).some(n => Number(n) > 0);
+
   function irPaso(n) {
     if (n === 2 && !wiz.cliente) return;
     if (n === 3 && !wiz.items.length) return;
-    if (n === 4 && !wiz.items.every(it => it.kg > 0)) return;
+    if (n === 4 && !wiz.items.every(it => it.kg > 0 && tieneEnvases(it))) return;
     wiz.paso = n; dibujar(); window.scrollTo(0, 0);
   }
 
@@ -938,14 +964,17 @@ const ProduccionKaoSection = (() => {
   // ---------- Impresión ----------
   function imprimir(o) {
     const k = cfg();
+    const encabezado = titulo => `<header>
+        <img class="logo" src="${LOGO_URL}" alt="Distribuidora Walter Lund">
+        <div class="tit"><b>${titulo}</b><span>Kao Chimigraf</span></div>
+        <div class="op"><small>N° orden</small><b>${esc(o.numero || 'BORRADOR')}</b><span>${fCorta(o.fecha)}</span></div></header>`;
     const hoja = it => {
       const c = D.colores.find(x => x.id === it.colorId); if (!c) return '';
       const R = calcular(c, num(it.kg), it.envases || {});
       const env = R.env.length ? R.env.map(e => `<tr><td class="ck">☐</td><td>${esc(e.m.codigo || '')}</td><td>${esc(e.m.descripcion)}</td><td class="n"><b>${nf(e.n)}</b> un</td></tr>`).join('') : '<tr><td colspan="4" class="gris">Sin envases indicados</td></tr>';
       const sw = swatchColor(c.nombre);
       return `<section class="hoja">
-        <header><div><div class="marca">WALTER LUND</div><div class="tit">Orden de producción · Kao Chimigraf</div></div>
-          <div class="op"><b>${esc(o.numero || 'BORRADOR')}</b><span>${fCorta(o.fecha)}</span></div></header>
+        ${encabezado('Orden de producción')}
         <div class="cab">
           <div class="sw ${sw === 'transp' ? 'transp' : ''}" style="${sw === 'transp' ? '' : 'background:' + sw}"></div>
           <div class="cn"><small>Color</small><h1>${esc(c.nombre)}</h1><span>Código ${esc(c.codigo || '—')}${it.batch ? ' · Batch ' + esc(it.batch) : ''}</span></div>
@@ -967,8 +996,7 @@ const ProduccionKaoSection = (() => {
     };
     const cons = consumoOrden(o);
     const resumen = `<section class="hoja">
-        <header><div><div class="marca">WALTER LUND</div><div class="tit">Descuento de stock · Kao Chimigraf</div></div>
-          <div class="op"><b>${esc(o.numero || 'BORRADOR')}</b><span>${fCorta(o.fecha)}</span></div></header>
+        ${encabezado('Descuento de stock')}
         <div class="cli"><span>Cliente</span><b>${esc(o.cliente)}</b><span>Colores</span><b>${o.items.map(it => esc(it.nombre || (D.colores.find(x => x.id === it.colorId) || {}).nombre) + ' (' + nf(num(it.kg), 1) + ' kg)').join(' · ')}</b></div>
         <h2>Productos a descontar (incluye ${pct(k.merma, 0)} de merma)</h2>
         <table><thead><tr><th>Código</th><th>Producto</th><th class="n">Cantidad</th><th>UM</th></tr></thead>
@@ -977,7 +1005,11 @@ const ProduccionKaoSection = (() => {
     let el = document.getElementById('pk-print');
     if (!el) { el = document.createElement('div'); el.id = 'pk-print'; document.body.appendChild(el); }
     el.innerHTML = o.items.map(hoja).join('') + resumen;
-    setTimeout(() => window.print(), 50);
+    // espera a que cargue el logo para que salga en la impresión
+    const img = el.querySelector('img.logo');
+    const go = () => setTimeout(() => window.print(), 50);
+    if (!img || img.complete) go();
+    else { let hecho = false; const una = () => { if (!hecho) { hecho = true; go(); } }; img.onload = una; img.onerror = una; setTimeout(una, 2500); }
   }
 
   // =====================================================
@@ -1032,6 +1064,14 @@ const ProduccionKaoSection = (() => {
     if (act === 'borrar-duplicados') borrarDuplicados();
     // --- órdenes ---
     if (act === 'nueva-orden') nuevaOrden();
+    if (act === 'nuevo-cliente') {
+      const nombre = prompt('Nombre del cliente nuevo (como aparece en el correo):', '');
+      if (!nombre || !nombre.trim()) return;
+      const nuevo = normCli(nombre);
+      const existe = clientesStats().find(s => norm(s.cliente) === norm(nuevo));
+      if (wiz.cliente !== (existe ? existe.cliente : nuevo)) wiz.items = [];
+      wiz.cliente = existe ? existe.cliente : nuevo; qCol = ''; irPaso(2); return;
+    }
     if (act === 'elegir-cliente') { if (wiz.cliente !== a.dataset.cli) wiz.items = []; wiz.cliente = a.dataset.cli; qCol = ''; irPaso(2); }
     if (act === 'ir-paso') irPaso(Number(a.dataset.paso));
     if (act === 'toggle-color') {
@@ -1293,18 +1333,22 @@ const ProduccionKaoSection = (() => {
       .pk-est{font-size:11px;font-weight:700;padding:3px 9px;border-radius:10px;background:#f1f5f9;color:#475569}
       .pk-est-pendiente{background:#fef3c7;color:#92400e}.pk-est-produccion{background:#dbeafe;color:#1e40af}
       .pk-est-producida{background:#dcfce7;color:#166534}.pk-est-anulada{background:#fee2e2;color:#991b1b}
+      .pk-pie-msg{flex:1;text-align:right;color:#b91c1c;font-size:13px;margin:0 12px}
       #pk-print{display:none}
       @media print{
-        @page{size:A4;margin:12mm}
+        @page{size:A4;margin:10mm}
         html,body{background:#fff!important;margin:0!important;padding:0!important}
         body>*:not(#pk-print){display:none!important}
         #pk-print{display:block!important;font-family:Arial,Helvetica,sans-serif;color:#111}
         #pk-print .hoja{page-break-after:always;break-after:page}
         #pk-print .hoja:last-child{page-break-after:auto;break-after:auto}
-        #pk-print header{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:3px solid #111;padding-bottom:6px;margin-bottom:14px}
-        #pk-print .marca{font-weight:800;letter-spacing:.12em;font-size:13px}
-        #pk-print .tit{font-size:12px;color:#444}
-        #pk-print .op{text-align:right}#pk-print .op b{display:block;font-size:18px}#pk-print .op span{font-size:12px}
+        #pk-print .hoja{border:1.5px solid #111;border-radius:10px;padding:8mm 9mm;box-sizing:border-box}
+        #pk-print header{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:14px;border-bottom:2px solid #1e3a8a;padding-bottom:10px;margin-bottom:14px}
+        #pk-print .logo{height:46px;width:auto;display:block}
+        #pk-print .tit{text-align:center}#pk-print .tit b{display:block;font-size:16px;text-transform:uppercase;letter-spacing:.06em}#pk-print .tit span{font-size:11px;color:#555}
+        #pk-print .op{text-align:right;border:1.5px solid #111;border-radius:6px;padding:4px 10px;min-width:110px}
+        #pk-print .op small{display:block;font-size:9px;text-transform:uppercase;letter-spacing:.08em;color:#555}
+        #pk-print .op b{display:block;font-size:17px}#pk-print .op span{font-size:11px}
         #pk-print .cab{display:flex;align-items:center;gap:16px;border:2px solid #111;border-radius:10px;padding:14px 18px}
         #pk-print .sw{width:64px;height:64px;border-radius:50%;border:2px solid #111;-webkit-print-color-adjust:exact;print-color-adjust:exact}
         #pk-print .sw.transp{background:repeating-conic-gradient(#ddd 0 25%,#fff 0 50%) 0 0/12px 12px}

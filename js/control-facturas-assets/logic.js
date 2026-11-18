@@ -194,15 +194,10 @@
           <tr>
             <th>N° Factura</th>
             <th>Fecha</th>
-            <th>Día</th>
-            <th>Hora</th>
             <th>Bodega</th>
-            <th>Proceso</th>
-            <th>Documento</th>
-            <th>N/C</th>
-            <th>Motivo N/C</th>
+            <th>Proceso · Doc · N/C</th>
             <th>Específica</th>
-            <th>Acciones</th>
+            <th class="th-acciones"></th>
           </tr>
         </thead>
         <tbody>
@@ -219,21 +214,26 @@
                   nc: r.nc === "Completa" ? "N/C Total" : r.nc === "Parcial" ? "N/C Parcial" : "",
                   especifica: String(r.observacion || "").trim(),
                 };
+                const esc = (v) => String(v).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+                const dia = r.dia ? String(r.dia).slice(0, 3) : "";
+                const subFecha = [dia, r.hora].filter(Boolean).join(" · ");
+                const etiquetas = [
+                  r.prioritario ? '<span class="badge badge-prioritario">Prioritario</span>' : "",
+                  ...d.proceso.map((v) => `<span class="badge badge-proceso">${v}</span>`),
+                  ...d.documento.map((v) => `<span class="badge badge-documento">${v}</span>`),
+                  d.nc ? `<span class="badge badge-nc" title="${esc(r.motivoNc || "")}">${d.nc}</span>` : "",
+                ].filter(Boolean).join("");
+                const motivo = d.nc && r.motivoNc ? `<div class="sub-celda" title="${esc(r.motivoNc)}">${r.motivoNc}</div>` : "";
                 return `
             <tr>
-              <td class="num" style="vertical-align:top;">${r.numero}${r.prioritario ? '<span class="asterisco-prioritario" title="Prioritario">*</span>' : ""}</td>
-              <td style="vertical-align:top;">${r.fecha}</td>
-              <td style="vertical-align:top;">${r.dia || "-"}</td>
-              <td style="vertical-align:top;">${r.hora || "-"}</td>
-              <td style="vertical-align:top;">${d.bodega.length ? celdaApilada(d.bodega, "badge-bodega") : '<span class="badge badge-aldunate">Aldunate</span>'}</td>
-              <td style="vertical-align:top;">${celdaApilada(d.proceso, "badge-proceso")}</td>
-              <td style="vertical-align:top;">${celdaApilada(d.documento, "badge-documento")}</td>
-              <td style="vertical-align:top;">${d.nc ? `<span class="badge badge-nc">${d.nc}</span>` : "-"}</td>
-              <td style="vertical-align:top;">${r.motivoNc || "-"}</td>
-              <td class="obs" style="vertical-align:top;">${d.especifica || "-"}</td>
-              <td class="acciones-cell" style="vertical-align:top;">
-                <button class="btn-mini btn-editar" data-numero="${r.numero}">Editar</button>
-                <button class="btn-mini eliminar btn-eliminar" data-numero="${r.numero}">Eliminar</button>
+              <td class="num">${r.numero}</td>
+              <td>${r.fecha}${subFecha ? `<div class="sub-celda">${subFecha}</div>` : ""}</td>
+              <td>${d.bodega.length ? d.bodega.map((v) => `<span class="badge badge-bodega">${v}</span>`).join(" ") : '<span class="badge badge-aldunate">Aldunate</span>'}</td>
+              <td>${etiquetas ? `<div class="etiquetas">${etiquetas}</div>${motivo}` : '<span class="vacio">—</span>'}</td>
+              <td class="obs" title="${esc(d.especifica)}">${d.especifica || '<span class="vacio">—</span>'}</td>
+              <td class="acciones-cell">
+                <button class="btn-icono btn-editar" data-numero="${r.numero}" title="Editar" aria-label="Editar factura ${r.numero}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L18.5 9.5a2.8 2.8 0 0 0-4-4L4 16v4"/><path d="M13.5 6.5l4 4"/></svg></button>
+                <button class="btn-icono eliminar btn-eliminar" data-numero="${r.numero}" title="Eliminar" aria-label="Eliminar factura ${r.numero}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M5 7l1 12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></svg></button>
               </td>
             </tr>`;
               })

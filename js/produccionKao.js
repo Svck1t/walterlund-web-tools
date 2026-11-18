@@ -24,6 +24,8 @@ const ProduccionKaoSection = (() => {
   let tab = 'orden';
   let anio = '';
   let fCliente = '';
+  let vistaRes = 'anio';     // Resumen: 'anio' | 'mes'
+  let mesRes = '';           // Resumen por mes: 'YYYY-MM' 
   let busqueda = '';
   let fEstado = 'activos';
   let visibles = PAGINA;
@@ -394,13 +396,29 @@ const ProduccionKaoSection = (() => {
   const prodsFiltradas = () => D.producciones.filter(p => (!anio || String(p.fecha).startsWith(anio)) && pasaCliente(clienteProd(p)));
 
   // ---------- Resumen ----------
+  const MESES_L = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+  const mesLbl = ym => `${MESES_L[Number(ym.slice(5, 7)) - 1]} ${ym.slice(0, 4)}`;
+  const mesesConDatos = () => [...new Set(D.producciones.map(p => String(p.fecha).slice(0, 7)))].filter(m => /^\d{4}-\d{2}$/.test(m)).sort().reverse();
+  const mesAnterior = ym => { const d = new Date(Number(ym.slice(0, 4)), Number(ym.slice(5, 7)) - 2, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
+  const delMes = ym => D.producciones.filter(p => String(p.fecha).startsWith(ym) && pasaCliente(clienteProd(p)));
+  const sumKg = ps => ps.reduce((a, p) => a + num(p.kg), 0);
+  const varPct = (a, b) => { if (!b) return ''; const v = (a - b) / b; return `<small class="${v >= 0 ? 'pk-up' : 'pk-down'}">${v >= 0 ? '▲' : '▼'} ${nf(Math.abs(v) * 100, 0)}%`; };
+
+  function selVista() {
+    const meses = mesesConDatos();
+    if (vistaRes === 'mes' && (!mesRes || !meses.includes(mesRes))) mesRes = meses.find(m => m.startsWith(anio)) || meses[0] || '';
+    return `<div class="pk-seg">${[['anio', 'Por año'], ['mes', 'Por mes']].map(([k, l]) => `<button data-act="vista-res" data-v="${k}" class="${vistaRes === k ? 'on' : ''}">${l}</button>`).join('')}</div>
+      ${vistaRes === 'anio' ? selAnio() : `<label>Mes<select data-f="mesres">${meses.map(m => `<option value="${m}" ${m === mesRes ? 'selected' : ''}>${mesLbl(m)}</option>`).join('')}</select></label>`}`;
+  }
+
   function resumen() {
-    const ps = prodsFiltradas();
     if (!D.producciones.length) return `<div class="pk-card pk-vacio">Aún no hay producciones. Usa <b>📤 Cargar informe Softland</b>.</div>`;
+    if (vistaRes === 'mes') return resumenMes();
+    const ps = prodsFiltradas();
     const kg = ps.reduce((a, p) => a + num(p.kg), 0), tot = ps.reduce((a, p) => a + num(p.total), 0);
     const cods = new Set(ps.map(p => p.codigo));
     const sinCli = ps.filter(p => !clienteProd(p)).length;
-    return `<div class="pk-filtros">${selAnio()}${selCliente()}</div>
+    return `<div class="pk-filtros">${selVista()}${selCliente()}</div>
       <div class="pk-kpis">
         <div class="pk-kpi"><span>Kg producidos</span><strong>${nf(kg)}</strong><small>${anio || 'total'}</small></div>
         <div class="pk-kpi"><span>Producciones</span><strong>${nf(ps.length)}</strong><small>${nf(new Set(ps.map(p => p.folio)).size)} guías de recepción</small></div>
@@ -415,20 +433,74 @@ const ProduccionKaoSection = (() => {
       <div class="pk-card pk-mt"><h3>Colores más producidos</h3><div class="pk-chart pk-chart-alta"><canvas id="pkc-top"></canvas></div></div>`;
   }
 
+  function resumenMes() {
+    const filtros = `<div class="pk-filtros">${selVista()}${selCliente()}</div>`;
+    if (!mesRes) return filtros + '<div class="pk-card pk-vacio">Sin producciones registradas.</div>';
+    const ps = delMes(mesRes), ant = delMes(mesAnterior(mesRes));
+    const aa = delMes(`${Number(mesRes.slice(0, 4)) - 1}${mesRes.slice(4)}`);
+    const kg = sumKg(ps), kgAnt = sumKg(ant), kgAA = sumKg(aa);
+    const tot = ps.reduce((a, p) => a + num(p.total), 0);
+    const dias = new Set(ps.map(p => String(p.fecha).slice(0, 10))).size;
+    const sinCli = ps.filter(p => !clienteProd(p)).length;
+    const mAnt = MESES_L[Number(mesAnterior(mesRes).slice(5, 7)) - 1].toLowerCase();
+    // tabla de colores del mes
+    const porCod = new Map();
+    ps.forEach(p => { const x = porCod.get(p.codigo) || { codigo: p.codigo, nombre: nombreProd(p), n: 0, kg: 0, clientes: new Set() }; x.n++; x.kg += num(p.kg); const c = clienteProd(p); if (c) x.clientes.add(c); porCod.set(p.codigo, x); });
+    const filasCol = [...porCod.values()].sort((a, b) => b.kg - a.kg).map(x => `<tr><td>${swatch(x.nombre)} <b>${esc(x.nombre)}</b> <small class="pk-gris">${esc(x.codigo)}</small></td>
+      <td>${esc([...x.clientes].join(', ') || '—')}</td><td class="num">${nf(x.n)}</td><td class="num"><b>${nf(x.kg, 1)}</b></td><td class="num">${kg ? pct(x.kg / kg) : ''}</td></tr>`).join('');
+    return filtros + `
+      <div class="pk-kpis">
+        <div class="pk-kpi"><span>Kg producidos · ${esc(mesLbl(mesRes))}</span><strong>${nf(kg)}</strong>${kgAnt ? `${varPct(kg, kgAnt)} vs ${mAnt}</small>` : '<small>Sin datos del mes anterior</small>'}${kgAA ? `${varPct(kg, kgAA)} vs ${MESES_L[Number(mesRes.slice(5, 7)) - 1].toLowerCase()} ${Number(mesRes.slice(0, 4)) - 1}</small>` : ''}</div>
+        <div class="pk-kpi"><span>Producciones</span><strong>${nf(ps.length)}</strong><small>${nf(new Set(ps.map(p => p.folio)).size)} guías · ${nf(dias)} días con producción</small></div>
+        <div class="pk-kpi"><span>Colores producidos</span><strong>${nf(porCod.size)}</strong><small>${nf(new Set(ps.map(p => clienteProd(p)).filter(Boolean)).size)} clientes</small></div>
+        <div class="pk-kpi"><span>Valor ingresado</span><strong>${clp(tot)}</strong><small>${kg ? clp(tot / kg) + ' por kg' : ''}</small></div>
+      </div>
+      ${sinCli ? `<p class="pk-sub">ℹ️ ${nf(sinCli)} producciones del mes sin cliente asignado.</p>` : ''}
+      ${ps.length ? `
+      <div class="pk-card pk-mt"><h3>Kg producidos por día · ${esc(mesLbl(mesRes))}</h3><div class="pk-chart pk-chart-baja"><canvas id="pkc-dia"></canvas></div></div>
+      <div class="pk-grid2">
+        <div class="pk-card"><h3>Kg por cliente</h3><div class="pk-chart"><canvas id="pkc-cli"></canvas></div></div>
+        <div class="pk-card"><h3>Últimos 12 meses</h3><div class="pk-chart"><canvas id="pkc-12"></canvas></div></div>
+      </div>
+      <div class="pk-card pk-mt"><h3>Colores producidos en el mes</h3>
+        <table class="pk-table pk-mini pk-mt-s"><thead><tr><th>Color</th><th>Cliente</th><th class="num">Producciones</th><th class="num">Kg</th><th class="num">% del mes</th></tr></thead>
+        <tbody>${filasCol}<tr class="pk-tot"><td colspan="2">TOTAL</td><td class="num">${nf(ps.length)}</td><td class="num">${nf(kg, 1)}</td><td class="num">100%</td></tr></tbody></table></div>`
+      : '<div class="pk-card pk-vacio pk-mt">Sin producciones en este mes con el filtro elegido.</div>'}`;
+  }
+
   function graficosResumen() {
     if (!D.producciones.length) return;
     cargarChart().then(() => {
       if (tab !== 'resumen' || colorAbierto) return;
-      const ps = prodsFiltradas();
       const mk = (id, cfgc) => { const el = root.querySelector('#' + id); if (el) charts.push(new Chart(el, cfgc)); };
+      const base0 = () => ({ responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => nf(c.parsed[c.chart.options.indexAxis === 'y' ? 'x' : 'y'], 1) + ' kg' } } } });
+      const barCli = ps => {
+        const porCli = {}; ps.forEach(p => { const c = clienteProd(p) || 'Sin cliente'; porCli[c] = (porCli[c] || 0) + num(p.kg); });
+        const cl = Object.entries(porCli).sort((a, b) => b[1] - a[1]);
+        mk('pkc-cli', { type: 'bar', data: { labels: cl.map(x => x[0]), datasets: [{ data: cl.map(x => x[1]), backgroundColor: cl.map(x => x[0] === 'Sin cliente' ? '#cbd5e1' : '#1e7b34'), borderRadius: 4 }] }, options: { ...base0(), indexAxis: 'y' } });
+      };
+      if (vistaRes === 'mes') {
+        if (!mesRes) return;
+        const ps = delMes(mesRes);
+        const y = Number(mesRes.slice(0, 4)), m = Number(mesRes.slice(5, 7));
+        const nDias = new Date(y, m, 0).getDate();
+        const porDia = Array(nDias).fill(0); ps.forEach(p => { const d = Number(String(p.fecha).slice(8, 10)); if (d >= 1 && d <= nDias) porDia[d - 1] += num(p.kg); });
+        const finde = Array.from({ length: nDias }, (_, i) => [0, 6].includes(new Date(y, m - 1, i + 1).getDay()));
+        mk('pkc-dia', { type: 'bar', data: { labels: porDia.map((_, i) => i + 1), datasets: [{ data: porDia, backgroundColor: finde.map(f => f ? '#a5b4fc' : '#667eea'), borderRadius: 3 }] }, options: base0() });
+        barCli(ps);
+        const ult = []; let k = mesRes; for (let i = 0; i < 12; i++) { ult.unshift(k); k = mesAnterior(k); }
+        mk('pkc-12', { type: 'bar', data: { labels: ult.map(x => MESES[Number(x.slice(5, 7)) - 1] + ' ' + x.slice(2, 4)), datasets: [{ data: ult.map(x => sumKg(delMes(x))), backgroundColor: ult.map(x => x === mesRes ? '#4f5bd5' : '#c7d2fe'), borderRadius: 4 }] }, options: base0() });
+        return;
+      }
+      const ps = prodsFiltradas();
       const porMes = Array(12).fill(0); ps.forEach(p => { porMes[Number(String(p.fecha).slice(5, 7)) - 1] += num(p.kg); });
-      mk('pkc-mes', { type: 'bar', data: { labels: MESES, datasets: [{ data: porMes, backgroundColor: '#667eea', borderRadius: 4 }] }, options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } } });
-      const porCli = {}; ps.forEach(p => { const c = clienteProd(p) || 'Sin cliente'; porCli[c] = (porCli[c] || 0) + num(p.kg); });
-      const cl = Object.entries(porCli).sort((a, b) => b[1] - a[1]);
-      mk('pkc-cli', { type: 'bar', data: { labels: cl.map(x => x[0]), datasets: [{ data: cl.map(x => x[1]), backgroundColor: cl.map(x => x[0] === 'Sin cliente' ? '#cbd5e1' : '#1e7b34'), borderRadius: 4 }] }, options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } } });
+      mk('pkc-mes', { type: 'bar', data: { labels: MESES, datasets: [{ data: porMes, backgroundColor: '#667eea', borderRadius: 4 }] }, options: { ...base0(),
+        onClick: (_, els) => { if (!els.length || !anio) return; const mm = String(els[0].index + 1).padStart(2, '0'); if (!porMes[els[0].index]) return; vistaRes = 'mes'; mesRes = `${anio}-${mm}`; setTimeout(dibujar, 0); },
+        onHover: (ev, els) => { ev.native.target.style.cursor = els.length ? 'pointer' : 'default'; } } });
+      barCli(ps);
       const porCod = {}; ps.forEach(p => { porCod[p.codigo] = (porCod[p.codigo] || 0) + num(p.kg); });
       const top = Object.entries(porCod).sort((a, b) => b[1] - a[1]).slice(0, 15);
-      mk('pkc-top', { type: 'bar', data: { labels: top.map(([c]) => { const col = colorDe(c); return col ? col.nombre : c; }), datasets: [{ data: top.map(x => x[1]), backgroundColor: '#4f5bd5', borderRadius: 4 }] }, options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } } });
+      mk('pkc-top', { type: 'bar', data: { labels: top.map(([c]) => { const col = colorDe(c); return col ? col.nombre : c; }), datasets: [{ data: top.map(x => x[1]), backgroundColor: '#4f5bd5', borderRadius: 4 }] }, options: { ...base0(), indexAxis: 'y' } });
     }).catch(err => aviso('⚠️ ' + esc(err.message), 'err'));
   }
 
@@ -1030,6 +1102,7 @@ const ProduccionKaoSection = (() => {
     const act = a.dataset.act;
     if (a.tagName === 'A') e.preventDefault();
     if (act === 'seed') cargarSeedEnBase();
+    if (act === 'vista-res') { vistaRes = a.dataset.v; if (vistaRes === 'anio' && mesRes) anio = mesRes.slice(0, 4); dibujar(); return; }
     if (act === 'confirmar') confirmarImport();
     if (act === 'confirmar-correos') confirmarCorreos();
     if (act === 'cancelar-correos') { pendienteCorreos = null; dibujar(); }
@@ -1128,6 +1201,7 @@ const ProduccionKaoSection = (() => {
     if (el.id === 'pk-file' && el.files[0]) { leerArchivo(el.files[0]); el.value = ''; return; }
     if (el.id === 'pk-mail' && el.files[0]) { leerCorreos(el.files[0]); el.value = ''; return; }
     if (el.dataset.f === 'anio') { anio = el.value; visibles = PAGINA; dibujar(); return; }
+    if (el.dataset.f === 'mesres') { mesRes = el.value; dibujar(); return; }
     if (el.dataset.f === 'cliente') { fCliente = el.value; visibles = PAGINA; dibujar(); return; }
     if (el.dataset.f === 'estado') { fEstado = el.value; dibujar(); return; }
     if (el.dataset.f === 'estord') { fEstOrd = el.value; dibujar(); return; }
@@ -1243,6 +1317,11 @@ const ProduccionKaoSection = (() => {
       .pk-kpi strong{display:block;font-size:24px;margin-top:4px}
       .pk-kpi small{display:block;font-size:11px;color:#9ca3af;margin-top:4px}
       .pk-grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px}
+      .pk-seg{display:inline-flex;gap:2px;padding:4px;background:#fff;border:1px solid #e1e5ea;border-radius:10px}
+      .pk-seg button{border:0;background:none;padding:6px 12px;border-radius:7px;font:inherit;font-size:13px;font-weight:600;color:#5b6b7a;cursor:pointer}
+      .pk-seg button.on{background:#1565c0;color:#fff}
+      .pk-chart-baja{height:220px}
+      .pk-kpi small.pk-up{color:#15803d;font-weight:600}.pk-kpi small.pk-down{color:#b91c1c;font-weight:600}
       .pk-chart{position:relative;height:280px}.pk-chart-alta{height:420px}
       .pk-table-wrap{overflow-x:auto;background:#fff;border-radius:10px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
       .pk-flat{box-shadow:none;border:1px solid #eef0f3}

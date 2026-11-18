@@ -582,6 +582,26 @@
     });
   }
 
+  // El conteo de N/C que entrega el Apps Script (action=dashboard) no calza con lo
+  // marcado en las facturas. Se recalcula acá con el mismo criterio del listado:
+  // solo cuenta si la factura tiene N/C "Completa" o "Parcial".
+  // Solo se aplica si el listado trae todas las facturas (si no, se dejaría corto).
+  function corregirNC(data, registros) {
+    if (!Array.isArray(registros) || registros.length < (data.total || 0)) return;
+    const tieneNC = (r) => r.nc === "Completa" || r.nc === "Parcial";
+    const porMes = new Array(12).fill(0);
+    let anio = 0, historico = 0;
+    registros.forEach((r) => {
+      if (!tieneNC(r)) return;
+      historico++;
+      const [, mm, yyyy] = String(r.fecha || "").split("-").map(Number);
+      if (yyyy === Number(data.anio) && mm >= 1 && mm <= 12) { porMes[mm - 1]++; anio++; }
+    });
+    (data.porMes || []).forEach((m, i) => { m.nc = porMes[i] || 0; });
+    if (data.totalAnio) data.totalAnio.nc = anio;
+    if (data.porTipo) data.porTipo.nc = historico;
+  }
+
   async function cargarDashboard(forzar) {
     if (dashboardCargado && !forzar) return;
     const el = root.getElementById("dashboard-content");
@@ -596,7 +616,12 @@
     }
 
     try {
-      const res = await fetch(`${API_URL}?action=dashboard`);
+      const [res, registros] = await Promise.all([
+        fetch(`${API_URL}?action=dashboard`),
+        registrosCache && !forzar
+          ? Promise.resolve(registrosCache)
+          : fetch(`${API_URL}?action=listado`).then((r) => r.json()).then((d) => (d.ok ? d.registros : null)).catch(() => null),
+      ]);
       const data = await res.json();
 
       if (!data.ok) {
@@ -604,6 +629,7 @@
         return;
       }
 
+      corregirNC(data, registros);
       renderDashboard(data);
       guardarCacheLocal("dashboard", data);
       dashboardCargado = true;

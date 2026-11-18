@@ -209,7 +209,6 @@
     });
     return registros;
   }
-  const tieneNC = (r) => r.nc === "Completa" || r.nc === "Parcial" || !!r.ncVinc;
 
   // ----- Buscar + Listado (unificado) -----
   const filtroTexto = root.getElementById("filtro-texto");
@@ -626,14 +625,15 @@
 
   // El conteo de N/C que entrega el Apps Script (action=dashboard) no calza con lo
   // marcado en las facturas. Se recalcula acá con el mismo criterio del listado:
-  // N/C "Completa" o "Parcial" marcada acá, o NC vigente en el módulo Notas de Crédito.
+  // solo N/C "Completa" o "Parcial" marcada en la factura acá. Las NC del módulo
+  // Notas de Crédito NO se cuentan (ese módulo tiene sus propios gráficos).
   // Solo se aplica si el listado trae todas las facturas (si no, se dejaría corto).
   function corregirNC(data, registros) {
     if (!Array.isArray(registros) || registros.length < (data.total || 0)) return;
     const porMes = new Array(12).fill(0);
     let anio = 0, historico = 0;
     registros.forEach((r) => {
-      if (!tieneNC(r)) return;
+      if (r.nc !== "Completa" && r.nc !== "Parcial") return;
       historico++;
       const [, mm, yyyy] = String(r.fecha || "").split("-").map(Number);
       if (yyyy === Number(data.anio) && mm >= 1 && mm <= 12) { porMes[mm - 1]++; anio++; }
@@ -657,14 +657,12 @@
     }
 
     try {
-      const [res, registrosRaw] = await Promise.all([
+      const [res, registros] = await Promise.all([
         fetch(`${API_URL}?action=dashboard`),
         registrosCache && !forzar
           ? Promise.resolve(registrosCache)
           : fetch(`${API_URL}?action=listado`).then((r) => r.json()).then((d) => (d.ok ? d.registros : null)).catch(() => null),
-        cargarNCVinculadas(),
       ]);
-      const registros = aplicarNC(registrosRaw);
       const data = await res.json();
 
       if (!data.ok) {

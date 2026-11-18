@@ -246,7 +246,10 @@
                   proceso: String(r.proceso || "").split(",").map((s) => s.trim().toUpperCase()).filter((t) => PROCESO_VALIDAS.includes(t)).map((t) => ETIQUETA_BONITA[t] || t),
                   documento: String(r.documento || "").split(",").map((s) => s.trim().toUpperCase()).filter((t) => DOCUMENTO_VALIDAS.includes(t)).map((t) => ETIQUETA_BONITA[t] || t),
                   nc: (() => {
-                    const v = r.nc || r.ncVinc;
+                    // En la planilla hay filas antiguas con texto en la columna N/C que no es una N/C
+                    // (ej. "No"). Solo cuenta "Completa" o "Parcial"; si no, se usa la NC del módulo.
+                    const ncPropia = r.nc === "Completa" || r.nc === "Parcial" ? r.nc : "";
+                    const v = ncPropia || r.ncVinc;
                     return v === "Completa" ? "N/C Total" : v === "Parcial" ? "N/C Parcial" : v ? "N/C" : "";
                   })(),
                   especifica: String(r.observacion || "").trim(),
@@ -260,7 +263,7 @@
                   ...d.documento.map((v) => `<span class="badge badge-documento">${v}</span>`),
                   d.nc ? `<span class="badge badge-nc" title="${esc(r.estadoVinc ? "Desde Notas de Crédito · " + r.estadoVinc : r.motivoNc || "")}">${d.nc}</span>` : "",
                 ].filter(Boolean).join("");
-                const motivoTxt = r.motivoNc || r.motivoVinc || "";
+                const motivoTxt = ((r.nc === "Completa" || r.nc === "Parcial") && r.motivoNc) || r.motivoVinc || "";
                 const lineaNC = [motivoTxt, r.estadoVinc ? `NC ${r.estadoVinc.toLowerCase()}` : ""].filter(Boolean).join(" · ");
                 const motivo = d.nc && lineaNC ? `<div class="sub-celda" title="${esc(lineaNC)}">${lineaNC}</div>` : "";
                 return `
@@ -462,7 +465,7 @@
         String(r.bodega || "").toLowerCase().includes(t) ||
         String(r.proceso || "").toLowerCase().includes(t) ||
         String(r.documento || "").toLowerCase().includes(t) ||
-        String(r.nc || "").toLowerCase().includes(t) ||
+        ((r.nc === "Completa" || r.nc === "Parcial") && r.nc.toLowerCase().includes(t)) ||
         String(r.motivoNc || r.motivoVinc || "").toLowerCase().includes(t) ||
         (!!r.ncVinc && "n/c nota de credito".includes(t));
       const coincideFecha = !f || r.fechaISO === f;

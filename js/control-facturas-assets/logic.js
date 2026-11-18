@@ -3,7 +3,8 @@
   const DIAS = ["Domingo","Lunes","Martes","Miércoles","Jueves","Viernes","Sábado"];
   const MESES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
   let registrosCache = null; // se llena la primera vez que se abre "Buscar" (completo, hasta 200 filas)
-  let recientesCache = null; // liviano (8 filas), para el panel de la pestaña "Ingresar"
+  let recientesCache = null;
+  const NC_URL = "/api/despachos?m=nc"; // módulo Notas de Crédito (mismo dominio) // liviano (8 filas), para el panel de la pestaña "Ingresar"
 
   // ----- Caché local (localStorage): muestra al instante lo último visto mientras se refresca en segundo plano -----
   function guardarCacheLocal(clave, datos) {
@@ -176,6 +177,40 @@
     }
   });
 
+  // ----- Vínculo con el módulo Notas de Crédito -----
+  // Si una factura tiene una NC registrada allá (no anulada), acá aparece su etiqueta y motivo
+  // automáticamente. No se escribe en la planilla de Despachos: se guarda en campos aparte
+  // (ncVinc / motivoVinc) para que, si la NC se anula, la etiqueta desaparezca sola.
+  let ncMapa = null;
+  async function cargarNCVinculadas() {
+    try {
+      const r = await fetch(NC_URL, { cache: "no-store" });
+      const d = await r.json();
+      if (!d.ok || !Array.isArray(d.notas)) return ncMapa;
+      const mapa = new Map();
+      d.notas.forEach((n) => {
+        if (n.estado === "ANULADA" || n.docTipo === "Boleta" || !n.docNum) return;
+        mapa.set(String(n.docNum).trim(), n); // si hay varias, queda la última
+      });
+      ncMapa = mapa;
+    } catch (e) {
+      console.warn("No se pudieron leer las Notas de Crédito:", e);
+    }
+    return ncMapa;
+  }
+  const ESTADO_NC = { SOLICITADA: "Solicitada", PEND_DEVOLUCION: "Esperando devolución", EN_BODEGA: "En bodega", EMITIDA: "Emitida" };
+  function aplicarNC(registros) {
+    if (!ncMapa || !Array.isArray(registros)) return registros;
+    registros.forEach((r) => {
+      const n = ncMapa.get(String(r.numero).trim());
+      r.ncVinc = n ? (n.tipo === "Completa" || n.tipo === "Parcial" ? n.tipo : "Sí") : "";
+      r.motivoVinc = n ? n.motivo || "" : "";
+      r.estadoVinc = n ? ESTADO_NC[n.estado] || n.estado || "" : "";
+    });
+    return registros;
+  }
+  const tieneNC = (r) => r.nc === "Completa" || r.nc === "Parcial" || !!r.ncVinc;
+
   // ----- Buscar + Listado (unificado) -----
   const filtroTexto = root.getElementById("filtro-texto");
   const filtroFecha = root.getElementById("filtro-fecha");
@@ -211,7 +246,10 @@
                   bodega: String(r.bodega || "").split(",").map((s) => s.trim().toUpperCase()).filter((t) => BODEGA_VALIDAS.includes(t)).map((t) => ETIQUETA_BONITA[t] || t),
                   proceso: String(r.proceso || "").split(",").map((s) => s.trim().toUpperCase()).filter((t) => PROCESO_VALIDAS.includes(t)).map((t) => ETIQUETA_BONITA[t] || t),
                   documento: String(r.documento || "").split(",").map((s) => s.trim().toUpperCase()).filter((t) => DOCUMENTO_VALIDAS.includes(t)).map((t) => ETIQUETA_BONITA[t] || t),
-                  nc: r.nc === "Completa" ? "N/C Total" : r.nc === "Parcial" ? "N/C Parcial" : "",
+                  nc: (() => {
+                    const v = r.nc || r.ncVinc;
+                    return v === "Completa" ? "N/C Total" : v === "Parcial" ? "N/C Parcial" : v ? "N/C" : "";
+                  })(),
                   especifica: String(r.observacion || "").trim(),
                 };
                 const esc = (v) => String(v).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
@@ -221,9 +259,11 @@
                   r.prioritario ? '<span class="badge badge-prioritario">Prioritario</span>' : "",
                   ...d.proceso.map((v) => `<span class="badge badge-proceso">${v}</span>`),
                   ...d.documento.map((v) => `<span class="badge badge-documento">${v}</span>`),
-                  d.nc ? `<span class="badge badge-nc" title="${esc(r.motivoNc || "")}">${d.nc}</span>` : "",
+                  d.nc ? `<span class="badge badge-nc" title="${esc(r.estadoVinc ? "Desde Notas de Crédito · " + r.estadoVinc : r.motivoNc || "")}">${d.nc}</span>` : "",
                 ].filter(Boolean).join("");
-                const motivo = d.nc && r.motivoNc ? `<div class="sub-celda" title="${esc(r.motivoNc)}">${r.motivoNc}</div>` : "";
+                const motivoTxt = r.motivoNc || r.motivoVinc || "";
+                const lineaNC = [motivoTxt, r.estadoVinc ? `NC ${r.estadoVinc.toLowerCase()}` : ""].filter(Boolean).join(" · ");
+                const motivo = d.nc && lineaNC ? `<div class="sub-celda" title="${esc(lineaNC)}">${lineaNC}</div>` : "";
                 return `
             <tr>
               <td class="num">${r.numero}</td>
@@ -273,7 +313,7 @@
     }
 
     try {
-      const res = await fetch(`${API_URL}?action=listado`);
+      const [res] = await Promise.all([fetch(`${API_URL}?action=listado`), cargarNCVinculadas()]);
       const data = await res.json();
 
       if (!data.ok) {
@@ -281,7 +321,7 @@
         return;
       }
 
-      registrosCache = data.registros;
+      registrosCache = aplicarNC(data.registros);
       renderListado(filtrar(registrosCache));
       renderRecientes(registrosCache);
       guardarCacheLocal("listado", registrosCache);
@@ -423,7 +463,9 @@
         String(r.bodega || "").toLowerCase().includes(t) ||
         String(r.proceso || "").toLowerCase().includes(t) ||
         String(r.documento || "").toLowerCase().includes(t) ||
-        String(r.nc || "").toLowerCase().includes(t);
+        String(r.nc || "").toLowerCase().includes(t) ||
+        String(r.motivoNc || r.motivoVinc || "").toLowerCase().includes(t) ||
+        (!!r.ncVinc && "n/c nota de credito".includes(t));
       const coincideFecha = !f || r.fechaISO === f;
       return coincideTexto && coincideFecha;
     });
@@ -584,11 +626,10 @@
 
   // El conteo de N/C que entrega el Apps Script (action=dashboard) no calza con lo
   // marcado en las facturas. Se recalcula acá con el mismo criterio del listado:
-  // solo cuenta si la factura tiene N/C "Completa" o "Parcial".
+  // N/C "Completa" o "Parcial" marcada acá, o NC vigente en el módulo Notas de Crédito.
   // Solo se aplica si el listado trae todas las facturas (si no, se dejaría corto).
   function corregirNC(data, registros) {
     if (!Array.isArray(registros) || registros.length < (data.total || 0)) return;
-    const tieneNC = (r) => r.nc === "Completa" || r.nc === "Parcial";
     const porMes = new Array(12).fill(0);
     let anio = 0, historico = 0;
     registros.forEach((r) => {
@@ -616,12 +657,14 @@
     }
 
     try {
-      const [res, registros] = await Promise.all([
+      const [res, registrosRaw] = await Promise.all([
         fetch(`${API_URL}?action=dashboard`),
         registrosCache && !forzar
           ? Promise.resolve(registrosCache)
           : fetch(`${API_URL}?action=listado`).then((r) => r.json()).then((d) => (d.ok ? d.registros : null)).catch(() => null),
+        cargarNCVinculadas(),
       ]);
+      const registros = aplicarNC(registrosRaw);
       const data = await res.json();
 
       if (!data.ok) {

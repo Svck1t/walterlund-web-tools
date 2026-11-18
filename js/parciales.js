@@ -226,7 +226,7 @@ const ParcialesSection = (() => {
             <div class="dp-tl-head"><b>Entrega ${i + 1} · Guía N° ${esc(e.guia)}</b><span>${fCorta(e.fecha)}</span></div>
             <ul class="dp-tl-items">${det || '<li class="dp-dim">Sin cantidades</li>'}</ul>
             ${e.nota ? `<p class="dp-tl-nota">${esc(e.nota)}</p>` : ''}
-            <div class="dp-tl-acts">${e.archivoUrl ? `<a class="dp-b dp-sm" href="${esc(e.archivoUrl)}" target="_blank" rel="noopener">📎 Ver guía</a>` : '<span class="dp-dim">Sin archivo adjunto</span>'}
+            <div class="dp-tl-acts">${e.archivoUrl ? `<button class="dp-b dp-sm" data-verguia="${esc(e.archivoUrl)}" data-titulo="Entrega ${i + 1} · Guía N° ${esc(e.guia)}">📎 Ver guía</button>` : '<span class="dp-dim">Sin archivo adjunto</span>'}
               <button class="dp-b dp-sm dp-del" data-delent="${esc(e.id)}">Eliminar</button></div>
           </li>`;
         }).join('')}</ol>` : '<p class="dp-empty">Aún no hay guías registradas.</p>'}
@@ -237,6 +237,8 @@ const ParcialesSection = (() => {
     const p = items.find(x => x.id === st.sel);
     if (e.target.closest('[data-back]')) { root.querySelector('.dp-wrap').classList.remove('dp-show'); return; }
     if (!p) return;
+    const vg = e.target.closest('[data-verguia]');
+    if (vg) return verArchivo(vg.dataset.verguia, `Factura ${p.factura} · ${vg.dataset.titulo}`);
     if (e.target.closest('[data-ent]')) return abrirEntrega(p);
     if (e.target.closest('[data-edit]')) return abrirParcial(p);
     if (e.target.closest('[data-cerrar]')) {
@@ -256,6 +258,30 @@ const ParcialesSection = (() => {
       return ejecutar({ action: 'borrarEntrega', id: de.dataset.delent }, 'Guía eliminada');
     }
   }
+  // ============ VISOR DE GUÍAS (ventana dentro de la web, sin abrir otra pestaña) ============
+  let visor = null;
+  const idDrive = url => { const m = String(url || '').match(/[-\w]{25,}/); return m ? m[0] : ''; };
+  function verArchivo(url, titulo) {
+    const id = idDrive(url);
+    if (!visor) {
+      visor = document.createElement('dialog');
+      visor.className = 'dp-visor';
+      visor.addEventListener('click', e => { if (e.target === visor || e.target.closest('[data-cerrar-visor]')) visor.close(); });
+      visor.addEventListener('close', () => { const f = visor.querySelector('iframe'); if (f) f.src = 'about:blank'; });
+      document.body.appendChild(visor);
+    }
+    visor.innerHTML = `<div class="dp-visor-in">
+      <div class="dp-visor-head"><h2>${esc(titulo || 'Guía')}</h2>
+        <div class="dp-visor-acts">
+          ${id ? `<a class="dp-b dp-sm" href="https://drive.google.com/uc?export=download&id=${esc(id)}" target="_blank" rel="noopener">⬇ Descargar</a>` : ''}
+          <a class="dp-b dp-sm" href="${esc(url)}" target="_blank" rel="noopener">↗ Abrir en Drive</a>
+          <button class="dp-visor-x" data-cerrar-visor aria-label="Cerrar">✕</button>
+        </div></div>
+      <div class="dp-visor-body">${id ? `<iframe src="https://drive.google.com/file/d/${esc(id)}/preview" title="${esc(titulo || 'Guía')}" allow="autoplay"></iframe>` : '<p class="dp-empty">No se puede mostrar este archivo aquí. Ábrelo en Drive.</p>'}</div>
+    </div>`;
+    visor.showModal();
+  }
+
   async function ejecutar(body, ok) {
     try { await post(body); toast(ok); await cargar(); }
     catch (err) { toast(err.message, true); }
@@ -465,6 +491,17 @@ const ParcialesSection = (() => {
     s.id = 'dp-styles';
     s.textContent = `
       .dp{color:#1c2733}
+      .dp-visor{border:0;border-radius:14px;padding:0;width:min(900px,94vw);height:min(88vh,1000px);box-shadow:0 20px 60px rgba(0,0,0,.35);color:#1c2733;overflow:hidden}
+      .dp-visor::backdrop{background:rgba(17,24,39,.6)}
+      .dp-visor-in{display:flex;flex-direction:column;height:100%}
+      .dp-visor-head{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid #eef0f3;flex-wrap:wrap}
+      .dp-visor-head h2{margin:0;font-size:17px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+      .dp-visor-acts{display:flex;gap:8px;align-items:center}
+      .dp-visor-x{background:none;border:0;color:#9ca3af;font-size:16px;cursor:pointer;padding:6px 8px}
+      .dp-visor-x:hover{color:#1c2733}
+      .dp-visor-body{flex:1;background:#f3f4f6;padding:10px}
+      .dp-visor-body iframe{width:100%;height:100%;border:0;border-radius:8px;background:#fff}
+      @media (max-width:560px){.dp-visor{width:100vw;max-width:100vw;height:100%;max-height:100vh;border-radius:0}.dp-visor-head h2{flex-basis:100%}}
       .dp-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap}
       .dp-acts{display:flex;gap:8px;flex-wrap:wrap}
       .dp-b{border:1px solid #d4d9e0;background:#fff;color:#1c2733;border-radius:8px;padding:8px 14px;font:inherit;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap;text-decoration:none;display:inline-flex;align-items:center;gap:4px}

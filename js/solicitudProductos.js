@@ -1,5 +1,5 @@
 // =====================================================
-// SECCIÓN: SOLICITUD DE PRODUCTOS — v1
+// SECCIÓN: SOLICITUD DE PRODUCTOS — v2 (unidad por producto: Pallet / Caja / Unidad)
 // Para las sucursales: elige qué bodega recibe y a cuál se le pide, ve el stock de ambas (en vivo)
 // y genera un PDF: el listado para anotar a mano en SOLICITADO, o la solicitud con las cantidades ingresadas.
 // Fuente: /api/stock-live (mismo stock en vivo que la sección Stock)
@@ -10,6 +10,11 @@ const SolicitudProductosSection = (() => {
   let recs = null, bodegas = [], cargando = false, error = '', root = null, actualizado = null;
   const st = { destino: '', origen: '', q: '', soloStock: true, soloPedido: false, nombre: '', obs: '' };
   let pedido = {}; // codigo -> cantidad (borrador guardado en el navegador)
+  let umPed = {};  // codigo -> unidad del pedido (Pallet por defecto)
+  const UMS = ['Pallet', 'Caja', 'Unidad'];
+  const PLURAL = { Pallet: 'Pallets', Caja: 'Cajas', Unidad: 'Unidades' };
+  const umDe = c => umPed[c] || 'Pallet';
+  const cantTxt = c => { const n = pedido[c]; if (!n) return ''; const u = umDe(c); return `${nf(n)} ${n === 1 ? u : PLURAL[u]}`; };
 
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const nf = v => (v === null || v === undefined || v === '' || isNaN(v)) ? '' : Number(v).toLocaleString('es-CL', { maximumFractionDigits: 2 });
@@ -19,6 +24,7 @@ const SolicitudProductosSection = (() => {
   const num = v => { let s = String(v ?? '').trim(); if (!s) return null; if (s.includes(',')) s = s.replace(/\./g, '').replace(',', '.'); const n = Number(s); return isNaN(n) || n <= 0 ? null : n; };
   const ls = { get: (k, d) => { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } }, set: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} } };
   const claveBorrador = () => `${KEY}_${st.origen}_${st.destino}`;
+  const cargarBorrador = () => { pedido = ls.get(claveBorrador(), {}); umPed = ls.get(claveBorrador() + '_um', {}); };
   const stockEn = (r, b) => (r.bodegas && Number(r.bodegas[b])) || 0;
 
   // ============ CARGA ============
@@ -36,7 +42,7 @@ const SolicitudProductosSection = (() => {
       actualizado = new Date();
     } catch (e) { console.error('Solicitud de productos:', e); error = e.message; }
     cargando = false;
-    pedido = ls.get(claveBorrador(), {});
+    cargarBorrador();
     dibujar();
   }
 
@@ -74,16 +80,21 @@ const SolicitudProductosSection = (() => {
     const $ = s => root.querySelector(s);
     $('#sp-ref').addEventListener('click', cargar);
     const guardarPref = () => ls.set(KEY + '_pref', { destino: st.destino, origen: st.origen, nombre: st.nombre });
-    $('#sp-dest').addEventListener('change', e => { st.destino = e.target.value; if (st.origen === st.destino) st.origen = ''; guardarPref(); pedido = ls.get(claveBorrador(), {}); dibujar(); });
-    $('#sp-orig').addEventListener('change', e => { st.origen = e.target.value; guardarPref(); pedido = ls.get(claveBorrador(), {}); dibujar(); });
+    $('#sp-dest').addEventListener('change', e => { st.destino = e.target.value; if (st.origen === st.destino) st.origen = ''; guardarPref(); cargarBorrador(); dibujar(); });
+    $('#sp-orig').addEventListener('change', e => { st.origen = e.target.value; guardarPref(); cargarBorrador(); dibujar(); });
     $('#sp-nom').addEventListener('change', e => { st.nombre = e.target.value.trim(); guardarPref(); });
     $('#sp-obs').addEventListener('input', e => { st.obs = e.target.value.trim(); });
     $('#sp-q').addEventListener('input', e => { st.q = e.target.value; dibujarTabla(); });
     $('#sp-solostock').addEventListener('change', e => { st.soloStock = e.target.checked; dibujarTabla(); });
     $('#sp-solopedido').addEventListener('change', e => { st.soloPedido = e.target.checked; dibujarTabla(); });
-    $('#sp-limpiar').addEventListener('click', () => { if (!Object.keys(pedido).length || confirm('¿Borrar todas las cantidades ingresadas?')) { pedido = {}; ls.set(claveBorrador(), pedido); dibujar(); } });
+    $('#sp-limpiar').addEventListener('click', () => { if (!Object.keys(pedido).length || confirm('¿Borrar todas las cantidades ingresadas?')) { pedido = {}; umPed = {}; ls.set(claveBorrador(), pedido); ls.set(claveBorrador() + '_um', umPed); dibujar(); } });
     $('#sp-pdf-lista').addEventListener('click', () => pdf(false));
     $('#sp-pdf-sol').addEventListener('click', () => pdf(true));
+    $('#sp-tabla').addEventListener('change', e => {
+      const sel = e.target.closest('select[data-um]'); if (!sel) return;
+      if (sel.value === 'Pallet') delete umPed[sel.dataset.um]; else umPed[sel.dataset.um] = sel.value;
+      ls.set(claveBorrador() + '_um', umPed);
+    });
     $('#sp-tabla').addEventListener('input', e => {
       const i = e.target.closest('input[data-cod]'); if (!i) return;
       const v = num(i.value);
@@ -129,7 +140,7 @@ const SolicitudProductosSection = (() => {
       <tbody>${f.slice(0, 1500).map(r => { const p = pedido[r.codProducto], so = stockEn(r, st.origen); return `<tr class="${p ? 'sp-sel' : ''}">
         <td><b>${esc(r.codProducto)}</b></td><td>${esc(r.producto)}</td><td class="sp-um">${esc(r.unidadMedida)}</td>
         <td class="num">${ent(stockEn(r, st.destino))}</td><td class="num"><b>${ent(so)}</b></td>
-        <td class="num"><input class="sp-in sp-cant${p && p > so ? ' sp-over' : ''}" data-cod="${esc(r.codProducto)}" inputmode="decimal" value="${p ? esc(String(p).replace('.', ',')) : ''}" aria-label="Cantidad de ${esc(r.codProducto)}"></td></tr>`; }).join('')}</tbody></table>
+        <td class="num"><input class="sp-in sp-cant${p && p > so ? ' sp-over' : ''}" data-cod="${esc(r.codProducto)}" inputmode="decimal" value="${p ? esc(String(p).replace('.', ',')) : ''}" aria-label="Cantidad de ${esc(r.codProducto)}"><select class="sp-in sp-umsel" data-um="${esc(r.codProducto)}" aria-label="Unidad de ${esc(r.codProducto)}">${UMS.map(u => `<option${u === umDe(r.codProducto) ? ' selected' : ''}>${u}</option>`).join('')}</select></td></tr>`; }).join('')}</tbody></table>
       ${f.length > 1500 ? `<p class="sp-empty">Se muestran 1.500 de ${f.length}. Usa el buscador para encontrar el resto.</p>` : ''}`
       : '<p class="sp-empty">Ningún producto coincide.</p>';
   }
@@ -155,11 +166,11 @@ const SolicitudProductosSection = (() => {
     doc.autoTable({
       startY: y0, margin: { left: 24, right: 24 },
       head: [['Código Producto', 'Nombre Producto', 'U/M', D, O, 'SOLICITADO']],
-      body: lista.map(r => [r.codProducto, r.producto, r.unidadMedida, ent(stockEn(r, st.destino)), ent(stockEn(r, st.origen)), pedido[r.codProducto] ? nf(pedido[r.codProducto]) : '']),
+      body: lista.map(r => [r.codProducto, r.producto, r.unidadMedida, ent(stockEn(r, st.destino)), ent(stockEn(r, st.origen)), cantTxt(r.codProducto)]),
       theme: 'grid',
       styles: { font: 'helvetica', fontSize: 7, cellPadding: 2.5, lineColor: [150, 150, 150], lineWidth: 0.3, textColor: [0, 0, 0], overflow: 'ellipsize' },
       headStyles: { fillColor: [217, 217, 217], textColor: [0, 0, 0], fontStyle: 'bold', halign: 'center', overflow: 'linebreak' },
-      columnStyles: { 0: { cellWidth: 78 }, 1: { cellWidth: 'auto' }, 2: { cellWidth: 34, halign: 'center' }, 3: { cellWidth: 58, halign: 'right' }, 4: { cellWidth: 58, halign: 'right' }, 5: { cellWidth: 62, halign: 'right', fontStyle: 'bold' } },
+      columnStyles: { 0: { cellWidth: 78 }, 1: { cellWidth: 'auto' }, 2: { cellWidth: 34, halign: 'center' }, 3: { cellWidth: 58, halign: 'right' }, 4: { cellWidth: 58, halign: 'right' }, 5: { cellWidth: 72, halign: 'right', fontStyle: 'bold' } },
       didParseCell: c => { if (c.section === 'body' && c.column.index === 5) c.cell.styles.fillColor = c.cell.raw ? [255, 242, 204] : [255, 255, 255]; }
     });
     let y = doc.lastAutoTable.finalY + 14;
@@ -205,6 +216,7 @@ const SolicitudProductosSection = (() => {
       .sp-t .num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
       .sp-t tr.sp-sel td{background:#fff8e1}
       .sp-cant{width:90px;text-align:right;padding:6px 8px}
+      .sp-umsel{display:block;width:90px;margin:4px 0 0 auto;padding:3px 6px;font-size:12px}
       .sp-over{border-color:#dc2626;background:#fef2f2}
       .sp-empty{color:#8a97a5;padding:24px;text-align:center;margin:0}
       .sp-err{color:#b91c1c;padding:16px;margin:0}
@@ -213,7 +225,7 @@ const SolicitudProductosSection = (() => {
         .sp-meta{margin-left:0;flex-basis:100%}
         .sp-um{display:none}
         .sp-tw{max-height:none}
-        .sp-cant{width:70px}
+        .sp-cant,.sp-umsel{width:70px}
       }
     `;
     document.head.appendChild(s);

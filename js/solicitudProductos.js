@@ -145,44 +145,69 @@ const SolicitudProductosSection = (() => {
       : '<p class="sp-empty">Ningún producto coincide.</p>';
   }
 
-  // ============ PDF (formato de los petitorios: Código · Nombre · U/M · stock recibe · stock envía · SOLICITADO) ============
-  function pdf(soloPedido) {
+  // ============ PDF (mismo formato que la Orden de Traslado: logo Walter Lund + tabla azul) ============
+  const LOGO_URL = '/img/logo-walter-lund.png';
+  const LOGO_ANCHO = 130, LOGO_ALTO = LOGO_ANCHO * (278 / 766);
+  let logoData = null;
+  async function logo() {
+    if (logoData) return logoData;
+    try {
+      const b = await (await fetch(LOGO_URL)).blob();
+      logoData = await new Promise((ok, ko) => { const fr = new FileReader(); fr.onload = () => ok(fr.result); fr.onerror = ko; fr.readAsDataURL(b); });
+    } catch (e) { console.warn('Solicitud de productos: sin logo', e); }
+    return logoData;
+  }
+
+  async function pdf(soloPedido) {
     if (!recs || !st.destino || !st.origen) { alert('Elige primero tu sucursal y la bodega a la que pides.'); return; }
     if (!window.jspdf || !window.jspdf.jsPDF) { alert('No se cargó la librería de PDF'); return; }
     const lista = soloPedido ? recs.filter(r => pedido[r.codProducto]) : recs.filter(r => stockEn(r, st.origen) > 0 || pedido[r.codProducto]);
     if (!lista.length) { alert(soloPedido ? 'Aún no ingresas cantidades.' : 'La bodega que envía no tiene productos con stock.'); return; }
     const { jsPDF } = window.jspdf;
-    const doc = new jsPDF({ unit: 'pt', format: 'letter' });
+    const doc = new jsPDF({ unit: 'pt', format: 'letter', compress: true });
+    const W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight();
     const D = st.destino.toUpperCase(), O = st.origen.toUpperCase();
-    const hoy = new Date(), f = hoy.toLocaleDateString('es-CL');
-    doc.setFont('helvetica', 'bold'); doc.setFontSize(13);
-    doc.text(`${soloPedido ? 'Solicitud' : 'Listado'} de productos · ${corto(st.origen)} a ${corto(st.destino)}`, 30, 34);
-    doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5);
-    const info = [`Fecha: ${f} ${hoy.toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })}`, `Recibe: ${D}`, `Envía: ${O}`];
-    if (st.nombre) info.push(`Solicitado por: ${st.nombre}`);
-    doc.text(info.join('   ·   '), 30, 48);
-    let y0 = 56;
-    if (st.obs) { doc.text(`Observación: ${st.obs}`, 30, 60); y0 = 68; }
+    const hoy = new Date(), f = hoy.toLocaleDateString('es-CL').replace(/\//g, '-');
+    const hora = hoy.toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' });
+    const img = await logo();
+    if (img) doc.addImage(img, 'PNG', W - 24 - LOGO_ANCHO, 14, LOGO_ANCHO, LOGO_ALTO);
+
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(14);
+    doc.text(soloPedido ? 'Solicitud de Productos — Traslado entre Bodegas' : 'Listado de Productos — Para anotar solicitud', 24, 30);
+    doc.setFontSize(10);
+    doc.text(`Generado el ${f} ${hora}${st.nombre ? `   ·   Solicitado por: ${st.nombre}` : ''}`, 24, 46);
+
+    let y = 66;
+    doc.setFontSize(11); doc.setFont('helvetica', 'bold');
+    doc.text(`${soloPedido ? 'SOLICITUD' : 'LISTADO'} DE ${O} HACIA ${D}`, 24, y + 14);
+    doc.setFont('helvetica', 'normal');
+    y += 20;
+    if (st.obs) {
+      doc.setFontSize(9);
+      const lineas = doc.splitTextToSize(`Observación: ${st.obs}`, W - 48);
+      doc.text(lineas, 24, y + 10); y += 6 + lineas.length * 11;
+    }
+
     doc.autoTable({
-      startY: y0, margin: { left: 24, right: 24 },
-      head: [['Código Producto', 'Nombre Producto', 'U/M', D, O, 'SOLICITADO']],
+      startY: y, margin: { left: 24, right: 24 },
+      head: [['Cod. Producto', 'Producto', 'U/M', `Stock ${corto(st.destino)}`, `Stock ${corto(st.origen)}`, 'Solicitado']],
       body: lista.map(r => [r.codProducto, r.producto, r.unidadMedida, ent(stockEn(r, st.destino)), ent(stockEn(r, st.origen)), cantTxt(r.codProducto)]),
       theme: 'grid',
-      styles: { font: 'helvetica', fontSize: 7, cellPadding: 2.5, lineColor: [150, 150, 150], lineWidth: 0.3, textColor: [0, 0, 0], overflow: 'ellipsize' },
-      headStyles: { fillColor: [217, 217, 217], textColor: [0, 0, 0], fontStyle: 'bold', halign: 'center', overflow: 'linebreak' },
-      columnStyles: { 0: { cellWidth: 78 }, 1: { cellWidth: 'auto' }, 2: { cellWidth: 34, halign: 'center' }, 3: { cellWidth: 58, halign: 'right' }, 4: { cellWidth: 58, halign: 'right' }, 5: { cellWidth: 72, halign: 'right', fontStyle: 'bold' } },
-      didParseCell: c => { if (c.section === 'body' && c.column.index === 5) c.cell.styles.fillColor = c.cell.raw ? [255, 242, 204] : [255, 255, 255]; }
+      styles: { font: 'helvetica', fontSize: 8, cellPadding: 4, lineWidth: 0.5, textColor: [0, 0, 0], overflow: 'ellipsize' },
+      headStyles: { fillColor: [21, 101, 192], textColor: [255, 255, 255], fontStyle: 'bold', overflow: 'linebreak' },
+      columnStyles: { 0: { cellWidth: 82 }, 1: { cellWidth: 'auto', overflow: 'linebreak' }, 2: { cellWidth: 32, halign: 'center' }, 3: { cellWidth: 64, halign: 'right' }, 4: { cellWidth: 74, halign: 'right' }, 5: { cellWidth: 74, halign: 'right', fontStyle: 'bold' } },
+      didParseCell: c => { if (c.section === 'head' && c.column.index >= 3) c.cell.styles.halign = 'right'; if (c.section === 'head' && c.column.index === 2) c.cell.styles.halign = 'center'; }
     });
-    let y = doc.lastAutoTable.finalY + 14;
+    y = doc.lastAutoTable.finalY + 14;
     doc.setFontSize(8.5);
-    doc.text(`${lista.length} productos${soloPedido ? ' solicitados' : ''} · stock en vivo al ${f}`, 30, y);
+    doc.text(`${lista.length} productos${soloPedido ? ' solicitados' : ''} · stock en vivo al ${f} ${hora}`, 24, y);
     if (soloPedido) {
-      if (y > doc.internal.pageSize.getHeight() - 70) { doc.addPage(); y = 40; }
+      if (y > H - 70) { doc.addPage(); y = 40; }
       y += 40;
       doc.line(60, y, 230, y); doc.line(370, y, 540, y);
       doc.text('Preparado por (' + corto(st.origen) + ')', 90, y + 12); doc.text('Recibido por (' + corto(st.destino) + ')', 400, y + 12);
     }
-    doc.save(`${soloPedido ? 'Solicitud' : 'Listado'} ${corto(st.origen)} a ${corto(st.destino)} ${f.replace(/\//g, '-')}.pdf`);
+    doc.save(`${soloPedido ? 'Solicitud' : 'Listado'} ${corto(st.origen)} a ${corto(st.destino)} ${f}.pdf`);
   }
 
   function injectStyles() {

@@ -26,7 +26,7 @@ const NotasCreditoSection = (() => {
   const VALIDA_DESDE = '2025-01-01';
   const refDe = n => (n.docTipo === 'Boleta' ? 'B' : 'F') + String(n.docNum || '').trim();
   const ncsSf = n => (sfNc && sfNc.get(refDe(n))) || [];
-  const sinSoftland = n => !!sfNc && n.estado === 'EMITIDA' && String(n.fechaEmision || '') >= VALIDA_DESDE && !ncsSf(n).length;
+  const sinSoftland = n => !!sfNc && n.estado === 'EMITIDA' && String(n.fechaEmision || n.fechaSolicitud || hoy || '') >= VALIDA_DESDE && !ncsSf(n).length;
   const pendiente = n => POR_EMITIR.includes(n.estado) || sinSoftland(n);
   async function cargarSoftland() {
     try {
@@ -302,7 +302,7 @@ const NotasCreditoSection = (() => {
           ${n.facturaSustituta ? `<div><span>Factura sustituta</span><b>${esc(n.facturaSustituta)}</b></div>` : ''}
         </div>
         ${cfHtml ? `<p class="nc-cf">${cfHtml}</p>` : ''}
-        ${sinSoftland(n) ? `<div class="nc-note nc-an">⚠️ Está marcada como <b>emitida</b>${n.fechaEmision ? ' el ' + esc(fCorta(n.fechaEmision)) : ''}, pero <b>Softland no registra ninguna NC</b> para ${esc(docLbl(n))}. Se cuenta como pendiente hasta que aparezca en Softland (se revisa cada 10 min). Si se marcó por error, usa <b>Reabrir</b>.</div>` : ''}
+        ${sinSoftland(n) ? `<div class="nc-note nc-an">⚠️ Está marcada como <b>emitida</b>${n.fechaEmision ? ' el ' + esc(fCorta(n.fechaEmision)) : ' (sin fecha de emisión)'}, pero <b>Softland no registra ninguna NC</b> para ${esc(docLbl(n))}. Se cuenta como pendiente hasta que aparezca en Softland (se revisa cada 10 min). Si se marcó por error, usa <b>Reabrir</b>.</div>` : ''}
         ${POR_EMITIR.includes(n.estado) && diasDesde(n.fechaSolicitud) > DIAS_ANALIZAR ? `<div class="nc-note nc-an">⚠️ Lleva <b>${diasDesde(n.fechaSolicitud)} días</b> sin NC en sistema (más de ${DIAS_ANALIZAR}). Hay que analizar por qué aún no se hace la devolución en Softland.</div>` : ''}
         ${n.anulacion ? `<div class="nc-note anu">Anulada: ${esc(n.anulacion)}</div>` : ''}
         ${n.obs ? `<div class="nc-note">${esc(n.obs)}</div>` : ''}

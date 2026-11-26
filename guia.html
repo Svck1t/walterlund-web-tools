@@ -60,7 +60,12 @@
       fetch('data/guias-plantillas.json').then(r => r.json()),
       fetch('/api/guia?guia=' + encodeURIComponent(clave), { cache: 'no-store' }).then(r => r.json())
     ]);
-    if (!resp.ok) throw new Error(resp.error || 'No se pudo leer la guía');
+    if (!resp.ok) {
+      if (/^E[FB]/.test(clave) && /no encontrada/i.test(resp.error || ''))
+        throw new Error('Softland no registra una guía de entrada por devolución para esta ' + (clave[1] === 'B' ? 'boleta' : 'factura') +
+          '. Puede que la NC aún no se haya hecho en el sistema, que no haya tenido devolución de mercadería o que se haya emitido con otra referencia.');
+      throw new Error(resp.error || 'No se pudo leer la guía');
+    }
     const g = resp.guia;
     if (g.plantilla === 'devolucion' && !g.totalLetras) g.totalLetras = NumLetras.letras(g.netoNum);
     if (g.ted) {

@@ -19,6 +19,7 @@ const NotasCreditoSection = (() => {
     EMITIDA: ['Emitida', 'emi'], ANULADA: ['Anulada', 'anu']
   };
   const POR_EMITIR = ['SOLICITADA', 'PEND_DEVOLUCION', 'EN_BODEGA'];
+  const DIAS_ANALIZAR = 5;   // NC por emitir con más días que esto: se destaca en amarillo para analizar
   const FILTROS = [['emitir', 'Por emitir'], ['PEND_DEVOLUCION', 'Esperando devolución'], ['EN_BODEGA', 'En bodega'], ['EMITIDA', 'Emitidas'], ['ANULADA', 'Anuladas'], ['todas', 'Todas']];
   const MAX_ARCHIVO = 3 * 1024 * 1024;
   const KEY_QUIEN = 'wl_nc_quien';
@@ -179,7 +180,7 @@ const NotasCreditoSection = (() => {
     const tiempos = notas.filter(n => n.estado === 'EMITIDA' && n.fechaSolicitud && n.fechaEmision).map(n => dia(n.fechaEmision) - dia(n.fechaSolicitud)).filter(x => x >= 0);
     const prom = tiempos.length ? tiempos.reduce((a, b) => a + b, 0) / tiempos.length : null;
     root.querySelector('#nc-kpis').innerHTML = [
-      ['Por emitir', pend.length, pend.filter(n => diasDesde(n.fechaSolicitud) > 3).length ? `${pend.filter(n => diasDesde(n.fechaSolicitud) > 3).length} con más de 3 días` : '', 'nar'],
+      ['Por emitir', pend.length, pend.filter(n => diasDesde(n.fechaSolicitud) > DIAS_ANALIZAR).length ? `${pend.filter(n => diasDesde(n.fechaSolicitud) > DIAS_ANALIZAR).length} por analizar (más de ${DIAS_ANALIZAR} días)` : '', 'nar'],
       ['Esperando devolución', notas.filter(n => n.estado === 'PEND_DEVOLUCION').length, '', ''],
       ['Emitidas este mes', emMes.length, plata(emMes.reduce((s, n) => s + (Number(n.montoNc || (n.tipo === 'Completa' ? n.montoDoc : 0)) || 0), 0)), 'verde'],
       ['Días promedio a emisión', prom === null ? '—' : prom.toFixed(1).replace('.', ','), tiempos.length ? `${tiempos.length} NC medidas` : '', '']
@@ -198,10 +199,11 @@ const NotasCreditoSection = (() => {
     el.innerHTML = f.map(n => {
       const [lbl, cls] = EST[n.estado] || ['—', ''];
       const d = POR_EMITIR.includes(n.estado) ? diasDesde(n.fechaSolicitud) : null;
-      return `<button class="nc-item${st.sel === n.id ? ' cur' : ''}" data-id="${esc(n.id)}">
-        <div class="nc-it-top"><i class="nc-dot ${cls}"></i><b>${esc(docCorto(n))}</b>${n.tipo ? `<span class="nc-tipo">${esc(n.tipo)}</span>` : ''}${origenDe(n) === 'Presencial' ? '<span class="nc-tipo nc-pres">🏬 Presencial</span>' : ''}<span class="nc-it-r">${n.montoDoc ? plata(n.montoDoc) : ''}</span></div>
+      const analizar = d !== null && d > DIAS_ANALIZAR;
+      return `<button class="nc-item${st.sel === n.id ? ' cur' : ''}${analizar ? ' nc-analizar' : ''}" data-id="${esc(n.id)}"${analizar ? ` title="Lleva ${d} días sin NC en sistema: revisar"` : ''}>
+        <div class="nc-it-top"><i class="nc-dot ${cls}"></i><b>${esc(docCorto(n))}</b>${analizar ? '<span class="nc-tag-an">⚠ Analizar</span>' : ''}${n.tipo ? `<span class="nc-tipo">${esc(n.tipo)}</span>` : ''}${origenDe(n) === 'Presencial' ? '<span class="nc-tipo nc-pres">🏬 Presencial</span>' : ''}<span class="nc-it-r">${n.montoDoc ? plata(n.montoDoc) : ''}</span></div>
         <small>${esc(n.cliente || 'Sin cliente')}</small>
-        <small>${esc(lbl)}${n.motivo ? ' · ' + esc(n.motivo) : ''}${d !== null ? ` · <span class="${d > 3 ? 'nc-late' : ''}">${d <= 0 ? 'hoy' : d + (d === 1 ? ' día' : ' días')}</span>` : n.estado === 'EMITIDA' ? ' · ' + fCorta(n.fechaEmision) : ''}</small>
+        <small>${esc(lbl)}${n.motivo ? ' · ' + esc(n.motivo) : ''}${d !== null ? ` · <span class="${d > DIAS_ANALIZAR ? 'nc-late' : ''}">${d <= 0 ? 'hoy' : d + (d === 1 ? ' día' : ' días')}</span>` : n.estado === 'EMITIDA' ? ' · ' + fCorta(n.fechaEmision) : ''}</small>
       </button>`;
     }).join('') || `<p class="nc-empty">${notas.length ? 'Ninguna NC coincide' : 'Aún no hay notas de crédito. Crea una o importa el historial de Telegram.'}</p>`;
   }
@@ -266,6 +268,7 @@ const NotasCreditoSection = (() => {
           ${n.facturaSustituta ? `<div><span>Factura sustituta</span><b>${esc(n.facturaSustituta)}</b></div>` : ''}
         </div>
         ${cfHtml ? `<p class="nc-cf">${cfHtml}</p>` : ''}
+        ${POR_EMITIR.includes(n.estado) && diasDesde(n.fechaSolicitud) > DIAS_ANALIZAR ? `<div class="nc-note nc-an">⚠️ Lleva <b>${diasDesde(n.fechaSolicitud)} días</b> sin NC en sistema (más de ${DIAS_ANALIZAR}). Hay que analizar por qué aún no se hace la devolución en Softland.</div>` : ''}
         ${n.anulacion ? `<div class="nc-note anu">Anulada: ${esc(n.anulacion)}</div>` : ''}
         ${n.obs ? `<div class="nc-note">${esc(n.obs)}</div>` : ''}
       </div>
@@ -901,6 +904,11 @@ const NotasCreditoSection = (() => {
       .nc-item small{display:block;color:#5b6b7a;font-size:12px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
       .nc-tipo{font-size:10px;font-weight:700;text-transform:uppercase;color:#5b6b7a;background:#f3f4f6;border-radius:4px;padding:1px 5px}
       .nc-late{color:#c2410c;font-weight:700}
+      .nc-item.nc-analizar{background:#fef9c3;border-left-color:#eab308}
+      .nc-item.nc-analizar:hover{background:#fef08a}
+      .nc-item.nc-analizar.cur{background:#fde68a;border-left-color:#ca8a04}
+      .nc-tag-an{margin-left:6px;padding:1px 7px;border-radius:9px;background:#facc15;color:#713f12;font-size:11px;font-weight:700}
+      .nc-note.nc-an{background:#fef9c3;border:1px solid #fde047;color:#713f12}
       .nc-tipo.nc-pres{background:#e0f2fe;color:#075985}
       .nc-dot{display:inline-block;width:9px;height:9px;border-radius:50%;flex-shrink:0;background:#cbd5e1}
       .nc-dot.sol{background:#2563eb}.nc-dot.dev{background:#ea580c}.nc-dot.bod{background:#9333ea}.nc-dot.emi{background:#16a34a}.nc-dot.anu{background:#9ca3af}

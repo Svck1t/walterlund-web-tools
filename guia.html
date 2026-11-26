@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Guía Softland</title>
+<style>
+  @page { size: A4; margin: 0 }
+  body { margin: 0; background: #e9e9e9; font-family: Arial, sans-serif }
+  .pag { page-break-after: always }
+  .t { position: absolute; white-space: pre }
+  #bar { position: sticky; top: 0; z-index: 9; background: #1f2937; color: #fff; padding: 8px 12px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap }
+  #bar button { padding: 7px 14px; border: 0; border-radius: 4px; background: #2563eb; color: #fff; cursor: pointer; font-size: 14px }
+  #bar .sec { background: #374151 }
+  #titulo { font-weight: 600 }
+  #msg { font-size: 13px; opacity: .9 }
+  #hojas { padding: 16px 0; overflow-x: auto }
+  #hojas .pag { margin: 0 auto 16px; box-shadow: 0 2px 8px rgba(0, 0, 0, .25) }
+  @media print {
+    #bar { display: none }
+    body { background: #fff }
+    #hojas { padding: 0 }
+    #hojas .pag { margin: 0; box-shadow: none }
+  }
+</style>
+</head>
+<body>
+<div id="bar">
+  <span id="titulo">Guía</span>
+  <button onclick="window.print()">🖨️ Imprimir / Guardar PDF</button>
+  <button class="sec" onclick="window.close()">Cerrar</button>
+  <span id="msg">Cargando…</span>
+</div>
+<div id="hojas"></div>
+
+<script src="js/vendor/bwip-js-min.js"></script>
+<script src="js/guiaSoftland.js"></script>
+<script>
+// Visor de guías con el formato de impresión de Softland.
+// Uso: guia.html?guia=S15837 (salida)  ·  guia.html?guia=ET15837 (entrada de esa salida)
+(async () => {
+  const msg = document.getElementById('msg');
+  const clave = (new URLSearchParams(location.search).get('guia') || '').toUpperCase();
+  const nombre = clave.startsWith('ET') ? `Guía de entrada (traslado ${clave.slice(2)})` : `Guía de salida ${clave.slice(1)}`;
+  document.getElementById('titulo').textContent = nombre;
+  document.title = nombre;
+  try {
+    if (!clave) throw new Error('Falta indicar la guía');
+    const [tpls, resp] = await Promise.all([
+      fetch('data/guias-plantillas.json').then(r => r.json()),
+      fetch('/api/guia?guia=' + encodeURIComponent(clave), { cache: 'no-store' }).then(r => r.json())
+    ]);
+    if (!resp.ok) throw new Error(resp.error || 'No se pudo leer la guía');
+    const g = resp.guia;
+    if (g.ted) {
+      const c = document.createElement('canvas');
+      bwipjs.toCanvas(c, { bcid: 'pdf417', text: g.ted, eclevel: 5, columns: 12, rowheight: 3, scale: 2 });
+      g.timbre = c.toDataURL('image/png');
+    }
+    document.getElementById('hojas').innerHTML = GuiaSoftland.renderGuia(tpls[g.plantilla], g);
+    msg.textContent = '';
+  } catch (e) {
+    msg.textContent = '⚠️ ' + e.message;
+  }
+})();
+</script>
+</body>
+</html>

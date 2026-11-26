@@ -409,6 +409,7 @@ const TrasladosSection = (() => {
       if (a === 'confirmar') guardar();
       if (a === 'cancelar') { pendiente = null; root.querySelector('#tr-preview').innerHTML = ''; }
       if (a === 'mas') { visibles += PAGINA; renderListado(false); }
+      if (a === 'doc') window.open('guia.html?guia=' + encodeURIComponent(act.dataset.g), '_blank');
       return;
     }
     const fila = e.target.closest('tr[data-k]');
@@ -452,9 +453,9 @@ const TrasladosSection = (() => {
       return `<tr data-k="${esc(g.k)}" class="${abierta === g.k ? 'tr-open' : ''}">
         <td class="c-fecha">${fCorta(g.fecha)}</td>
         <td class="c-folio"><b>${esc(g.folio)}</b></td>
-        <td class="c-ori">${pill(g.origen)}</td>
+        <td class="c-ori">${pill(g.origen)}${btnDoc(g, 'S')}</td>
         <td class="c-flecha">→</td>
-        <td class="c-des">${pill(g.destino)}</td>
+        <td class="c-des">${pill(g.destino)}${btnDoc(g, 'ET')}</td>
         <td class="c-lin num">${g.lineas ? nf(g.lineas.length) + (g.lineas.length === 1 ? ' línea' : ' líneas') : '—'}</td>
         <td class="c-val num">${g.valor != null ? '$' + nf(g.valor) : '—'}</td></tr>${det}`;
     }).join('');
@@ -467,9 +468,20 @@ const TrasladosSection = (() => {
 
   const pill = b => `<span class="tr-pill" style="--c:${colorBod(b)}">${esc(b)}</span>`;
 
+  // Documentos de Softland (visor guia.html): disponibles desde 2025 para guías electrónicas.
+  // S = guía de salida (origen) · ET = guía de entrada que Softland genera en el destino.
+  const tieneDoc = g => g.fecha >= '2025-01-01' && g.tipo !== 'MANUAL';
+  const btnDoc = (g, t) => tieneDoc(g)
+    ? `<button class="tr-doc" data-act="doc" data-g="${t}${esc(g.folio)}" title="${t === 'S' ? 'Ver guía de salida' : 'Ver guía de entrada'}">📄</button>`
+    : '';
+  const docsDetalle = g => tieneDoc(g)
+    ? `<div class="tr-docs"><button class="tr-btn tr-btn-sec" data-act="doc" data-g="S${esc(g.folio)}">📄 Guía de salida · ${esc(g.origen)}</button>
+       <button class="tr-btn tr-btn-sec" data-act="doc" data-g="ET${esc(g.folio)}">📄 Guía de entrada · ${esc(g.destino)}</button></div>`
+    : '';
+
   function detalle(g) {
-    if (!g.lineas || !g.lineas.length) return '<p class="tr-sub">Guía sin detalle de productos.</p>';
-    return `<table class="tr-lin"><thead><tr><th>Código</th><th>Producto</th><th class="num">Cantidad</th><th>U/M</th><th class="num">Total</th></tr></thead>
+    if (!g.lineas || !g.lineas.length) return docsDetalle(g) + '<p class="tr-sub">Guía sin detalle de productos.</p>';
+    return docsDetalle(g) + `<table class="tr-lin"><thead><tr><th>Código</th><th>Producto</th><th class="num">Cantidad</th><th>U/M</th><th class="num">Total</th></tr></thead>
       <tbody>${g.lineas.map(l => `<tr><td>${esc(l[0])}</td><td>${esc(l[1])}</td><td class="num">${nf(l[3], l[3] % 1 ? 2 : 0)}</td><td>${esc(l[2])}</td><td class="num">$${nf(l[5])}</td></tr>`).join('')}</tbody></table>
       <p class="tr-sub">${esc(g.tipo || '')} · Destino en Softland: ${esc(g.destinoRaw)}</p>`;
   }
@@ -709,6 +721,10 @@ const TrasladosSection = (() => {
       .tr-lin th{text-align:left;padding:6px 8px;background:#eef0f3}
       .tr-lin td{padding:6px 8px;border-top:1px solid #f0f1f4}
       .tr-mas{margin:12px auto 0;display:block}
+      .tr-doc{margin-left:6px;padding:1px 5px;border:1px solid #d1d5db;border-radius:5px;background:#fff;cursor:pointer;font-size:13px;line-height:1.3;vertical-align:middle}
+      .tr-doc:hover{background:#eef2ff;border-color:#667eea}
+      .tr-docs{display:flex;gap:8px;flex-wrap:wrap;margin:2px 0 10px}
+      .tr-docs .tr-btn{padding:7px 12px;font-size:13px}
       @media (max-width:900px){.tr-grid2{grid-template-columns:1fr}.tr-head{flex-direction:column}.tr-prev-grid{grid-template-columns:1fr 1fr}}
       @media (max-width:700px){
         .tr{padding:0}

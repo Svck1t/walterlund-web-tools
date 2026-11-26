@@ -42,30 +42,47 @@ const NotasCreditoSection = (() => {
     } catch (err) { console.error('NC Softland:', err); sfNc = null; }
     try {
       const filas = await leer('facturas');
-      sfFac = new Map(filas.map(([clave, fecha, cliente, rut, bodega, total, vendedor, productos]) => {
-        let prods = []; try { prods = JSON.parse(productos || '[]'); } catch (_) {}
-        return [clave, { fecha, cliente, rut, bodega, total: Number(total) || 0, vendedor, productos: prods }];
+      sfFac = new Map(filas.map(([clave, fecha, cliente, rut, bodega, total, vendedor, productos, devoluciones]) => {
+        let prods = [], devs = []; try { prods = JSON.parse(productos || '[]'); } catch (_) {} try { devs = JSON.parse(devoluciones || '[]'); } catch (_) {}
+        return [clave, { fecha, cliente, rut, bodega, total: Number(total) || 0, vendedor, productos: prods, devoluciones: devs }];
       }));
     } catch (err) { console.error('Facturas Softland:', err); sfFac = null; }
     if (cargado) { aplicarSoftland(); dibujar(); }
   }
 
   // Motivo desde la glosa de la NC en Softland, con las mismas categorías de la web (null si no calza ninguna)
+  // Reglas probadas con 600 glosas reales de Softland (incluye errores de tipeo frecuentes)
   const REGLAS_MOTIVO = [
-    [/DUPLIC/, 'Duplicidad de factura'], [/RAZON SOCIAL|RAZ\. SOCIAL|RUT ERRONEO|CAMBIO DE RUT/, 'Cambio de razón social'],
-    [/CAMBIO DE FACTURA|REFACTUR|SUSTITU|SE FACTURA NUEVAMENTE/, 'Cambio de factura'], [/PAGO/, 'Cambio de pago'],
-    [/CAMBIO DE BODEGA|OTRA BODEGA/, 'Cambio de bodega'], [/MEDIDA|FORMATO|TAMA[NÑ]O/, 'Cambio de medida'],
-    [/CORTAD|CORTE/, 'Material cortado'], [/CAMBIO DE MATERIAL|CAMBIO MATERIAL/, 'Cambio de material'],
-    [/CAMBIO DE PRODUCTO|CAMBIO PRODUCTO|CAMBIO DE CODIGO/, 'Cambio de producto'],
-    [/NO DESPACH|NO SE DESPACH|NO ENTREGAD|NO LLEG|FALTANTE|FALTA/, 'Producto no despachado'],
-    [/RECHAZ/, 'Cliente rechaza material'], [/DEVUELVE|DEVOLUCION|DEVUELTO/, 'Cliente devuelve producto'],
-    [/ANULA|DESISTE|CANCELA/, 'Cliente anula pedido'], [/PRECIO|MONTO|DESCUENTO|VALOR|COBRO|FLETE/, 'Error de precio o monto'],
-    [/STOCK|SIN EXISTENCIA/, 'Stock erróneo/incompleto'], [/SISTEMA/, 'Error de sistema'],
-    [/EJECUTIV|VENDEDOR/, 'Cambio/error ejecutivo'], [/SOLICITUD|CLIENTE SOLICIT|CLIENTE PIDE|ERROR CLIENTE|ERROR DEL CLIENTE/, 'Error en solicitud del cliente'],
-    [/DIGITA|ERROR/, 'Error en digitación']
+    [/DUPLIC/, 'Duplicidad de factura'],
+    [/RAZON SOCIAL|INICI?O DE GIRO/, 'Cambio de razón social'],
+    [/CONDICION DE PAGO|FORMA DE PAGO|CAMBIO DE PAGO/, 'Cambio de pago'],
+    [/CAMBIO DE BO[BD]EGA/, 'Cambio de bodega'],
+    [/RECHAZADA EN (EL )?SII|ERROR (DEL?|EN EL) SISTEMA|ERROR DE SOFTLAND/, 'Error de sistema'],
+    [/REFACTUR|CAMBIO DE FACTURA|SE CAMBIA A FACTURA/, 'Cambio de factura'],
+    [/MEDIDA/, 'Cambio de medida'],
+    [/CORTAD/, 'Material cortado'],
+    [/CAMBIO DE MATERIAL/, 'Cambio de material'],
+    [/CAMBIO DE\s+PRODU/, 'Cambio de producto'],
+    [/EJECUTIV|VENDEDOR/, 'Cambio/error ejecutivo'],
+    [/NO SE DESPACH|NO DESPACH|ERROR EN (LA )?ENTREGA/, 'Producto no despachado'],
+    [/RECHAZ/, 'Cliente rechaza material'],
+    [/DEVOLUCION|DEVUELT|DEVUELVE|DAÑO|DANO|VENCID|^DEV\.?\s+PARC/, 'Cliente devuelve producto'],
+    [/ANUA?LA\s+(EL\s+)?PEDID|SE ANULA PEDIDO|CLIENTE ANULA/, 'Cliente anula pedido'],
+    [/PRECIO|PESO|MONTO|DESCUENTO/, 'Error de precio o monto'],
+    [/STOCK/, 'Stock erróneo/incompleto'],
+    [/SOLICITUD (DE|DEL) CLIENTE/, 'Error en solicitud del cliente'],
+    [/DIGITA|ERROR EN CODIGO/, 'Error en digitación']
   ];
-  const sinTilde = t => String(t || '').toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-  const motivoDeGlosa = g => { const t = sinTilde(g); const r = REGLAS_MOTIVO.find(([re]) => re.test(t)); return r ? r[1] : null; };
+  // Glosas genéricas que no dicen el motivo ("Anula completa la fact. N°…", "ref. factura n° … completa"): se mantiene el de la web
+  const GLOSA_GENERICA = /^(ANULA|AULA)\s+C\S*\s*LA\s+(FACT|BOLETA)|^REF\S*\s+FACTURA\s+N\S*\s*\d+\s*(COMPLETA|PARCIAL)?\s*$/;
+  const sinTilde = t => String(t || '').toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim();
+  const motivoDeGlosa = g => {
+    const t = sinTilde(g);
+    if (!t) return null;
+    const r = REGLAS_MOTIVO.find(([re]) => re.test(t));
+    if (r) return r[1];
+    return GLOSA_GENERICA.test(t) ? null : 'Otro';
+  };
 
   // Manda Softland: reemplaza los datos de cada NC con los de Softland; lo distinto que estaba en la web queda como nota (n._dif)
   function aplicarSoftland() {
@@ -80,6 +97,9 @@ const NotasCreditoSection = (() => {
         if (f.fecha) sf.fechaDoc = f.fecha;
         if (f.total) sf.montoDoc = f.total;
         n.sfRut = f.rut; n.sfVendedor = f.vendedor; n.sfProductos = f.productos;
+        // productos devueltos: directo de las guías de entrada por devolución de Softland (ya no hace falta el informe)
+        if (n._devWeb === undefined) n._devWeb = n.devoluciones;
+        n.devoluciones = f.devoluciones && f.devoluciones.length ? JSON.stringify(f.devoluciones) : n._devWeb;
       }
       if (ncs.length) {
         sf.folioNc = ncs.map(x => x.folio).join(', ');
@@ -89,7 +109,8 @@ const NotasCreditoSection = (() => {
         const glosas = sinTilde(ncs.map(x => x.glosa).join(' '));
         if (base && tot) sf.tipo = tot >= base * 0.99 ? 'Completa' : 'Parcial';
         else if (/PARCIAL/.test(glosas)) sf.tipo = 'Parcial'; else if (/COMPLETA|TOTAL/.test(glosas)) sf.tipo = 'Completa';
-        const mot = motivoDeGlosa(ncs.map(x => x.glosa).join(' '));
+        const mots = ncs.map(x => motivoDeGlosa(x.glosa)).filter(Boolean);
+        const mot = mots.find(m => m !== 'Otro') || mots[0];
         if (mot) sf.motivo = mot;
         n.sfGlosa = ncs.map(x => x.glosa).filter(Boolean).join(' · ');
       }
@@ -374,7 +395,6 @@ const NotasCreditoSection = (() => {
         ${n.obs ? `<div class="nc-note">${esc(n.obs)}</div>` : ''}
       </div>
       ${devolucionesHtml(n)}
-      ${datosLeidos(n)}
       <div class="nc-card"><h3 class="nc-h3">Respaldos</h3>
         <div class="nc-files">${arch('solicitudUrl', 'Solicitud', '📝')}${autorizacion(n)}${ncSoftland(n)}</div>
       </div>
@@ -825,8 +845,8 @@ const NotasCreditoSection = (() => {
   function devolucionesHtml(n) {
     const ds = devsDe(n);
     if (!ds.length) return '';
-    return `<div class="nc-card"><h3 class="nc-h3">Devolución registrada en Softland <span class="nc-dim">(${ds.length === 1 ? '1 guía de recepción' : ds.length + ' guías de recepción'})</span></h3>
-      ${ds.map(g => `<p class="nc-p" style="margin:6px 0"><b>Guía de recepción N° ${esc(g.folio)}</b> · ${fCorta(g.fecha)} · ${esc(g.bodega)} · ${plata(g.total)}</p>
+    return `<div class="nc-card"><h3 class="nc-h3">Devolución registrada en Softland <span class="nc-dim">(${ds.length === 1 ? '1 guía de entrada' : ds.length + ' guías de entrada'})</span></h3>
+      ${ds.map(g => `<p class="nc-p" style="margin:6px 0"><b>Guía de entrada N° ${esc(g.folio)}</b> · ${fCorta(g.fecha)} · ${esc(g.bodega)} · ${plata(g.total)}</p>
         <div class="nc-tw"><table class="nc-t"><thead><tr><th>Código</th><th>Producto</th><th class="num">Cant.</th><th>Un.</th><th class="num">Precio unit.</th><th class="num">Total</th></tr></thead>
         <tbody>${(g.lineas || []).map(l => `<tr><td><b>${esc(l.codigo)}</b></td><td>${esc(l.descripcion)}</td><td class="num">${nf(l.cantidad) || l.cantidad}</td><td>${esc(l.um)}</td><td class="num">${plata(l.precio)}</td><td class="num">${plata(l.total)}</td></tr>`).join('')}</tbody></table></div>`).join('')}
     </div>`;

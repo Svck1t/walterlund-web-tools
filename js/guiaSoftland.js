@@ -4,11 +4,25 @@
   const FAM = { Calibri: "Calibri, Carlito, sans-serif", Arial: "Arial, 'Liberation Sans', sans-serif" };
   const esc = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
+  // Corta el texto en una letra completa para que quepa en e.w (como Softland/Excel), sin montarse sobre lo de al lado
+  let ctx = null;
+  function ajustar(e, txt) {
+    txt = String(txt == null ? '' : txt);
+    if (!e.w || typeof document === 'undefined') return txt;
+    ctx = ctx || document.createElement('canvas').getContext('2d');
+    ctx.font = `${e.bold ? 'bold ' : ''}${e.size}pt ${FAM[e.fam]}`;
+    const max = e.w * 4 / 3; // pt -> px
+    if (ctx.measureText(txt).width <= max) return txt;
+    while (txt.length && ctx.measureText(txt).width > max) txt = txt.slice(0, -1);
+    return txt.replace(/\s+$/, '');
+  }
+
   function textEl(e, txt, dy) {
+    txt = ajustar(e, txt);
     const y = e.y + (dy || 0);
     let st = `top:${y}pt;font:${e.bold ? 'bold ' : ''}${e.size}pt/${e.h}pt ${FAM[e.fam]};color:${e.c};`;
     if (e.align === 'center' || e.align === 'right') st += `left:${e.cx0}pt;width:${e.cx1 - e.cx0}pt;text-align:${e.align};`;
-    else st += `left:${e.x}pt;`;
+    else st += `left:${e.x}pt;` + (e.w ? `width:${e.w}pt;overflow:hidden;` : '');
     return `<div class="t" style="${st}">${esc(txt)}</div>`;
   }
 

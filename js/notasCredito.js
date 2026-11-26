@@ -47,7 +47,7 @@ const NotasCreditoSection = (() => {
         return [clave, { fecha, cliente, rut, bodega, total: Number(total) || 0, vendedor, productos: prods, devoluciones: devs }];
       }));
     } catch (err) { console.error('Facturas Softland:', err); sfFac = null; }
-    if (cargado) { aplicarSoftland(); dibujar(); }
+    if (cargado) { aplicarSoftland(); dibujar(); autoEmitir(); }
   }
 
   // Motivo desde la glosa de la NC en Softland, con las mismas categorías de la web (null si no calza ninguna)
@@ -127,6 +127,24 @@ const NotasCreditoSection = (() => {
       n._sf = !!(f || ncs.length);
     });
   }
+  // Si Softland ya tiene la NC y en la web sigue "por emitir", se marca Emitida sola (con folio, fecha y monto de Softland).
+  // Solo cuenta una NC de Softland con fecha >= solicitud − 7 días, para no tomar una NC antigua de la misma factura.
+  const autoHechas = new Set();
+  const ncDeSolicitud = n => { const desde = n.fechaSolicitud ? new Date(dia(n.fechaSolicitud) * 864e5 - 7 * 864e5).toISOString().slice(0, 10) : ''; return ncsSf(n).filter(x => String(x.fecha || '') >= desde); };
+  async function autoEmitir() {
+    if (!sfNc || !cargado) return;
+    const lista = notas.filter(n => POR_EMITIR.includes(n.estado) && !autoHechas.has(n.id) && ncDeSolicitud(n).length);
+    if (!lista.length) return;
+    let ok = 0;
+    for (const n of lista) {
+      autoHechas.add(n.id);
+      const ncs = ncDeSolicitud(n), fecha = ncs.map(x => String(x.fecha)).sort().pop();
+      const tot = ncs.reduce((a, x) => a + x.total, 0);
+      try { await post({ action: 'nc_emitir', id: n.id, folio: ncs.map(x => x.folio).join(', '), fecha, montoNc: tot || '', facturaSustituta: '', archivo: null, quien: 'Softland (automático)' }); ok++; }
+      catch (e) { console.error('Auto-emitir', n.docNum, e); }
+    }
+    if (ok) { toast(`${ok} NC pasaron a Emitidas (ya están en Softland)`); await cargar(); }
+  }
   const FILTROS = [['emitir', 'Por emitir'], ['PEND_DEVOLUCION', 'Esperando devolución'], ['EN_BODEGA', 'En bodega'], ['EMITIDA', 'Emitidas'], ['ANULADA', 'Anuladas'], ['todas', 'Todas']];
   const MAX_ARCHIVO = 3 * 1024 * 1024;
   const KEY_QUIEN = 'wl_nc_quien';
@@ -170,7 +188,7 @@ const NotasCreditoSection = (() => {
       const d = await r.json();
       if (!d.ok) throw new Error(d.error || 'Respuesta inválida');
       notas = d.notas; tgs = d.tg || []; hoy = d.hoy || hoyLocal(); cargado = true; errorCarga = '';
-      aplicarSoftland();
+      aplicarSoftland(); autoEmitir();
     } catch (err) { console.error('NC:', err); errorCarga = err.message; hoy = hoy || hoyLocal(); }
     dibujar();
   }

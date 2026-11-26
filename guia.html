@@ -16,6 +16,9 @@
   #msg { font-size: 13px; opacity: .9 }
   #hojas { padding: 16px 0; overflow-x: auto }
   #hojas .pag { margin: 0 auto 16px; box-shadow: 0 2px 8px rgba(0, 0, 0, .25) }
+  body.embed #bar { display: none }
+  body.embed { background: #f3f4f6 }
+  body.embed #hojas { padding: 6px 0 }
   @media print {
     #bar { display: none }
     body { background: #fff }
@@ -39,7 +42,11 @@
 // Visor de guías con el formato de impresión de Softland.
 // Uso: guia.html?guia=S15837 (salida)  ·  guia.html?guia=ET15837 (entrada de esa salida)
 (async () => {
+  const embed = new URLSearchParams(location.search).get('embed') === '1';
+  if (embed) document.body.classList.add('embed');
   const msg = document.getElementById('msg');
+  const avisar = t => { msg.textContent = t; if (embed) document.getElementById('hojas').innerHTML = t ? `<p style="text-align:center;color:#6b7280;font:14px Arial;padding:40px 10px">${t}</p>` : ''; };
+  avisar('Cargando…');
   const clave = (new URLSearchParams(location.search).get('guia') || '').toUpperCase();
   const nombre = clave.startsWith('ET') ? `Guía de entrada (traslado ${clave.slice(2)})` : `Guía de salida ${clave.slice(1)}`;
   document.getElementById('titulo').textContent = nombre;
@@ -57,10 +64,19 @@
       bwipjs.toCanvas(c, { bcid: 'pdf417', text: g.ted, eclevel: 5, columns: 12, rowheight: 3, scale: 2 });
       g.timbre = c.toDataURL('image/png');
     }
-    document.getElementById('hojas').innerHTML = GuiaSoftland.renderGuia(tpls[g.plantilla], g);
     msg.textContent = '';
+    document.getElementById('hojas').innerHTML = GuiaSoftland.renderGuia(tpls[g.plantilla], g);
+    // en pantallas angostas, achica la hoja para que quepa a lo ancho (no afecta la impresión)
+    const ajustar = () => {
+      const pag = document.querySelector('#hojas .pag'); if (!pag) return;
+      const z = Math.min(1, (window.innerWidth - 12) / pag.offsetWidth);
+      pag.style.zoom = z < 1 ? z : '';
+    };
+    ajustar(); window.addEventListener('resize', ajustar);
+    window.addEventListener('beforeprint', () => { const pag = document.querySelector('#hojas .pag'); if (pag) pag.style.zoom = ''; });
+    window.addEventListener('afterprint', ajustar);
   } catch (e) {
-    msg.textContent = '⚠️ ' + e.message;
+    avisar('⚠️ ' + e.message);
   }
 })();
 </script>

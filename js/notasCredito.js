@@ -228,14 +228,22 @@ const NotasCreditoSection = (() => {
       : reg ? `✓ Registrada en Control de Despachos el ${esc(reg.fecha)}${reg.bodega ? ' · ' + esc(reg.bodega) : ''}${reg.proceso ? ' · ' + esc(reg.proceso) : ''}${reg.nc ? ` · <b>N/C ${esc(reg.nc)}</b> marcada${reg.motivoNc ? ' (' + esc(reg.motivoNc) + ')' : ''}` : ' · sin N/C marcada allá'}`
       : '<span class="nc-dim">No aparece en Control de Despachos</span>';
     // 3er respaldo: la guía de entrada por devolución que Softland genera al emitir la NC
-    // (visor guia.html, clave EF + factura / EB + boleta). El PDF timbrado, si se adjuntó, queda como secundario.
+    // (visor guia.html, clave EF + factura / EB + boleta).
     const ncSoftland = n => {
       const clave = (n.docTipo === 'Boleta' ? 'EB' : 'EF') + String(n.docNum || '').trim();
       const ver = n.estado === 'EMITIDA' && /^E[FB]\d+$/.test(clave);
       return `<div class="nc-file${ver ? ' has' : ''}"><span>🧾 Nota de Crédito</span>
         ${ver ? `<button class="nc-b nc-sm" data-guia="${esc(clave)}" data-titulo="${esc('Guía de entrada por devolución · ' + docLbl(n) + (n.folioNc ? ' · NC ' + n.folioNc : ''))}">Ver</button>`
               : '<em>Se verá al emitir la NC en Softland</em>'}
-        ${n.ncUrl ? `<button class="nc-b nc-sm" data-file="${esc(n.ncUrl)}" data-titulo="${esc('NC timbrada · ' + docLbl(n))}">PDF timbrado</button>` : ''}</div>`;
+</div>`;
+    };
+    // 2º respaldo: autorización de bodega = documento timbrado (campo ncUrl); la foto de bodega (fotoUrl), si existe, como secundaria
+    const autorizacion = n => {
+      const doc = n.ncUrl, foto = n.fotoUrl;
+      return `<div class="nc-file${doc || foto ? ' has' : ''}"><span>📷 Autorización Bodega</span>
+        ${doc ? `<button class="nc-b nc-sm" data-file="${esc(doc)}" data-titulo="${esc('Autorización Bodega · ' + docLbl(n))}">Ver</button>` : '<em>Sin archivo</em>'}
+        ${foto ? `<button class="nc-b nc-sm" data-file="${esc(foto)}" data-titulo="${esc('Foto bodega · ' + docLbl(n))}">Ver foto</button>` : ''}
+        <label class="nc-b nc-sm">${doc ? 'Reemplazar' : 'Adjuntar'}<input type="file" accept="image/*,application/pdf" data-campo="ncUrl" hidden></label></div>`;
     };
     const arch = (campo, titulo, icono) => {
       const url = n[campo];
@@ -275,7 +283,7 @@ const NotasCreditoSection = (() => {
       ${devolucionesHtml(n)}
       ${datosLeidos(n)}
       <div class="nc-card"><h3 class="nc-h3">Respaldos</h3>
-        <div class="nc-files">${arch('solicitudUrl', 'Solicitud', '📝')}${arch('fotoUrl', 'Autorización Bodega', '📷')}${ncSoftland(n)}</div>
+        <div class="nc-files">${arch('solicitudUrl', 'Solicitud', '📝')}${autorizacion(n)}${ncSoftland(n)}</div>
       </div>
       <div class="nc-card"><h3 class="nc-h3">Historial</h3>
         <ol class="nc-hist">${historial(n).slice().reverse().map(h => `<li><b>${esc(h.q || '—')}</b> ${esc(h.t)}<small>${esc(h.f)}</small></li>`).join('') || '<li class="nc-dim">Sin movimientos</li>'}</ol>

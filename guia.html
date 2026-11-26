@@ -38,6 +38,7 @@
 
 <script src="js/vendor/bwip-js-min.js"></script>
 <script src="js/guiaSoftland.js"></script>
+<script src="js/numLetras.js"></script>
 <script>
 // Visor de guías con el formato de impresión de Softland.
 // Uso: guia.html?guia=S15837 (salida)  ·  guia.html?guia=ET15837 (entrada de esa salida)
@@ -48,7 +49,9 @@
   const avisar = t => { msg.textContent = t; if (embed) document.getElementById('hojas').innerHTML = t ? `<p style="text-align:center;color:#6b7280;font:14px Arial;padding:40px 10px">${t}</p>` : ''; };
   avisar('Cargando…');
   const clave = (new URLSearchParams(location.search).get('guia') || '').toUpperCase();
-  const nombre = clave.startsWith('ET') ? `Guía de entrada (traslado ${clave.slice(2)})` : `Guía de salida ${clave.slice(1)}`;
+  const nombre = clave.startsWith('ET') ? `Guía de entrada (traslado ${clave.slice(2)})`
+    : /^E[FB]/.test(clave) ? `Guía de entrada por devolución (${clave[1] === 'B' ? 'boleta' : 'factura'} ${clave.slice(2)})`
+    : `Guía de salida ${clave.slice(1)}`;
   document.getElementById('titulo').textContent = nombre;
   document.title = nombre;
   try {
@@ -59,6 +62,7 @@
     ]);
     if (!resp.ok) throw new Error(resp.error || 'No se pudo leer la guía');
     const g = resp.guia;
+    if (g.plantilla === 'devolucion' && !g.totalLetras) g.totalLetras = NumLetras.letras(g.netoNum);
     if (g.ted) {
       const c = document.createElement('canvas');
       bwipjs.toCanvas(c, { bcid: 'pdf417', text: g.ted, eclevel: 5, columns: 12, rowheight: 3, scale: 2 });

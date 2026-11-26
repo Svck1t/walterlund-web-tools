@@ -409,6 +409,7 @@ const TrasladosSection = (() => {
       if (a === 'confirmar') guardar();
       if (a === 'cancelar') { pendiente = null; root.querySelector('#tr-preview').innerHTML = ''; }
       if (a === 'mas') { visibles += PAGINA; renderListado(false); }
+      if (a === 'doc') verDoc(act.dataset.g, act.dataset.t);
       return;
     }
     const fila = e.target.closest('tr[data-k]');
@@ -452,9 +453,9 @@ const TrasladosSection = (() => {
       return `<tr data-k="${esc(g.k)}" class="${abierta === g.k ? 'tr-open' : ''}">
         <td class="c-fecha">${fCorta(g.fecha)}</td>
         <td class="c-folio"><b>${esc(g.folio)}</b></td>
-        <td class="c-ori">${pill(g.origen)}</td>
+        <td class="c-ori">${pill(g.origen)}${btnDoc(g, 'S')}</td>
         <td class="c-flecha">→</td>
-        <td class="c-des">${pill(g.destino)}</td>
+        <td class="c-des">${pill(g.destino)}${btnDoc(g, 'ET')}</td>
         <td class="c-lin num">${g.lineas ? nf(g.lineas.length) + (g.lineas.length === 1 ? ' línea' : ' líneas') : '—'}</td>
         <td class="c-val num">${g.valor != null ? '$' + nf(g.valor) : '—'}</td></tr>${det}`;
     }).join('');
@@ -467,9 +468,47 @@ const TrasladosSection = (() => {
 
   const pill = b => `<span class="tr-pill" style="--c:${colorBod(b)}">${esc(b)}</span>`;
 
+  // Documentos de Softland (visor guia.html): disponibles desde 2025 para guías electrónicas.
+  // S = guía de salida (origen) · ET = guía de entrada que Softland genera en el destino.
+  const tieneDoc = g => g.fecha >= '2025-01-01' && g.tipo !== 'MANUAL';
+  const tituloDoc = (g, t) => t === 'S'
+    ? `Guía de salida N° ${g.folio} · ${g.origen} → ${g.destino}`
+    : `Guía de entrada · traslado N° ${g.folio} · ingreso a ${g.destino}`;
+  const btnDoc = (g, t) => tieneDoc(g)
+    ? `<button class="tr-doc" data-act="doc" data-g="${t}${esc(g.folio)}" data-t="${esc(tituloDoc(g, t))}" title="${t === 'S' ? 'Ver guía de salida' : 'Ver guía de entrada'}">📄</button>`
+    : '';
+  const docsDetalle = g => tieneDoc(g)
+    ? `<div class="tr-docs"><button class="tr-btn tr-btn-sec" data-act="doc" data-g="S${esc(g.folio)}" data-t="${esc(tituloDoc(g, 'S'))}">📄 Guía de salida · ${esc(g.origen)}</button>
+       <button class="tr-btn tr-btn-sec" data-act="doc" data-g="ET${esc(g.folio)}" data-t="${esc(tituloDoc(g, 'ET'))}">📄 Guía de entrada · ${esc(g.destino)}</button></div>`
+    : '';
+
+  // Visor de guías: ventana dentro de la web (mismo estilo que Despachos Parciales)
+  let visor = null;
+  function verDoc(clave, titulo) {
+    if (!visor) {
+      visor = document.createElement('dialog');
+      visor.className = 'tr-visor';
+      visor.addEventListener('click', e => {
+        if (e.target === visor || e.target.closest('[data-cerrar-visor]')) visor.close();
+        if (e.target.closest('[data-imprimir]')) { const f = visor.querySelector('iframe'); if (f && f.contentWindow) f.contentWindow.print(); }
+      });
+      visor.addEventListener('close', () => { const f = visor.querySelector('iframe'); if (f) f.src = 'about:blank'; });
+      document.body.appendChild(visor);
+    }
+    visor.innerHTML = `<div class="tr-visor-in">
+      <div class="tr-visor-head"><h2>${esc(titulo || 'Guía')}</h2>
+        <div class="tr-visor-acts">
+          <button class="tr-btn tr-btn-sec tr-sm" data-imprimir>🖨️ Imprimir / PDF</button>
+          <button class="tr-visor-x" data-cerrar-visor aria-label="Cerrar">✕</button>
+        </div></div>
+      <div class="tr-visor-body"><iframe src="guia.html?embed=1&guia=${encodeURIComponent(clave)}" title="${esc(titulo || 'Guía')}"></iframe></div>
+    </div>`;
+    visor.showModal();
+  }
+
   function detalle(g) {
-    if (!g.lineas || !g.lineas.length) return '<p class="tr-sub">Guía sin detalle de productos.</p>';
-    return `<table class="tr-lin"><thead><tr><th>Código</th><th>Producto</th><th class="num">Cantidad</th><th>U/M</th><th class="num">Total</th></tr></thead>
+    if (!g.lineas || !g.lineas.length) return docsDetalle(g) + '<p class="tr-sub">Guía sin detalle de productos.</p>';
+    return docsDetalle(g) + `<table class="tr-lin"><thead><tr><th>Código</th><th>Producto</th><th class="num">Cantidad</th><th>U/M</th><th class="num">Total</th></tr></thead>
       <tbody>${g.lineas.map(l => `<tr><td>${esc(l[0])}</td><td>${esc(l[1])}</td><td class="num">${nf(l[3], l[3] % 1 ? 2 : 0)}</td><td>${esc(l[2])}</td><td class="num">$${nf(l[5])}</td></tr>`).join('')}</tbody></table>
       <p class="tr-sub">${esc(g.tipo || '')} · Destino en Softland: ${esc(g.destinoRaw)}</p>`;
   }
@@ -709,6 +748,22 @@ const TrasladosSection = (() => {
       .tr-lin th{text-align:left;padding:6px 8px;background:#eef0f3}
       .tr-lin td{padding:6px 8px;border-top:1px solid #f0f1f4}
       .tr-mas{margin:12px auto 0;display:block}
+      .tr-doc{margin-left:6px;padding:1px 5px;border:1px solid #d1d5db;border-radius:5px;background:#fff;cursor:pointer;font-size:13px;line-height:1.3;vertical-align:middle}
+      .tr-doc:hover{background:#eef2ff;border-color:#667eea}
+      .tr-docs{display:flex;gap:8px;flex-wrap:wrap;margin:2px 0 10px}
+      .tr-docs .tr-btn{padding:7px 12px;font-size:13px}
+      .tr-visor{border:0;border-radius:14px;padding:0;width:min(900px,94vw);height:min(90vh,1100px);box-shadow:0 20px 60px rgba(0,0,0,.35);color:#1f2937;overflow:hidden}
+      .tr-visor::backdrop{background:rgba(17,24,39,.6)}
+      .tr-visor-in{display:flex;flex-direction:column;height:100%}
+      .tr-visor-head{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid #eef0f3;flex-wrap:wrap}
+      .tr-visor-head h2{margin:0;font-size:17px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+      .tr-visor-acts{display:flex;gap:8px;align-items:center}
+      .tr-sm{padding:6px 12px;font-size:13px}
+      .tr-visor-x{background:none;border:0;color:#9ca3af;font-size:16px;cursor:pointer;padding:6px 8px}
+      .tr-visor-x:hover{color:#1f2937}
+      .tr-visor-body{flex:1;background:#f3f4f6;padding:10px}
+      .tr-visor-body iframe{width:100%;height:100%;border:0;border-radius:8px;background:#f3f4f6}
+      @media (max-width:560px){.tr-visor{width:100vw;max-width:100vw;height:100%;max-height:100vh;border-radius:0}.tr-visor-head h2{flex-basis:100%}}
       @media (max-width:900px){.tr-grid2{grid-template-columns:1fr}.tr-head{flex-direction:column}.tr-prev-grid{grid-template-columns:1fr 1fr}}
       @media (max-width:700px){
         .tr{padding:0}

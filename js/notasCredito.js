@@ -213,7 +213,7 @@ const NotasCreditoSection = (() => {
       </div>
       <datalist id="nc-nombres"></datalist>
       <div class="nc-kpis" id="nc-kpis"></div>
-      <div class="nc-tabs"><button data-tab="bandeja">Bandeja</button><button data-tab="telegram">Telegram <span class="nc-badge" id="nc-tgn"></span></button><button data-tab="resumen">Resumen</button></div>
+      <div class="nc-tabs"><button data-tab="bandeja">Bandeja</button><button data-tab="telegram">Telegram <span class="nc-badge" id="nc-tgn"></span></button><button data-tab="resumen">Dashboard</button></div>
       <div id="nc-bandeja">
         <div class="nc-wrap">
           <aside class="nc-list">
@@ -313,7 +313,7 @@ const NotasCreditoSection = (() => {
       const d = pendiente(n) ? diasDesde(n.fechaSolicitud) : null;
       const analizar = sinSf || (d !== null && d > DIAS_ANALIZAR);
       return `<button class="nc-item${st.sel === n.id ? ' cur' : ''}${analizar ? ' nc-analizar' : ''}" data-id="${esc(n.id)}"${analizar ? ` title="Lleva ${d} días sin NC en sistema: revisar"` : ''}>
-        <div class="nc-it-top"><i class="nc-dot ${cls}"></i><b>${esc(docCorto(n))}</b>${sinSf ? '<span class="nc-tag-an">⚠ Sin NC en Softland</span>' : analizar ? '<span class="nc-tag-an">⚠ Analizar</span>' : ''}${n.tipo ? `<span class="nc-tipo">${esc(n.tipo)}</span>` : ''}${origenDe(n) === 'Presencial' ? '<span class="nc-tipo nc-pres">🏬 Presencial</span>' : ''}<span class="nc-it-r">${n.montoDoc ? plata(n.montoDoc) : ''}</span></div>
+        <div class="nc-it-top"><i class="nc-dot ${sinSf ? 'nar' : cls}"></i><b>${esc(docCorto(n))}</b>${sinSf ? '<span class="nc-tag-an">⚠ Sin NC en Softland</span>' : analizar ? '<span class="nc-tag-an">⚠ Analizar</span>' : ''}${n.tipo ? `<span class="nc-tipo">${esc(n.tipo)}</span>` : ''}${origenDe(n) === 'Presencial' ? '<span class="nc-tipo nc-pres">🏬 Presencial</span>' : ''}<span class="nc-it-r">${n.montoDoc ? plata(n.montoDoc) : ''}</span></div>
         <small>${esc(n.cliente || 'Sin cliente')}</small>
         <small>${esc(lbl)}${n.motivo ? ' · ' + esc(n.motivo) : ''}${d !== null ? ` · <span class="${d > DIAS_ANALIZAR ? 'nc-late' : ''}">${d <= 0 ? 'hoy' : d + (d === 1 ? ' día' : ' días')}</span>` : n.estado === 'EMITIDA' ? ' · ' + fCorta(n.fechaEmision) : ''}</small>
       </button>`;
@@ -343,11 +343,17 @@ const NotasCreditoSection = (() => {
     // (visor guia.html, clave EF + factura / EB + boleta).
     const ncSoftland = n => {
       const clave = (n.docTipo === 'Boleta' ? 'EB' : 'EF') + String(n.docNum || '').trim();
-      const ver = n.estado === 'EMITIDA' && /^E[FB]\d+$/.test(clave);
-      return `<div class="nc-file${ver ? ' has' : ''}"><span>🧾 Nota de Crédito</span>
-        ${ver ? `<button class="nc-b nc-sm" data-guia="${esc(clave)}" data-titulo="${esc('Guía de entrada por devolución · ' + docLbl(n) + (n.folioNc ? ' · NC ' + n.folioNc : ''))}">Ver</button>`
-              : '<em>Se verá al emitir la NC en Softland</em>'}
-</div>`;
+      const titulo = 'Guía de entrada por devolución · ' + docLbl(n) + (n.folioNc ? ' · NC ' + n.folioNc : '');
+      const btn = `<button class="nc-b nc-sm" data-guia="${esc(clave)}" data-titulo="${esc(titulo)}">Ver</button>`;
+      if (!sfNc) {   // sin conexión a Softland: comportamiento anterior
+        const ver = n.estado === 'EMITIDA' && /^E[FB]\d+$/.test(clave);
+        return `<div class="nc-file${ver ? ' has' : ''}"><span>🧾 Nota de Crédito</span>${ver ? btn : '<em>Se verá al emitir la NC en Softland</em>'}</div>`;
+      }
+      const ncs = ncsSf(n);
+      if (!ncs.length) return `<div class="nc-file${n.estado === 'EMITIDA' ? ' warn' : ''}"><span>🧾 Nota de Crédito</span><em>${n.estado === 'EMITIDA' ? '⚠ Softland no registra NC para este documento' : 'Se verá al emitir la NC en Softland'}</em></div>`;
+      const folios = ncs.map(x => x.folio).join(', ');
+      const conGuia = ncs.some(x => x.folioEnt && String(x.folioEnt) !== '0');
+      return `<div class="nc-file has"><span>🧾 Nota de Crédito</span><em>NC ${esc(folios)} en Softland</em>${conGuia ? btn : '<em>Sin guía de entrada (no hubo devolución de mercadería)</em>'}</div>`;
     };
     // 2º respaldo: autorización de bodega = documento timbrado (campo ncUrl); la foto de bodega (fotoUrl), si existe, como secundaria
     const autorizacion = n => {
@@ -728,72 +734,164 @@ const NotasCreditoSection = (() => {
       <p class="nc-hint">Los datos leídos completan los campos vacíos de la NC; lo que ya estaba escrito no se pisa.</p></div>`;
   }
 
-  // ============ RESUMEN ============
+  // ============ DASHBOARD ============
+  let ncCharts = [], chartProm = null, dashTok = 0;
+  const cargarChart = () => window.Chart ? Promise.resolve() : (chartProm = chartProm || new Promise((res, rej) => {
+    const s = document.createElement('script'); s.src = 'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js';
+    s.onload = res; s.onerror = () => { chartProm = null; rej(new Error('No se pudo cargar la librería de gráficos')); }; document.head.appendChild(s);
+  }));
+  const PAL = ['#2563eb', '#ea580c', '#16a34a', '#9333ea', '#0891b2', '#dc2626', '#ca8a04', '#db2777', '#4f46e5', '#0d9488', '#65a30d', '#94a3b8'];
+  const COL_BOD = { Aldunate: '#2563eb', 'SF 918': '#ea580c', Viel: '#16a34a', 'San Ignacio': '#9333ea', 'Stgo Concha': '#0891b2' };
+  const MES_C = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+  const corto = (t, n) => { t = String(t || ''); return t.length > n ? t.slice(0, n - 1) + '…' : t; };
+  const millones = v => '$' + (v / 1e6).toLocaleString('es-CL', { maximumFractionDigits: 1 }) + ' M';
+
   function dibujarResumen() {
     const el = root && root.querySelector('#nc-resumen'); if (!el) return;
-    const mes = (hoy || hoyLocal()).slice(0, 7);
+    ncCharts.forEach(c => c.destroy()); ncCharts = [];
+    const hoyS = hoy || hoyLocal();
+    const mes = hoyS.slice(0, 7);
     const [y, m] = mes.split('-').map(Number);
     const mesAnt = `${m === 1 ? y - 1 : y}-${String(m === 1 ? 12 : m - 1).padStart(2, '0')}`;
-    const enPer = n => { const f = String(n.fechaSolicitud); return st.periodo === 'todo' || f.startsWith(st.periodo === 'mes' ? mes : mesAnt); };
-    const base = notas.filter(n => n.estado !== 'ANULADA' && enPer(n));
+    const hace3 = (() => { const d = new Date(y, m - 3, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; })();
+    const PER = [['mes', 'Este mes'], ['ant', 'Mes anterior'], ['3m', 'Últimos 3 meses'], ['anio', 'Este año'], ['todo', 'Todo']];
+    const enFecha = f => { f = String(f || ''); const p = st.periodo;
+      return p === 'todo' || (p === 'mes' ? f.startsWith(mes) : p === 'ant' ? f.startsWith(mesAnt) : p === '3m' ? f.slice(0, 7) >= hace3 : f.startsWith(String(y))); };
+    const vivas = notas.filter(n => n.estado !== 'ANULADA');
+    const base = vivas.filter(n => enFecha(n.fechaSolicitud));
     const monto = n => Number(n.montoNc || (n.tipo === 'Completa' ? n.montoDoc : 0)) || 0;
-    const grupo = (campo, top = 12) => {
-      const g = new Map();
-      base.forEach(n => { const k = n[campo] || 'Sin dato'; const x = g.get(k) || { n: 0, $: 0 }; x.n++; x.$ += monto(n); g.set(k, x); });
-      const arr = [...g.entries()].sort((a, b) => b[1].n - a[1].n).slice(0, top);
-      const max = Math.max(1, ...arr.map(a => a[1].n));
-      return arr.map(([k, x]) => `<div class="nc-barrow"><span>${esc(k)}</span><div class="nc-bar"><i style="width:${x.n / max * 100}%"></i></div><b>${x.n}</b><em>${x.$ ? plata(x.$) : ''}</em></div>`).join('') || '<p class="nc-empty">Sin datos en el período</p>';
-    };
-    const grupoFn = fn => {
-      const g = new Map();
-      base.forEach(n => { const k = fn(n) || 'Sin dato'; const x = g.get(k) || { n: 0, $: 0 }; x.n++; x.$ += monto(n); g.set(k, x); });
-      const arr = [...g.entries()].sort((a, b) => b[1].n - a[1].n);
-      const max = Math.max(1, ...arr.map(a => a[1].n));
-      return arr.map(([k, x]) => `<div class="nc-barrow"><span>${esc(k)}</span><div class="nc-bar"><i style="width:${x.n / max * 100}%"></i></div><b>${x.n}</b><em>${x.$ ? plata(x.$) : ''}</em></div>`).join('') || '<p class="nc-empty">Sin datos en el período</p>';
-    };
-    const devsPorBodega = () => {
-      const g = new Map();
-      notas.forEach(n => devsDe(n).forEach(v => { if (st.periodo !== 'todo' && !String(v.fecha).startsWith(st.periodo === 'mes' ? mes : mesAnt)) return; const x = g.get(v.bodega) || { n: 0, $: 0 }; x.n++; x.$ += Number(v.total) || 0; g.set(v.bodega, x); }));
-      const arr = [...g.entries()].sort((a, b) => b[1].$ - a[1].$);
-      const max = Math.max(1, ...arr.map(a => a[1].$));
-      return arr.map(([k, x]) => `<div class="nc-barrow"><span>${esc(k)}</span><div class="nc-bar"><i style="width:${x.$ / max * 100}%"></i></div><b>${x.n}</b><em>${plata(x.$)}</em></div>`).join('') || '<p class="nc-empty">Sin devoluciones cargadas en el período</p>';
-    };
-    const grupoLec = (lista, fn) => {
-      const g = new Map();
-      lista.forEach(n => { const d = lec(n.lecturaDoc); const k = d && !d.error ? (fn(d) || 'Sin dato') : null; if (!k) return; const x = g.get(k) || { n: 0, $: 0 }; x.n++; x.$ += monto(n); g.set(k, x); });
-      const arr = [...g.entries()].sort((a, b) => b[1].n - a[1].n).slice(0, 12);
-      const max = Math.max(1, ...arr.map(a => a[1].n));
-      return arr.map(([k, x]) => `<div class="nc-barrow"><span>${esc(k)}</span><div class="nc-bar"><i style="width:${x.n / max * 100}%"></i></div><b>${x.n}</b><em>${x.$ ? plata(x.$) : ''}</em></div>`).join('') || '<p class="nc-empty">Aún no hay facturas leídas en el período</p>';
-    };
-    const productosNC = lista => {
-      const g = new Map();
-      lista.forEach(n => { const d = lec(n.lecturaDoc); if (!d || d.error) return; (d.productos || []).forEach(p => { const k = p.codigo || p.descripcion; if (!k) return; const x = g.get(k) || { d: p.descripcion, n: 0, $: 0 }; x.n++; x.$ += Number(p.total) || 0; g.set(k, x); }); });
-      const arr = [...g.entries()].sort((a, b) => b[1].n - a[1].n).slice(0, 12);
-      const max = Math.max(1, ...arr.map(a => a[1].n));
-      return arr.map(([k, x]) => `<div class="nc-barrow"><span title="${esc(x.d)}">${esc(k)} <small class="nc-dim">${esc(x.d || '')}</small></span><div class="nc-bar"><i style="width:${x.n / max * 100}%"></i></div><b>${x.n}</b><em>${x.$ ? plata(x.$) : ''}</em></div>`).join('') || '<p class="nc-empty">Aún no hay facturas leídas en el período</p>';
-    };
-    // Facturas con N/C marcada en Control de Despachos que no tienen ficha aquí
+    const total$ = base.reduce((s, n) => s + monto(n), 0);
+    const emitidas = base.filter(n => n.estado === 'EMITIDA' && !sinSoftland(n));
+    const dEmi = emitidas.map(n => n.fechaEmision && n.fechaSolicitud ? dia(n.fechaEmision) - dia(n.fechaSolicitud) : null).filter(d => d !== null && d >= 0);
+    const prom = dEmi.length ? dEmi.reduce((a, b) => a + b, 0) / dEmi.length : null;
+    const pend = vivas.filter(pendiente);
+    const pendViejas = pend.filter(n => (diasDesde(n.fechaSolicitud) || 0) > DIAS_ANALIZAR);
+    const completas = base.filter(n => n.tipo === 'Completa').length;
+    const devs = []; vivas.forEach(n => devsDe(n).forEach(v => { if (enFecha(v.fecha)) devs.push(v); }));
+    const dev$ = devs.reduce((s, v) => s + (Number(v.total) || 0), 0);
+    const agrupa = (lista, fn, val = monto) => { const g = new Map(); lista.forEach(n => { const k = fn(n) || 'Sin dato'; const x = g.get(k) || { n: 0, $: 0 }; x.n++; x.$ += val(n); g.set(k, x); }); return [...g.entries()].map(([k, x]) => ({ k, ...x })); };
+    const D = { base, monto, agrupa, devs, pend, dEmi, mes, y, m };
+    const kpi = (t, v, s, c = '') => `<div class="nc-kpi ${c}"><span>${t}</span><strong>${v}</strong><small>${s}</small></div>`;
+    const card = (id, t, sub = '', alto = '') => `<div class="nc-card"><h3 class="nc-h3">${t}${sub ? ` <span class="nc-dim">${sub}</span>` : ''}</h3><div class="nc-chart${alto}"><canvas id="${id}"></canvas></div></div>`;
     const fichas = new Set(notas.map(n => String(n.docNum)));
     const sinFicha = cf ? [...cf.values()].filter(r => r.nc && !fichas.has(String(r.numero).trim())) : [];
     el.innerHTML = `
-      <div class="nc-per">${[['mes', 'Este mes'], ['ant', 'Mes anterior'], ['todo', 'Todo']].map(([k, l]) => `<button class="nc-chip${st.periodo === k ? ' on' : ''}" data-per="${k}">${l}</button>`).join('')}
-        <span class="nc-dim">${base.length} NC · ${plata(base.reduce((s, n) => s + monto(n), 0))} (sin anuladas)</span></div>
-      <div class="nc-res">
-        <div class="nc-card"><h3 class="nc-h3">Por motivo</h3>${grupo('motivo')}</div>
-        <div class="nc-card"><h3 class="nc-h3">Por bodega</h3>${grupo('bodega')}<h3 class="nc-h3 nc-mt">Completa / Parcial</h3>${grupo('tipo')}</div>
-        <div class="nc-card"><h3 class="nc-h3">Por quién solicita</h3>${grupo('solicitadoPor')}</div>
-        <div class="nc-card"><h3 class="nc-h3">Clientes con más NC</h3>${grupo('cliente', 10)}</div>
-        <div class="nc-card"><h3 class="nc-h3">Por origen de la solicitud</h3>${grupoFn(n => origenDe(n))}</div>
-        <div class="nc-card"><h3 class="nc-h3">Devoluciones Softland por bodega</h3>${devsPorBodega()}</div>
-        <div class="nc-card"><h3 class="nc-h3">Por vendedor <span class="nc-dim">(de la factura leída)</span></h3>${grupoLec(base, d => d.vendedor)}</div>
-        <div class="nc-card"><h3 class="nc-h3">Productos en facturas con NC <span class="nc-dim">(de la factura leída)</span></h3>${productosNC(base)}</div>
+      <div class="nc-per">${PER.map(([k, l]) => `<button class="nc-chip${st.periodo === k ? ' on' : ''}" data-per="${k}">${l}</button>`).join('')}
+        <span class="nc-dim">Período según fecha de solicitud · sin anuladas</span></div>
+      <div class="nc-kpis">
+        ${kpi('NC en el período', nf(base.length), `${plata(total$)}`)}
+        ${kpi('Completas / Parciales', base.length ? Math.round(completas / base.length * 100) + '%' : '—', `${completas} completas · ${base.filter(n => n.tipo === 'Parcial').length} parciales`)}
+        ${kpi('Días a emisión', prom === null ? '—' : prom.toLocaleString('es-CL', { maximumFractionDigits: 1 }), `promedio · ${dEmi.length ? dEmi.filter(d => d <= 1).length + ' en ≤1 día' : 'sin datos'}`, 'verde')}
+        ${kpi('Pendientes hoy', nf(pend.length), `${pendViejas.length} con más de ${DIAS_ANALIZAR} días · ${pend.filter(sinSoftland).length} sin NC en Softland`, pend.length ? 'nar' : '')}
+        ${kpi('Mercadería devuelta', plata(dev$), `${devs.length} guías de entrada en Softland`)}
       </div>
-      <p class="nc-dim" style="margin:12px 0">${notas.filter(n => lec(n.lecturaDoc) && !lec(n.lecturaDoc).error).length} de ${notas.filter(n => urlDoc(n)).length} NC con foto o PDF ya tienen la factura leída${notas.filter(lecturaPendiente).length ? ` · ${notas.filter(lecturaPendiente).length} en cola` : ''}.</p>
-      <div class="nc-card"><h3 class="nc-h3">En Control de Despachos con N/C marcada, sin ficha aquí <span class="nc-dim">(${cf ? sinFicha.length : '…'})</span></h3>
+      <div class="nc-res">
+        <div class="nc-card nc-wide"><h3 class="nc-h3">Evolución mensual <span class="nc-dim">últimos 12 meses · cantidad y monto</span></h3><div class="nc-chart"><canvas id="ncc-mes"></canvas></div></div>
+        ${card('ncc-motivo', 'Por motivo', 'cantidad', ' alto')}
+        ${card('ncc-motivo-m', 'Por motivo', 'monto NC', ' alto')}
+        ${card('ncc-bodmot', 'Bodega × motivo', 'top 6 motivos')}
+        ${card('ncc-tipo', 'Completa / Parcial')}
+        ${card('ncc-tiempo', 'Tiempo de emisión', 'días desde la solicitud')}
+        ${card('ncc-aging', 'Pendientes por antigüedad', 'por bodega, hoy')}
+        ${card('ncc-vend', 'Por vendedor', 'de la factura en Softland', ' alto')}
+        ${card('ncc-cli', 'Clientes con más monto en NC', 'top 10', ' alto')}
+        ${card('ncc-prod', 'Productos más devueltos', 'monto en guías de entrada', ' alto')}
+        ${card('ncc-devbod', 'Devoluciones por bodega', 'monto en guías de entrada')}
+        ${card('ncc-sol', 'Quién solicita', 'top 10', ' alto')}
+        ${card('ncc-origen', 'Origen de la solicitud')}
+        ${card('ncc-dia', 'Solicitudes por día de la semana')}
+      </div>
+      <div class="nc-card nc-mt"><h3 class="nc-h3">En Control de Despachos con N/C marcada, sin ficha aquí <span class="nc-dim">(${cf ? sinFicha.length : '…'})</span></h3>
         ${!cf ? `<p class="nc-dim">${cfEstado === 'error' ? 'No se pudo consultar Control de Despachos' : 'Cargando…'}</p>` : sinFicha.length
           ? `<div class="nc-tw"><table class="nc-t"><thead><tr><th>Factura</th><th>Fecha</th><th>Bodega</th><th>N/C</th><th>Motivo</th><th></th></tr></thead><tbody>${sinFicha.slice(0, 60).map(r => `<tr><td><b>${esc(r.numero)}</b></td><td>${esc(r.fecha)}</td><td>${esc(r.bodega || 'Aldunate')}</td><td>${esc(r.nc)}</td><td>${esc(r.motivoNc || '—')}</td><td><button class="nc-b nc-sm" data-crear="${esc(r.numero)}">Crear ficha</button></td></tr>`).join('')}</tbody></table></div>`
           : '<p class="nc-dim">Todo cuadra ✓</p>'}
       </div>`;
+    const tok = ++dashTok;
+    cargarChart().then(() => { if (tok === dashTok && document.body.contains(el) && !el.hidden) graficosNc(D); })
+      .catch(err => el.insertAdjacentHTML('afterbegin', `<p class="nc-err">${esc(err.message)}</p>`));
+  }
+
+  function graficosNc(D) {
+    const { base, monto, agrupa, devs, pend, dEmi, y, m } = D;
+    const mk = (id, cfg) => { const c = root.querySelector('#' + id); if (c) ncCharts.push(new Chart(c, cfg)); };
+    const opt = (extra = {}) => ({ responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, ...extra });
+    const leyenda = { legend: { position: 'bottom', labels: { boxWidth: 12, font: { size: 11 } } } };
+    const tip$ = { tooltip: { callbacks: { label: c => ' ' + plata(c.raw) } } };
+    const eje$ = { ticks: { callback: v => millones(v) } };
+    const vacio = id => { const c = root.querySelector('#' + id); if (c) c.parentElement.innerHTML = '<p class="nc-empty">Sin datos en el período</p>'; };
+    const hbar = (id, arr, campo, color, fmt$) => {
+      if (!arr.length) return vacio(id);
+      mk(id, { type: 'bar', data: { labels: arr.map(a => corto(a.k, 28)), datasets: [{ data: arr.map(a => a[campo]), backgroundColor: Array.isArray(color) ? color : color, borderRadius: 4 }] },
+        options: opt({ indexAxis: 'y', plugins: { legend: { display: false }, tooltip: { callbacks: { title: it => arr[it[0].dataIndex].k, label: c => ' ' + (fmt$ ? plata(c.raw) : c.raw + ' NC · ' + plata(arr[c.dataIndex].$)) } } }, scales: { x: fmt$ ? eje$ : { beginAtZero: true, ticks: { precision: 0 } } } }) });
+    };
+    const dona = (id, arr, colores) => {
+      if (!arr.length) return vacio(id);
+      const tot = arr.reduce((s, a) => s + a.n, 0);
+      mk(id, { type: 'doughnut', data: { labels: arr.map(a => `${a.k} (${Math.round(a.n / tot * 100)}%)`), datasets: [{ data: arr.map(a => a.n), backgroundColor: colores || PAL, borderWidth: 1 }] }, options: opt({ cutout: '58%', plugins: { ...leyenda } }) });
+    };
+
+    // 1. Evolución 12 meses (independiente del período)
+    const meses = []; for (let i = 11; i >= 0; i--) { const d = new Date(y, m - 1 - i, 1); meses.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`); }
+    const vivas = notas.filter(n => n.estado !== 'ANULADA');
+    const porMes = meses.map(k => vivas.filter(n => String(n.fechaSolicitud).startsWith(k)));
+    mk('ncc-mes', { data: { labels: meses.map(k => MES_C[+k.slice(5) - 1] + ' ' + k.slice(2, 4)), datasets: [
+      { type: 'bar', label: 'Cantidad', data: porMes.map(l => l.length), backgroundColor: '#93c5fd', borderRadius: 4, yAxisID: 'y', order: 2 },
+      { type: 'line', label: 'Monto NC', data: porMes.map(l => l.reduce((s, n) => s + monto(n), 0)), borderColor: '#ea580c', backgroundColor: '#ea580c', tension: .3, yAxisID: 'y1', order: 1 }] },
+      options: opt({ plugins: { ...leyenda, tooltip: { callbacks: { label: c => ' ' + c.dataset.label + ': ' + (c.dataset.yAxisID === 'y1' ? plata(c.raw) : c.raw) } } },
+        scales: { y: { beginAtZero: true, ticks: { precision: 0 }, title: { display: true, text: 'NC' } }, y1: { position: 'right', beginAtZero: true, grid: { drawOnChartArea: false }, ...eje$ } } }) });
+
+    // 2-3. Motivo
+    const mot = agrupa(base, n => n.motivo);
+    const motN = [...mot].sort((a, b) => b.n - a.n).slice(0, 12);
+    const motCol = new Map(motN.map((a, i) => [a.k, a.k === 'Sin dato' ? '#cbd5e1' : PAL[i % PAL.length]]));
+    hbar('ncc-motivo', motN, 'n', motN.map(a => motCol.get(a.k)));
+    const mot$ = [...mot].filter(a => a.$).sort((a, b) => b.$ - a.$).slice(0, 12);
+    hbar('ncc-motivo-m', mot$, '$', mot$.map(a => motCol.get(a.k) || '#94a3b8'), true);
+
+    // 4. Bodega × motivo (apilado)
+    const bods = agrupa(base, n => n.bodega).sort((a, b) => b.n - a.n).map(a => a.k);
+    const top6 = motN.filter(a => a.k !== 'Sin dato').slice(0, 6).map(a => a.k);
+    const grupoM = n => top6.includes(n.motivo) ? n.motivo : 'Otros / sin dato';
+    if (!bods.length) vacio('ncc-bodmot'); else
+      mk('ncc-bodmot', { type: 'bar', data: { labels: bods, datasets: [...top6, 'Otros / sin dato'].map((k, i) => ({ label: k, data: bods.map(b => base.filter(n => (n.bodega || 'Sin dato') === b && grupoM(n) === k).length), backgroundColor: motCol.get(k) || '#cbd5e1' })) },
+        options: opt({ plugins: { ...leyenda }, scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true, ticks: { precision: 0 } } } }) });
+
+    // 5. Completa / Parcial
+    const tipo = agrupa(base, n => n.tipo).sort((a, b) => b.n - a.n);
+    dona('ncc-tipo', tipo, tipo.map(a => a.k === 'Completa' ? '#2563eb' : a.k === 'Parcial' ? '#f59e0b' : '#cbd5e1'));
+
+    // 6. Tiempo de emisión
+    const tramos = [['Mismo día', d => d === 0], ['1 día', d => d === 1], ['2–3', d => d >= 2 && d <= 3], ['4–5', d => d >= 4 && d <= 5], ['6–10', d => d >= 6 && d <= 10], ['Más de 10', d => d > 10]];
+    if (!dEmi.length) vacio('ncc-tiempo'); else
+      mk('ncc-tiempo', { type: 'bar', data: { labels: tramos.map(t => t[0]), datasets: [{ data: tramos.map(t => dEmi.filter(t[1]).length), backgroundColor: ['#16a34a', '#22c55e', '#84cc16', '#eab308', '#f97316', '#dc2626'], borderRadius: 4 }] }, options: opt({ scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } }) });
+
+    // 7. Pendientes por antigüedad (hoy, sin período)
+    const ag = [['0–2 días', d => d <= 2, '#16a34a'], ['3–5 días', d => d >= 3 && d <= 5, '#eab308'], ['6–10 días', d => d >= 6 && d <= 10, '#f97316'], ['Más de 10', d => d > 10, '#dc2626']];
+    const bodP = [...new Set(pend.map(n => n.bodega || 'Sin dato'))];
+    if (!pend.length) { const c = root.querySelector('#ncc-aging'); if (c) c.parentElement.innerHTML = '<p class="nc-dim" style="padding:30px 0;text-align:center">Sin pendientes ✓</p>'; } else
+      mk('ncc-aging', { type: 'bar', data: { labels: bodP, datasets: ag.map(([l, f, c]) => ({ label: l, data: bodP.map(b => pend.filter(n => (n.bodega || 'Sin dato') === b && f(Math.max(0, diasDesde(n.fechaSolicitud) || 0))).length), backgroundColor: c })) },
+        options: opt({ indexAxis: 'y', plugins: { ...leyenda }, scales: { x: { stacked: true, beginAtZero: true, ticks: { precision: 0 } }, y: { stacked: true } } }) });
+
+    // 8. Vendedor (Softland)
+    hbar('ncc-vend', agrupa(base, n => n.sfVendedor).filter(a => a.k !== 'Sin dato').sort((a, b) => b.n - a.n).slice(0, 12), 'n', '#4f46e5');
+    // 9. Clientes por monto
+    hbar('ncc-cli', agrupa(base, n => n.cliente).filter(a => a.k !== 'Sin dato' && a.$).sort((a, b) => b.$ - a.$).slice(0, 10), '$', '#0891b2', true);
+    // 10. Productos devueltos (líneas de guías de entrada)
+    const pr = new Map(); devs.forEach(v => (v.lineas || []).forEach(l => { const k = l.codigo; const x = pr.get(k) || { k: l.descripcion || k, cod: k, n: 0, $: 0 }; x.n += Number(l.cantidad) || 0; x.$ += Number(l.total) || 0; pr.set(k, x); }));
+    hbar('ncc-prod', [...pr.values()].sort((a, b) => b.$ - a.$).slice(0, 10), '$', '#ea580c', true);
+    // 11. Devoluciones por bodega
+    const db = new Map(); devs.forEach(v => { const k = v.bodega || 'Sin dato'; const x = db.get(k) || { k, n: 0, $: 0 }; x.n++; x.$ += Number(v.total) || 0; db.set(k, x); });
+    const dbA = [...db.values()].sort((a, b) => b.$ - a.$);
+    hbar('ncc-devbod', dbA, '$', dbA.map((a, i) => PAL[i % PAL.length]), true);
+    // 12. Quién solicita
+    hbar('ncc-sol', agrupa(base, n => n.solicitadoPor).sort((a, b) => b.n - a.n).slice(0, 10), 'n', '#0d9488');
+    // 13. Origen
+    dona('ncc-origen', agrupa(base, n => origenDe(n)).sort((a, b) => b.n - a.n));
+    // 14. Día de la semana
+    const DS = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
+    const cnt = [0, 0, 0, 0, 0, 0, 0]; base.forEach(n => { if (!n.fechaSolicitud) return; const d = new Date(String(n.fechaSolicitud).slice(0, 10) + 'T12:00:00').getDay(); cnt[(d + 6) % 7]++; });
+    if (!base.length) vacio('ncc-dia'); else
+      mk('ncc-dia', { type: 'bar', data: { labels: DS, datasets: [{ data: cnt, backgroundColor: '#6366f1', borderRadius: 4 }] }, options: opt({ scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } }) });
   }
 
   // ============ TELEGRAM (mensajes que llegaron del bot) ============
@@ -1071,7 +1169,10 @@ const NotasCreditoSection = (() => {
       .nc-empty{color:#8a97a5;padding:20px;text-align:center;margin:0}
       .nc-err{color:#b91c1c;font-size:13px}.nc-list .nc-err{padding:14px;margin:0}
       .nc-res{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px}
-      .nc-res .nc-card{margin:0}
+      .nc-res .nc-card{margin:0}.nc-res .nc-wide{grid-column:1/-1}
+      .nc-chart{position:relative;height:260px}.nc-chart.alto{height:320px}
+      .nc-file.warn{border-style:solid;border-color:#fde68a;background:#fffbeb}.nc-file.warn em{color:#92400e}
+      .nc-dot.nar{background:#f59e0b}
       .nc-barrow{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(60px,1fr) 30px 90px;gap:8px;align-items:center;font-size:13px;padding:4px 0}
       .nc-barrow span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
       .nc-barrow b{text-align:right}.nc-barrow em{font-style:normal;color:#5b6b7a;font-size:12px;text-align:right}

@@ -509,12 +509,18 @@ const NotasCreditoSection = (() => {
     visor.innerHTML = `<div class="nc-visor-in">
       <div class="nc-visor-head"><h2>${esc(titulo || 'Guía')}</h2>
         <div class="nc-visor-acts">
-          <button class="nc-b nc-sm" data-imprimir-guia>🖨️ Imprimir / PDF</button>
+          <button class="nc-b nc-sm" data-imprimir-guia>🖨️ Imprimir</button>
+          <button class="nc-b nc-sm" data-descargar-guia>⬇️ Descargar PDF</button>
           <button class="nc-x" data-cerrar aria-label="Cerrar">✕</button>
         </div></div>
       <div class="nc-visor-body"><iframe src="guia.html?embed=1&guia=${encodeURIComponent(clave)}" title="${esc(titulo || 'Guía')}"></iframe></div>
     </div>`;
     visor.querySelector('[data-imprimir-guia]').addEventListener('click', () => { const f = visor.querySelector('iframe'); if (f && f.contentWindow) f.contentWindow.print(); });
+    visor.querySelector('[data-descargar-guia]').addEventListener('click', async e => {
+      const f = visor.querySelector('iframe'), b = e.currentTarget; if (!f || !f.contentWindow || !f.contentWindow.descargarPdf) return;
+      b.disabled = true; const t = b.textContent; b.textContent = 'Generando…';
+      try { await f.contentWindow.descargarPdf(); } catch (err) { alert('No se pudo generar el PDF: ' + err.message); } finally { b.disabled = false; b.textContent = t; }
+    });
     visor.showModal();
   }
 

@@ -134,6 +134,7 @@ const NotasCreditoSection = (() => {
     $('#nc-items').addEventListener('click', e => { const t = e.target.closest('[data-id]'); if (t) { st.sel = t.dataset.id; $('.nc-wrap').classList.add('nc-show'); dibujarLista(); dibujarDetalle(); } });
     // visor de archivos (respaldos y mensajes de Telegram): se abre en la misma página
     root.querySelector('.nc').addEventListener('click', e => { const f = e.target.closest('[data-file]'); if (f) { e.stopPropagation(); verArchivo(f.dataset.file, f.dataset.titulo); } }, true);
+    root.querySelector('.nc').addEventListener('click', e => { const g = e.target.closest('[data-guia]'); if (g) { e.stopPropagation(); verGuia(g.dataset.guia, g.dataset.titulo); } }, true);
     $('#nc-detail').addEventListener('click', accion);
     $('#nc-detail').addEventListener('change', adjuntarSuelto);
     $('#nc-telegram').addEventListener('click', accionTg);
@@ -224,6 +225,16 @@ const NotasCreditoSection = (() => {
       : !cf ? '<span class="nc-dim">No se pudo consultar Control de Despachos</span>'
       : reg ? `✓ Registrada en Control de Despachos el ${esc(reg.fecha)}${reg.bodega ? ' · ' + esc(reg.bodega) : ''}${reg.proceso ? ' · ' + esc(reg.proceso) : ''}${reg.nc ? ` · <b>N/C ${esc(reg.nc)}</b> marcada${reg.motivoNc ? ' (' + esc(reg.motivoNc) + ')' : ''}` : ' · sin N/C marcada allá'}`
       : '<span class="nc-dim">No aparece en Control de Despachos</span>';
+    // 3er respaldo: la guía de entrada por devolución que Softland genera al emitir la NC
+    // (visor guia.html, clave EF + factura / EB + boleta). El PDF timbrado, si se adjuntó, queda como secundario.
+    const ncSoftland = n => {
+      const clave = (n.docTipo === 'Boleta' ? 'EB' : 'EF') + String(n.docNum || '').trim();
+      const ver = n.estado === 'EMITIDA' && /^E[FB]\d+$/.test(clave);
+      return `<div class="nc-file${ver ? ' has' : ''}"><span>🧾 Nota de Crédito</span>
+        ${ver ? `<button class="nc-b nc-sm" data-guia="${esc(clave)}" data-titulo="${esc('Guía de entrada por devolución · ' + docLbl(n) + (n.folioNc ? ' · NC ' + n.folioNc : ''))}">Ver</button>`
+              : '<em>Se verá al emitir la NC en Softland</em>'}
+        ${n.ncUrl ? `<button class="nc-b nc-sm" data-file="${esc(n.ncUrl)}" data-titulo="${esc('NC timbrada · ' + docLbl(n))}">PDF timbrado</button>` : ''}</div>`;
+    };
     const arch = (campo, titulo, icono) => {
       const url = n[campo];
       return `<div class="nc-file${url ? ' has' : ''}"><span>${icono} ${titulo}</span>
@@ -261,7 +272,7 @@ const NotasCreditoSection = (() => {
       ${devolucionesHtml(n)}
       ${datosLeidos(n)}
       <div class="nc-card"><h3 class="nc-h3">Respaldos</h3>
-        <div class="nc-files">${arch('solicitudUrl', 'Solicitud', '📝')}${arch('fotoUrl', 'Foto bodega', '📷')}${arch('ncUrl', 'NC timbrada', '🧾')}</div>
+        <div class="nc-files">${arch('solicitudUrl', 'Solicitud', '📝')}${arch('fotoUrl', 'Autorización Bodega', '📷')}${ncSoftland(n)}</div>
       </div>
       <div class="nc-card"><h3 class="nc-h3">Historial</h3>
         <ol class="nc-hist">${historial(n).slice().reverse().map(h => `<li><b>${esc(h.q || '—')}</b> ${esc(h.t)}<small>${esc(h.f)}</small></li>`).join('') || '<li class="nc-dim">Sin movimientos</li>'}</ol>
@@ -321,15 +332,17 @@ const NotasCreditoSection = (() => {
   // Vista previa de Drive (fotos y PDF) dentro de la página, con descargar y abrir en Drive
   let visor = null;
   const idDrive = url => { const m = String(url || '').match(/[-\w]{25,}/); return m ? m[0] : ''; };
+  function asegurarVisor() {
+    if (visor) return;
+    visor = document.createElement('dialog');
+    visor.className = 'nc-visor';
+    visor.addEventListener('click', e => { if (e.target === visor || e.target.closest('[data-cerrar]')) visor.close(); });
+    visor.addEventListener('close', () => { const f = visor.querySelector('iframe'); if (f) f.src = 'about:blank'; });
+    document.body.appendChild(visor);
+  }
   function verArchivo(url, titulo) {
     const id = idDrive(url);
-    if (!visor) {
-      visor = document.createElement('dialog');
-      visor.className = 'nc-visor';
-      visor.addEventListener('click', e => { if (e.target === visor || e.target.closest('[data-cerrar]')) visor.close(); });
-      visor.addEventListener('close', () => { const f = visor.querySelector('iframe'); if (f) f.src = 'about:blank'; });
-      document.body.appendChild(visor);
-    }
+    asegurarVisor();
     visor.innerHTML = `<div class="nc-visor-in">
       <div class="nc-visor-head"><h2>${esc(titulo || 'Archivo')}</h2>
         <div class="nc-visor-acts">
@@ -339,6 +352,21 @@ const NotasCreditoSection = (() => {
         </div></div>
       <div class="nc-visor-body">${id ? `<iframe src="https://drive.google.com/file/d/${esc(id)}/preview" title="${esc(titulo || 'Archivo')}" allow="autoplay"></iframe>` : '<p class="nc-empty">No se puede mostrar este archivo aquí. Ábrelo en Drive.</p>'}</div>
     </div>`;
+    visor.showModal();
+  }
+
+  // Guía de Softland (formato de impresión) en el mismo visor, con imprimir / guardar PDF
+  function verGuia(clave, titulo) {
+    asegurarVisor();
+    visor.innerHTML = `<div class="nc-visor-in">
+      <div class="nc-visor-head"><h2>${esc(titulo || 'Guía')}</h2>
+        <div class="nc-visor-acts">
+          <button class="nc-b nc-sm" data-imprimir-guia>🖨️ Imprimir / PDF</button>
+          <button class="nc-x" data-cerrar aria-label="Cerrar">✕</button>
+        </div></div>
+      <div class="nc-visor-body"><iframe src="guia.html?embed=1&guia=${encodeURIComponent(clave)}" title="${esc(titulo || 'Guía')}"></iframe></div>
+    </div>`;
+    visor.querySelector('[data-imprimir-guia]').addEventListener('click', () => { const f = visor.querySelector('iframe'); if (f && f.contentWindow) f.contentWindow.print(); });
     visor.showModal();
   }
 

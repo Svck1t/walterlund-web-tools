@@ -7,7 +7,7 @@
   function textEl(e, txt, dy) {
     const y = e.y + (dy || 0);
     let st = `top:${y}pt;font:${e.bold ? 'bold ' : ''}${e.size}pt/${e.h}pt ${FAM[e.fam]};color:${e.c};`;
-    if (e.align === 'center') st += `left:${e.cx0}pt;width:${e.cx1 - e.cx0}pt;text-align:center;`;
+    if (e.align === 'center' || e.align === 'right') st += `left:${e.cx0}pt;width:${e.cx1 - e.cx0}pt;text-align:${e.align};`;
     else st += `left:${e.x}pt;`;
     return `<div class="t" style="${st}">${esc(txt)}</div>`;
   }

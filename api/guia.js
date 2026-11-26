@@ -11,9 +11,10 @@
 //
 // Uso:  GET /api/guia?guia=S15837   -> guía de salida 15837
 //       GET /api/guia?guia=ET15837  -> guía de entrada generada por la salida 15837
+//       GET /api/guia?guia=EF573908 -> guía de entrada por devolución de la NC de la factura 573908 (EB = boleta)
 
-// Por ahora solo se sirven traslados y sus entradas (no guías a clientes).
-const PERMITIDAS = new Set(['traslado', 'entrada']);
+// Se sirven traslados, sus entradas y las guías de entrada por devolución (NC). No guías a clientes.
+const PERMITIDAS = new Set(['traslado', 'entrada', 'devolucion']);
 
 module.exports = async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
@@ -24,8 +25,8 @@ module.exports = async (req, res) => {
       return;
     }
     const clave = String((req.query && req.query.guia) || '').toUpperCase().trim();
-    if (!/^(S|ET)\d{1,9}$/.test(clave)) {
-      res.status(400).json({ ok: false, error: 'Guía inválida (usa S12345 o ET12345)' });
+    if (!/^(S|ET|EF|EB)\d{1,9}$/.test(clave)) {
+      res.status(400).json({ ok: false, error: 'Guía inválida' });
       return;
     }
     const url = `${GUIAS_APPS_URL}?t=${encodeURIComponent(GUIAS_READ_TOKEN)}&guia=${clave}`;

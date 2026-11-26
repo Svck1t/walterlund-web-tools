@@ -20,6 +20,28 @@ const NotasCreditoSection = (() => {
   };
   const POR_EMITIR = ['SOLICITADA', 'PEND_DEVOLUCION', 'EN_BODEGA'];
   const DIAS_ANALIZAR = 5;   // NC por emitir con más días que esto: se destaca en amarillo para analizar
+  // NC que existen en Softland (factura/boleta -> NC). Se usa para detectar NC marcadas "Emitida" en la web
+  // que no existen en Softland: se muestran como pendientes ("⚠ Sin NC en Softland"), sin cambiar su estado guardado.
+  let sfNc = null;
+  const VALIDA_DESDE = '2025-01-01';
+  const refDe = n => (n.docTipo === 'Boleta' ? 'B' : 'F') + String(n.docNum || '').trim();
+  const ncsSf = n => (sfNc && sfNc.get(refDe(n))) || [];
+  const sinSoftland = n => !!sfNc && n.estado === 'EMITIDA' && String(n.fechaEmision || '') >= VALIDA_DESDE && !ncsSf(n).length;
+  const pendiente = n => POR_EMITIR.includes(n.estado) || sinSoftland(n);
+  async function cargarSoftland() {
+    try {
+      const r = await fetch('/api/guia?lista=nc', { cache: 'no-store' });
+      const d = await r.json();
+      if (!d.ok) throw new Error(d.error);
+      sfNc = new Map();
+      d.nc.forEach(([folio, fecha, ref, doc, dev, estado, folioEnt]) => {
+        if (estado !== 'V') return;
+        const k = (ref === 'B' ? 'B' : 'F') + String(doc).trim();
+        (sfNc.get(k) || sfNc.set(k, []).get(k)).push({ folio, fecha, dev, folioEnt });
+      });
+    } catch (err) { console.error('NC Softland:', err); sfNc = null; }
+    if (cargado) dibujar();
+  }
   const FILTROS = [['emitir', 'Por emitir'], ['PEND_DEVOLUCION', 'Esperando devolución'], ['EN_BODEGA', 'En bodega'], ['EMITIDA', 'Emitidas'], ['ANULADA', 'Anuladas'], ['todas', 'Todas']];
   const MAX_ARCHIVO = 3 * 1024 * 1024;
   const KEY_QUIEN = 'wl_nc_quien';
@@ -57,6 +79,7 @@ const NotasCreditoSection = (() => {
 
   // ============ CARGA ============
   async function cargar() {
+    cargarSoftland();
     try {
       const r = await fetch(`${API}?m=nc`, { cache: 'no-store' });
       const d = await r.json();
@@ -149,8 +172,9 @@ const NotasCreditoSection = (() => {
   }
 
   function pasaFiltro(n) {
-    if (st.filtro === 'emitir') return POR_EMITIR.includes(n.estado);
+    if (st.filtro === 'emitir') return pendiente(n);
     if (st.filtro === 'todas') return true;
+    if (st.filtro === 'EMITIDA') return n.estado === 'EMITIDA' && !sinSoftland(n);
     return n.estado === st.filtro;
   }
   function filtradas() {
@@ -175,17 +199,18 @@ const NotasCreditoSection = (() => {
     root.querySelector('#nc-tgn').textContent = sinAsig || '';
     root.querySelector('#nc-nombres').innerHTML = nombres().map(n => `<option value="${esc(n)}">`).join('');
     const mes = (hoy || hoyLocal()).slice(0, 7);
-    const pend = notas.filter(n => POR_EMITIR.includes(n.estado));
+    const pend = notas.filter(pendiente);
     const emMes = notas.filter(n => n.estado === 'EMITIDA' && String(n.fechaEmision).startsWith(mes));
     const tiempos = notas.filter(n => n.estado === 'EMITIDA' && n.fechaSolicitud && n.fechaEmision).map(n => dia(n.fechaEmision) - dia(n.fechaSolicitud)).filter(x => x >= 0);
     const prom = tiempos.length ? tiempos.reduce((a, b) => a + b, 0) / tiempos.length : null;
     root.querySelector('#nc-kpis').innerHTML = [
-      ['Por emitir', pend.length, pend.filter(n => diasDesde(n.fechaSolicitud) > DIAS_ANALIZAR).length ? `${pend.filter(n => diasDesde(n.fechaSolicitud) > DIAS_ANALIZAR).length} por analizar (más de ${DIAS_ANALIZAR} días)` : '', 'nar'],
+      ['Por emitir', pend.length, [pend.filter(n => POR_EMITIR.includes(n.estado) && diasDesde(n.fechaSolicitud) > DIAS_ANALIZAR).length ? `${pend.filter(n => POR_EMITIR.includes(n.estado) && diasDesde(n.fechaSolicitud) > DIAS_ANALIZAR).length} con más de ${DIAS_ANALIZAR} días` : '',
+        pend.filter(sinSoftland).length ? `${pend.filter(sinSoftland).length} emitidas sin NC en Softland` : ''].filter(Boolean).join(' · '), 'nar'],
       ['Esperando devolución', notas.filter(n => n.estado === 'PEND_DEVOLUCION').length, '', ''],
       ['Emitidas este mes', emMes.length, plata(emMes.reduce((s, n) => s + (Number(n.montoNc || (n.tipo === 'Completa' ? n.montoDoc : 0)) || 0), 0)), 'verde'],
       ['Días promedio a emisión', prom === null ? '—' : prom.toFixed(1).replace('.', ','), tiempos.length ? `${tiempos.length} NC medidas` : '', '']
     ].map(([l, v, s, c]) => `<div class="nc-kpi ${c}"><span>${l}</span><strong>${v}</strong>${s ? `<small>${s}</small>` : ''}</div>`).join('');
-    const cnt = k => notas.filter(n => k === 'emitir' ? POR_EMITIR.includes(n.estado) : k === 'todas' ? true : n.estado === k).length;
+    const cnt = k => notas.filter(n => k === 'emitir' ? pendiente(n) : k === 'todas' ? true : k === 'EMITIDA' ? n.estado === 'EMITIDA' && !sinSoftland(n) : n.estado === k).length;
     root.querySelector('#nc-chips').innerHTML = FILTROS.map(([k, l]) => `<button class="nc-chip${st.filtro === k ? ' on' : ''}" data-f="${k}">${l} <b>${cnt(k)}</b></button>`).join('');
     if (st.tab === 'bandeja') { dibujarLista(); dibujarDetalle(); } else if (st.tab === 'telegram') dibujarTelegram(); else dibujarResumen();
   }
@@ -198,10 +223,11 @@ const NotasCreditoSection = (() => {
     if (!st.sel && f.length && !window.matchMedia('(max-width: 900px)').matches) st.sel = f[0].id;
     el.innerHTML = f.map(n => {
       const [lbl, cls] = EST[n.estado] || ['—', ''];
-      const d = POR_EMITIR.includes(n.estado) ? diasDesde(n.fechaSolicitud) : null;
-      const analizar = d !== null && d > DIAS_ANALIZAR;
+      const sinSf = sinSoftland(n);
+      const d = pendiente(n) ? diasDesde(n.fechaSolicitud) : null;
+      const analizar = sinSf || (d !== null && d > DIAS_ANALIZAR);
       return `<button class="nc-item${st.sel === n.id ? ' cur' : ''}${analizar ? ' nc-analizar' : ''}" data-id="${esc(n.id)}"${analizar ? ` title="Lleva ${d} días sin NC en sistema: revisar"` : ''}>
-        <div class="nc-it-top"><i class="nc-dot ${cls}"></i><b>${esc(docCorto(n))}</b>${analizar ? '<span class="nc-tag-an">⚠ Analizar</span>' : ''}${n.tipo ? `<span class="nc-tipo">${esc(n.tipo)}</span>` : ''}${origenDe(n) === 'Presencial' ? '<span class="nc-tipo nc-pres">🏬 Presencial</span>' : ''}<span class="nc-it-r">${n.montoDoc ? plata(n.montoDoc) : ''}</span></div>
+        <div class="nc-it-top"><i class="nc-dot ${cls}"></i><b>${esc(docCorto(n))}</b>${sinSf ? '<span class="nc-tag-an">⚠ Sin NC en Softland</span>' : analizar ? '<span class="nc-tag-an">⚠ Analizar</span>' : ''}${n.tipo ? `<span class="nc-tipo">${esc(n.tipo)}</span>` : ''}${origenDe(n) === 'Presencial' ? '<span class="nc-tipo nc-pres">🏬 Presencial</span>' : ''}<span class="nc-it-r">${n.montoDoc ? plata(n.montoDoc) : ''}</span></div>
         <small>${esc(n.cliente || 'Sin cliente')}</small>
         <small>${esc(lbl)}${n.motivo ? ' · ' + esc(n.motivo) : ''}${d !== null ? ` · <span class="${d > DIAS_ANALIZAR ? 'nc-late' : ''}">${d <= 0 ? 'hoy' : d + (d === 1 ? ' día' : ' días')}</span>` : n.estado === 'EMITIDA' ? ' · ' + fCorta(n.fechaEmision) : ''}</small>
       </button>`;
@@ -271,11 +297,12 @@ const NotasCreditoSection = (() => {
           <div><span>Motivo</span><b>${esc(n.motivo || '—')}</b></div>
           <div><span>Bodega</span><b>${esc(n.bodega || '—')}</b></div>
           <div><span>Fecha documento</span><b>${fCorta(n.fechaDoc)}</b></div>
-          <div><span>Folio NC</span><b>${esc(n.folioNc || '—')}</b></div>
+          <div><span>Folio NC</span><b>${esc(n.folioNc || ncsSf(n).map(x => x.folio).join(', ') || '—')}</b>${!n.folioNc && ncsSf(n).length ? '<small class="nc-dim"> (Softland)</small>' : ''}</div>
           <div><span>Origen</span><b>${esc(origenDe(n))}</b></div>
           ${n.facturaSustituta ? `<div><span>Factura sustituta</span><b>${esc(n.facturaSustituta)}</b></div>` : ''}
         </div>
         ${cfHtml ? `<p class="nc-cf">${cfHtml}</p>` : ''}
+        ${sinSoftland(n) ? `<div class="nc-note nc-an">⚠️ Está marcada como <b>emitida</b>${n.fechaEmision ? ' el ' + esc(fCorta(n.fechaEmision)) : ''}, pero <b>Softland no registra ninguna NC</b> para ${esc(docLbl(n))}. Se cuenta como pendiente hasta que aparezca en Softland (se revisa cada 10 min). Si se marcó por error, usa <b>Reabrir</b>.</div>` : ''}
         ${POR_EMITIR.includes(n.estado) && diasDesde(n.fechaSolicitud) > DIAS_ANALIZAR ? `<div class="nc-note nc-an">⚠️ Lleva <b>${diasDesde(n.fechaSolicitud)} días</b> sin NC en sistema (más de ${DIAS_ANALIZAR}). Hay que analizar por qué aún no se hace la devolución en Softland.</div>` : ''}
         ${n.anulacion ? `<div class="nc-note anu">Anulada: ${esc(n.anulacion)}</div>` : ''}
         ${n.obs ? `<div class="nc-note">${esc(n.obs)}</div>` : ''}

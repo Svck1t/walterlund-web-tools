@@ -12,6 +12,7 @@
 // Uso:  GET /api/guia?guia=S15837   -> guía de salida 15837
 //       GET /api/guia?guia=ET15837  -> guía de entrada generada por la salida 15837
 //       GET /api/guia?guia=EF573908 -> guía de entrada por devolución de la NC de la factura 573908 (EB = boleta)
+//       GET /api/guia?lista=nc      -> NC que existen en Softland [folio, fecha, ref F/B, documento, devolución SI/NO, estado, folio entrada]
 
 // Se sirven traslados, sus entradas y las guías de entrada por devolución (NC). No guías a clientes.
 const PERMITIDAS = new Set(['traslado', 'entrada', 'devolucion']);
@@ -22,6 +23,13 @@ module.exports = async (req, res) => {
     const { GUIAS_APPS_URL, GUIAS_READ_TOKEN } = process.env;
     if (!GUIAS_APPS_URL || !GUIAS_READ_TOKEN) {
       res.status(500).json({ ok: false, error: 'Faltan GUIAS_APPS_URL / GUIAS_READ_TOKEN en Vercel' });
+      return;
+    }
+    // Lista de NC que existen en Softland (para validar las NC "Emitidas" en Notas de Crédito)
+    if (req.query && req.query.lista === 'nc') {
+      const r = await fetch(`${GUIAS_APPS_URL}?t=${encodeURIComponent(GUIAS_READ_TOKEN)}&lista=nc`, { redirect: 'follow' });
+      const d = await r.json();
+      res.status(d.ok ? 200 : 500).json(d.ok ? { ok: true, nc: d.nc } : { ok: false, error: d.error || 'Error' });
       return;
     }
     const clave = String((req.query && req.query.guia) || '').toUpperCase().trim();

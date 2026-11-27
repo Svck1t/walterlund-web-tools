@@ -164,6 +164,33 @@ const NotasCreditoSection = (() => {
     }
     if (ok) { toast(`${ok} NC pasaron a Emitidas (ya están en Softland)`); await cargar(); }
   }
+  // N° mal digitado: si no hay NC en Softland para el documento, busca NC de Softland de esos días cuyo documento difiera
+  // en un solo dígito (cambiado, sobrante, faltante o dos vecinos invertidos) y que no esté tomada por otra ficha.
+  const unDigito = (a, b) => {
+    if (a === b) return false;
+    if (a.length === b.length) {
+      const d = [...a].map((c, i) => c !== b[i] ? i : -1).filter(i => i >= 0);
+      return d.length === 1 || (d.length === 2 && d[1] === d[0] + 1 && a[d[0]] === b[d[1]] && a[d[1]] === b[d[0]]);
+    }
+    const [c, l] = a.length < b.length ? [a, b] : [b, a];
+    if (l.length - c.length !== 1) return false;
+    for (let i = 0; i < l.length; i++) if (l.slice(0, i) + l.slice(i + 1) === c) return true;
+    return false;
+  };
+  function sugerenciasNum(n) {
+    if (!sfNc || ncsSf(n).length || !(sinSoftland(n) || POR_EMITIR.includes(n.estado)) || !n.fechaSolicitud) return [];
+    const num = String((n._web || n).docNum || '').replace(/\D/g, ''); if (num.length < 4) return [];
+    const sol = String(n.fechaSolicitud).slice(0, 10), t = new Date(sol + 'T12:00:00');
+    const desde = new Date(t - 7 * MS_DIA).toISOString().slice(0, 10), hasta = new Date(+t + 30 * MS_DIA).toISOString().slice(0, 10);
+    const usados = new Set(notas.filter(x => x.id !== n.id && x.estado !== 'ANULADA').map(refSf));
+    const out = [];
+    sfNc.forEach((lista, ref) => {
+      if (usados.has(ref) || !unDigito(num, ref.slice(1))) return;
+      const ok = lista.filter(x => String(x.fecha || '') >= desde && String(x.fecha || '') <= hasta);
+      if (ok.length) out.push({ ref, tipo: ref[0] === 'B' ? 'Boleta' : 'Factura', num: ref.slice(1), ncs: ok });
+    });
+    return out;
+  }
   const FILTROS = [['emitir', 'Por emitir'], ['PEND_DEVOLUCION', 'Esperando devolución'], ['EN_BODEGA', 'En bodega'], ['EMITIDA', 'Emitidas'], ['ANULADA', 'Anuladas'], ['todas', 'Todas']];
   const MAX_ARCHIVO = 3 * 1024 * 1024;
   const KEY_QUIEN = 'wl_nc_quien';
@@ -432,6 +459,8 @@ const NotasCreditoSection = (() => {
         </div>
         ${cfHtml ? `<p class="nc-cf">${cfHtml}</p>` : ''}
         ${n._sf ? `<div class="nc-note nc-sf">🔗 Datos desde Softland${n.sfRut ? ` · RUT ${esc(n.sfRut)}` : ''}${n.sfVendedor ? ` · Vendedor ${esc(n.sfVendedor)}` : ''}${n.sfGlosa ? `<br><small>Glosa NC: ${esc(n.sfGlosa)}</small>` : ''}${n._dif && n._dif.length ? `<br><small>En la web estaba: ${n._dif.map(esc).join(' · ')}</small>` : ''}</div>` : ''}
+        ${sugerenciasNum(n).map(g => `<div class="nc-note nc-sug">🔎 ¿El N° está mal digitado? Softland tiene la <b>NC ${esc(g.ncs.map(x => x.folio).join(', '))}</b> del ${esc(fCorta(g.ncs[0].fecha))} para <b>${esc(g.tipo)} N° ${esc(g.num)}</b>${g.ncs[0].glosa ? ` <span class="nc-dim">(${esc(g.ncs[0].glosa)})</span>` : ''}. Revisa la solicitud: si es esa, corrige el número.
+          <button class="nc-b nc-sm nc-pri" data-corregir="${esc(g.num)}" data-corregir-tipo="${esc(g.tipo)}">Corregir a ${esc(g.tipo)} N° ${esc(g.num)}</button></div>`).join('')}
         ${sinSoftland(n) ? `<div class="nc-note nc-an">⚠️ Está marcada como <b>emitida</b>${n.fechaEmision ? ' el ' + esc(fCorta(n.fechaEmision)) : ' (sin fecha de emisión)'}, pero <b>Softland no registra ninguna NC</b> para ${esc(docLbl(n))}. Se cuenta como pendiente hasta que aparezca en Softland (se revisa cada 10 min). Si se marcó por error, usa <b>Reabrir</b>.</div>` : ''}
         ${POR_EMITIR.includes(n.estado) && diasDesde(n.fechaSolicitud) > DIAS_ANALIZAR ? `<div class="nc-note nc-an">⚠️ Lleva <b>${diasDesde(n.fechaSolicitud)} días</b> sin NC en sistema (más de ${DIAS_ANALIZAR}). Hay que analizar por qué aún no se hace la devolución en Softland.</div>` : ''}
         ${n.anulacion ? `<div class="nc-note anu">Anulada: ${esc(n.anulacion)}</div>` : ''}
@@ -456,6 +485,21 @@ const NotasCreditoSection = (() => {
     if (e.target.closest('[data-back]')) { root.querySelector('.nc-wrap').classList.remove('nc-show'); return; }
     const n = notas.find(x => x.id === st.sel); if (!n) return;
     if (e.target.closest('[data-edit]')) return abrirForm(n);
+    const cb = e.target.closest('[data-corregir]');
+    if (cb) {
+      const w = n._web || n, nuevo = cb.dataset.corregir, tipoDoc = cb.dataset.corregirTipo;
+      if (!confirm(`¿Cambiar ${w.docTipo === 'Boleta' ? 'Boleta' : 'Factura'} N° ${w.docNum} por ${tipoDoc} N° ${nuevo}?\nCliente, fecha y monto del documento se borran y se toman de Softland en el próximo sync (máx. 10 min).`)) return;
+      if (!pedirQuien()) return toast('Escribe tu nombre arriba para registrar el cambio', true);
+      const x = { id: n.id, docTipo: tipoDoc, docNum: nuevo, fechaDoc: '', bodega: w.bodega || '', cliente: '', tipo: w.tipo || '', motivo: w.motivo || '',
+        montoDoc: '', montoNc: w.montoNc ?? '', solicitadoPor: n.solicitadoPor || '', fechaSolicitud: n.fechaSolicitud || '', requiereDev: n.requiereDev || '', obs: n.obs || '', origen: origenDe(n) };
+      cb.disabled = true; cb.textContent = 'Guardando…';
+      try {
+        try { await post({ action: 'nc_guardar', n: x, archivo: null }); }
+        catch (e2) { if (!/Ya existe una NC activa/.test(e2.message) || !confirm(e2.message)) throw e2; await post({ action: 'nc_guardar', n: x, archivo: null, forzar: true }); }
+        toast(`N° corregido a ${tipoDoc} ${nuevo}`); await cargar();
+      } catch (err) { toast(err.message, true); cb.disabled = false; cb.textContent = `Corregir a ${tipoDoc} N° ${nuevo}`; }
+      return;
+    }
     const lb = e.target.closest('[data-leer]');
     if (lb) { lb.disabled = true; lb.textContent = 'Leyendo… (10–30 s)'; return ejecutar({ action: 'nc_leer', id: n.id, forzar: lb.dataset.leer === 'forzar' }, 'Factura leída'); }
     if (e.target.closest('[data-bodega]')) return abrirPaso(n, 'bodega');
@@ -1216,6 +1260,7 @@ const NotasCreditoSection = (() => {
       .nc-chart{position:relative;height:260px}.nc-chart.alto{height:320px}
       .nc-file.warn{border-style:solid;border-color:#fde68a;background:#fffbeb}.nc-file.warn em{color:#92400e}
       .nc-dot.nar{background:#f59e0b}
+      .nc-note.nc-sug{background:#eff6ff;border:1px solid #bfdbfe;color:#1e3a8a}.nc-note.nc-sug button{margin-left:8px;margin-top:4px}
       .nc-barrow{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(60px,1fr) 30px 90px;gap:8px;align-items:center;font-size:13px;padding:4px 0}
       .nc-barrow span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
       .nc-barrow b{text-align:right}.nc-barrow em{font-style:normal;color:#5b6b7a;font-size:12px;text-align:right}

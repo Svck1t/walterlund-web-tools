@@ -491,6 +491,12 @@ const TrasladosSection = (() => {
       visor.addEventListener('click', e => {
         if (e.target === visor || e.target.closest('[data-cerrar-visor]')) visor.close();
         if (e.target.closest('[data-imprimir]')) { const f = visor.querySelector('iframe'); if (f && f.contentWindow) f.contentWindow.print(); }
+        const bd = e.target.closest('[data-descargar]');
+        if (bd) {
+          const f = visor.querySelector('iframe'); if (!f || !f.contentWindow || !f.contentWindow.descargarPdf || bd.disabled) return;
+          bd.disabled = true; const t = bd.textContent; bd.textContent = 'Generando…';
+          f.contentWindow.descargarPdf().catch(err => alert('No se pudo generar el PDF: ' + err.message)).finally(() => { bd.disabled = false; bd.textContent = t; });
+        }
       });
       visor.addEventListener('close', () => { const f = visor.querySelector('iframe'); if (f) f.src = 'about:blank'; });
       document.body.appendChild(visor);
@@ -498,7 +504,8 @@ const TrasladosSection = (() => {
     visor.innerHTML = `<div class="tr-visor-in">
       <div class="tr-visor-head"><h2>${esc(titulo || 'Guía')}</h2>
         <div class="tr-visor-acts">
-          <button class="tr-btn tr-btn-sec tr-sm" data-imprimir>🖨️ Imprimir / PDF</button>
+          <button class="tr-btn tr-btn-sec tr-sm" data-imprimir>🖨️ Imprimir</button>
+          <button class="tr-btn tr-btn-sec tr-sm" data-descargar>⬇️ Descargar PDF</button>
           <button class="tr-visor-x" data-cerrar-visor aria-label="Cerrar">✕</button>
         </div></div>
       <div class="tr-visor-body"><iframe src="guia.html?embed=1&guia=${encodeURIComponent(clave)}" title="${esc(titulo || 'Guía')}"></iframe></div>

@@ -8,6 +8,8 @@
   @page { size: A4; margin: 0 }
   body { margin: 0; background: #e9e9e9; font-family: Arial, sans-serif }
   .pag { page-break-after: always }
+  .pag:last-child { page-break-after: auto }
+  * { -webkit-print-color-adjust: exact; print-color-adjust: exact }
   .t { position: absolute; white-space: pre }
   #bar { position: sticky; top: 0; z-index: 9; background: #1f2937; color: #fff; padding: 8px 12px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap }
   #bar button { padding: 7px 14px; border: 0; border-radius: 4px; background: #2563eb; color: #fff; cursor: pointer; font-size: 14px }
@@ -21,16 +23,18 @@
   body.embed #hojas { padding: 6px 0 }
   @media print {
     #bar { display: none }
-    body { background: #fff }
-    #hojas { padding: 0 }
-    #hojas .pag { margin: 0; box-shadow: none }
+    html, body { background: #fff; height: auto; overflow: visible }
+    #hojas { padding: 0 !important; overflow: visible }
+    /* una sola hoja: sin salto extra y un pelo más baja que el A4 para que no se cree una 2ª hoja en blanco */
+    #hojas .pag { margin: 0 !important; box-shadow: none; zoom: 1 !important; break-after: auto; page-break-after: auto; height: 841pt !important }
   }
 </style>
 </head>
 <body>
 <div id="bar">
   <span id="titulo">Guía</span>
-  <button onclick="window.print()">🖨️ Imprimir / Guardar PDF</button>
+  <button onclick="window.print()">🖨️ Imprimir</button>
+  <button onclick="descargarPdf()">⬇️ Descargar PDF</button>
   <button class="sec" onclick="window.close()">Cerrar</button>
   <span id="msg">Cargando…</span>
 </div>
@@ -54,6 +58,7 @@
     : `Guía de salida ${clave.slice(1)}`;
   document.getElementById('titulo').textContent = nombre;
   document.title = nombre;
+  window.guiaArchivo = nombre.replace(/[()]/g, '').replace(/\s+/g, '_') + '.pdf';
   try {
     if (!clave) throw new Error('Falta indicar la guía');
     const [tpls, resp] = await Promise.all([
@@ -88,6 +93,23 @@
     avisar('⚠️ ' + e.message);
   }
 })();
+// Descarga la guía como PDF (sin pasar por el diálogo de impresión)
+const cargarJs = src => new Promise((res, rej) => { if (document.querySelector(`script[src="${src}"]`)) return res(); const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = () => rej(new Error('No se pudo cargar ' + src)); document.head.appendChild(s); });
+async function descargarPdf() {
+  const pag = document.querySelector('#hojas .pag');
+  if (!pag) return;
+  await cargarJs('js/vendor/html2canvas.min.js');
+  await cargarJs('js/vendor/jspdf.umd.min.js');
+  const zoom = pag.style.zoom; pag.style.zoom = '';
+  try {
+    const canvas = await html2canvas(pag, { scale: 3, backgroundColor: '#fff', useCORS: true, logging: false });
+    const w = parseFloat(pag.style.width), h = parseFloat(pag.style.height);
+    const pdf = new jspdf.jsPDF({ unit: 'pt', format: [w, h], orientation: 'portrait' });
+    pdf.addImage(canvas.toDataURL('image/jpeg', 0.92), 'JPEG', 0, 0, w, h);
+    pdf.save(window.guiaArchivo || 'guia.pdf');
+  } finally { pag.style.zoom = zoom; }
+}
+window.descargarPdf = descargarPdf;
 </script>
 </body>
 </html>

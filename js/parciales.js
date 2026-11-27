@@ -261,6 +261,22 @@ const ParcialesSection = (() => {
   // ============ VISOR DE GUÍAS (ventana dentro de la web, sin abrir otra pestaña) ============
   let visor = null;
   const idDrive = url => { const m = String(url || '').match(/[-\w]{25,}/); return m ? m[0] : ''; };
+
+  // Girar el archivo del visor (foto o PDF de Drive): se gira el iframe completo en pasos de 90°
+  function girarVisor(body, delta) {
+    const f = body && body.querySelector('iframe'); if (!f) return;
+    f.dataset.g = (((+f.dataset.g || 0) + delta) % 360 + 360) % 360;
+    ajustarGiro(body);
+  }
+  function ajustarGiro(body) {
+    const f = body && body.querySelector('iframe'); if (!f) return;
+    const g = +f.dataset.g || 0;
+    if (!g) { f.style.cssText = ''; return; }
+    const cs = getComputedStyle(body), w = body.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight), h = body.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+    const lado = g % 180 !== 0;
+    body.style.position = 'relative'; body.style.overflow = 'hidden';
+    f.style.cssText = `position:absolute;left:50%;top:50%;width:${lado ? h : w}px;height:${lado ? w : h}px;transform:translate(-50%,-50%) rotate(${g}deg)`;
+  }
   function verArchivo(url, titulo) {
     const id = idDrive(url);
     if (!visor) {
@@ -274,11 +290,14 @@ const ParcialesSection = (() => {
       <div class="dp-visor-head"><h2>${esc(titulo || 'Guía')}</h2>
         <div class="dp-visor-acts">
           ${id ? `<a class="dp-b dp-sm" href="https://drive.google.com/uc?export=download&id=${esc(id)}" target="_blank" rel="noopener">⬇ Descargar</a>` : ''}
+          ${id ? `<button class="dp-b dp-sm" data-girar="-90" title="Girar a la izquierda">⟲</button><button class="dp-b dp-sm" data-girar="90" title="Girar a la derecha">⟳</button>` : ''}
           <a class="dp-b dp-sm" href="${esc(url)}" target="_blank" rel="noopener">↗ Abrir en Drive</a>
           <button class="dp-visor-x" data-cerrar-visor aria-label="Cerrar">✕</button>
         </div></div>
       <div class="dp-visor-body">${id ? `<iframe src="https://drive.google.com/file/d/${esc(id)}/preview" title="${esc(titulo || 'Guía')}" allow="autoplay"></iframe>` : '<p class="dp-empty">No se puede mostrar este archivo aquí. Ábrelo en Drive.</p>'}</div>
     </div>`;
+    visor.querySelectorAll('[data-girar]').forEach(b => b.addEventListener('click', () => girarVisor(visor.querySelector('.dp-visor-body'), +b.dataset.girar)));
+    if (!window['_giro_dp']) { window['_giro_dp'] = 1; window.addEventListener('resize', () => { if (visor && visor.open) ajustarGiro(visor.querySelector('.dp-visor-body')); }); }
     visor.showModal();
   }
 

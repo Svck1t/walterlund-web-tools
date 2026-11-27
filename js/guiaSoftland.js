@@ -26,6 +26,10 @@
     return `<div class="t" style="${st}">${esc(txt)}</div>`;
   }
 
+  // Color de cada bodega en las guías de traslado de Softland (sin color = blanco)
+  const COLOR_BODEGA = { '09': '#ffff00', '19': '#ffccff', '17': '#ffc000', '02': '#92cddc' };
+  const colorBodega = txt => { const m = String(txt || '').trim().match(/^(\d{2})\b/); return m ? COLOR_BODEGA[m[1]] || '' : ''; };
+
   function renderGuia(tpl, data) {
     const out = [];
     // filas de detalle: una línea de descripción por fila (respeta saltos de línea)
@@ -34,7 +38,10 @@
       String(l.desc || '').split(/\r?\n/).forEach((d, i) => rows.push(i === 0 ? Object.assign({}, l, { desc: d }) : { desc: d }));
     });
     for (const e of tpl.els) {
-      if (e.t === 'rect') out.push(`<div style="position:absolute;left:${e.x}pt;top:${e.y}pt;width:${e.w}pt;height:${e.h}pt;background:${e.c}"></div>`);
+      if (e.t === 'rect' && e.bod) {   // casilla de bodega de origen / destino: color de esa bodega (como en Softland)
+        const c = colorBodega(data[e.bod]);
+        if (c) out.push(`<div style="position:absolute;left:${e.x}pt;top:${e.y}pt;width:${e.w}pt;height:${e.h}pt;background:${c}"></div>`);
+      } else if (e.t === 'rect') out.push(`<div style="position:absolute;left:${e.x}pt;top:${e.y}pt;width:${e.w}pt;height:${e.h}pt;background:${e.c}"></div>`);
       else if (e.t === 'box') out.push(`<div style="position:absolute;left:${e.x}pt;top:${e.y}pt;width:${e.w}pt;height:${e.h}pt;border:${e.lw}pt solid ${e.c};box-sizing:border-box"></div>`);
       else if (e.t === 'img') {
         const src = e.key ? data[e.key] : e.src;

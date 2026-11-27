@@ -724,6 +724,36 @@ const NotasCreditoSection = (() => {
     d.querySelector('#f-num').addEventListener('input', buscar);
     d.querySelector('#f-tipo-doc').addEventListener('change', buscar);
     buscar();
+    // Al cambiar el N° (o el tipo): trae cliente, bodega, fecha y monto desde Softland
+    const numIni = n ? String(n.docNum) : '', tipoIni = n ? (n.docTipo === 'Boleta' ? 'Boleta' : 'Factura') : '';
+    let tSf = null, pedido = 0;
+    const desdeSoftland = () => {
+      clearTimeout(tSf);
+      const num_ = v(d, '#f-num').replace(/\D/g, ''), tipo = d.querySelector('#f-tipo-doc').value;
+      const el = d.querySelector('#f-cf');
+      d.querySelectorAll('.nc-sfhint').forEach(x => x.remove());
+      if (num_.length < 3 || (num_ === numIni && tipo === tipoIni)) return;
+      tSf = setTimeout(async () => {
+        const yo = ++pedido;
+        const hint = document.createElement('p'); hint.className = 'nc-cfhint nc-sfhint'; hint.textContent = 'Buscando en Softland…'; el.after(hint);
+        const leer = async t => { try { const r = await fetch('/api/guia?doc=' + t + num_, { cache: 'no-store' }); const j = await r.json(); return j.ok ? j.doc : null; } catch (_) { return null; } };
+        const propio = tipo === 'Boleta' ? 'B' : 'F';
+        let doc = await leer(propio), t = propio;
+        if (!doc) { doc = await leer(propio === 'F' ? 'B' : 'F'); t = propio === 'F' ? 'B' : 'F'; }
+        if (yo !== pedido) return;
+        if (!doc) { hint.textContent = `No se encontró en Softland (${tipo} N° ${num_}, último año).`; return; }
+        const tipoSf = t === 'B' ? 'Boleta' : 'Factura';
+        if (tipoSf !== tipo) d.querySelector('#f-tipo-doc').value = tipoSf;
+        if (doc.fecha) d.querySelector('#f-fdoc').value = doc.fecha;
+        if (doc.cliente) d.querySelector('#f-cli').value = doc.cliente;
+        if (doc.total) d.querySelector('#f-mdoc').value = Math.round(doc.total);
+        if (doc.bodega && BODEGAS.includes(doc.bodega)) d.querySelector('#f-bod').value = doc.bodega;
+        hint.innerHTML = `🔗 Datos desde Softland: <b>${esc(tipoSf)} N° ${esc(num_)}</b> · ${esc(doc.cliente || '')} · ${esc(fCorta(doc.fecha))} · ${esc(doc.bodega || '')} · ${plata(doc.total || 0)}${doc.vendedor ? ' · ' + esc(doc.vendedor) : ''}${doc.estado === 'N' ? ' · <b class="nc-late">documento NULO en Softland</b>' : ''}${tipoSf !== tipo ? ` · <b>es ${esc(tipoSf.toLowerCase())}, se cambió el tipo</b>` : ''}`;
+        buscar();
+      }, 450);
+    };
+    d.querySelector('#f-num').addEventListener('input', desdeSoftland);
+    d.querySelector('#f-tipo-doc').addEventListener('change', desdeSoftland);
     if (!n) d.querySelector('#f-num').focus();
   }
 

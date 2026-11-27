@@ -12,6 +12,7 @@
 // Uso:  GET /api/guia?guia=S15837   -> guía de salida 15837
 //       GET /api/guia?guia=ET15837  -> guía de entrada generada por la salida 15837
 //       GET /api/guia?guia=EF573908 -> guía de entrada por devolución de la NC de la factura 573908 (EB = boleta)
+//       GET /api/guia?doc=F573931  -> datos de la factura (B = boleta): cliente, rut, bodega, total, vendedor, fecha
 //       GET /api/guia?lista=nc       -> NC que existen en Softland [folio, fecha, ref F/B, documento, devolución, estado, folio entrada, total, glosa]
 //       GET /api/guia?lista=facturas -> facturas/boletas con solicitud de NC [clave, fecha, cliente, rut, bodega, total, vendedor, productos]
 
@@ -31,6 +32,15 @@ module.exports = async (req, res) => {
       const r = await fetch(`${GUIAS_APPS_URL}?t=${encodeURIComponent(GUIAS_READ_TOKEN)}&lista=${req.query.lista}`, { redirect: 'follow' });
       const d = await r.json();
       res.status(d.ok ? 200 : 500).json(d.ok ? { ok: true, filas: d.filas || d.nc, nc: d.filas || d.nc } : { ok: false, error: d.error || 'Error' });
+      return;
+    }
+    // Factura/boleta por N° (para completar el formulario de Notas de Crédito)
+    if (req.query && req.query.doc) {
+      const doc = String(req.query.doc).toUpperCase().trim();
+      if (!/^[FB]\d{1,9}$/.test(doc)) { res.status(400).json({ ok: false, error: 'Documento inválido' }); return; }
+      const r = await fetch(`${GUIAS_APPS_URL}?t=${encodeURIComponent(GUIAS_READ_TOKEN)}&doc=${doc}`, { redirect: 'follow' });
+      const d = await r.json();
+      res.status(200).json(d.ok ? { ok: true, doc: d.doc } : { ok: false, error: d.error || 'No encontrado' });
       return;
     }
     const clave = String((req.query && req.query.guia) || '').toUpperCase().trim();

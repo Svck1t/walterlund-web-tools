@@ -25,7 +25,21 @@ const NotasCreditoSection = (() => {
   let sfNc = null;
   const VALIDA_DESDE = '2025-01-01';
   const refDe = n => (n.docTipo === 'Boleta' ? 'B' : 'F') + String(n.docNum || '').trim();
-  const ncsSf = n => (sfNc && sfNc.get(refDe(n))) || [];
+  // Documento en Softland: a veces se registra como factura algo que es boleta (o al revés). Se usa el que calza con la solicitud:
+  // 1° el que tenga NC desde 7 días antes de la solicitud; 2° el documento de menos de 1 año antes de la solicitud; si no, el de la web.
+  const MS_DIA = 864e5;
+  const refSf = n => {
+    const w = n._web || n, num = String(w.docNum != null ? w.docNum : n.docNum || '').trim();
+    const propio = (w.docTipo === 'Boleta' ? 'B' : 'F') + num, otro = (w.docTipo === 'Boleta' ? 'F' : 'B') + num;
+    const sol = String(n.fechaSolicitud || '').slice(0, 10);
+    if (!sol || (!sfNc && !sfFac)) return propio;
+    const desde = d => new Date(new Date(sol + 'T12:00:00') - d * MS_DIA).toISOString().slice(0, 10);
+    const conNc = k => ((sfNc && sfNc.get(k)) || []).some(x => String(x.fecha || '') >= desde(7));
+    const docOk = k => { const f = sfFac && sfFac.get(k); return !!f && String(f.fecha || '') >= desde(365) && String(f.fecha || '') <= sol; };
+    for (const ok of [conNc, docOk]) { if (ok(propio)) return propio; if (ok(otro)) return otro; }
+    return propio;
+  };
+  const ncsSf = n => (sfNc && sfNc.get(refSf(n))) || [];
   const sinSoftland = n => !!sfNc && n.estado === 'EMITIDA' && String(n.fechaEmision || n.fechaSolicitud || hoy || '') >= VALIDA_DESDE && !ncsSf(n).length;
   const pendiente = n => POR_EMITIR.includes(n.estado) || sinSoftland(n);
   let sfFac = null;   // datos de la factura/boleta en Softland (clave F/B + número)
@@ -89,8 +103,13 @@ const NotasCreditoSection = (() => {
     if (!sfNc && !sfFac) return;
     const igual = (a, b) => sinTilde(a).replace(/\s+/g, ' ').trim() === sinTilde(b).replace(/\s+/g, ' ').trim();
     notas.forEach(n => {
-      n._web = n._web || { cliente: n.cliente, bodega: n.bodega, fechaDoc: n.fechaDoc, montoDoc: n.montoDoc, tipo: n.tipo, motivo: n.motivo, folioNc: n.folioNc, montoNc: n.montoNc };
-      const w = n._web, f = sfFac && sfFac.get(refDe(n)), ncs = ncsSf(n), sf = {};
+      n._web = n._web || { docTipo: n.docTipo, docNum: n.docNum, cliente: n.cliente, bodega: n.bodega, fechaDoc: n.fechaDoc, montoDoc: n.montoDoc, tipo: n.tipo, motivo: n.motivo, folioNc: n.folioNc, montoNc: n.montoNc };
+      const w = n._web, ref = refSf(n), sf = {};
+      // datos del documento solo si es de menos de 1 año antes de la solicitud (si no, es otro documento con el mismo número)
+      const f0 = sfFac && sfFac.get(ref), sol = String(n.fechaSolicitud || '').slice(0, 10);
+      const f = f0 && (!sol || String(f0.fecha || '') >= new Date(new Date(sol + 'T12:00:00') - 365 * MS_DIA).toISOString().slice(0, 10)) ? f0 : null;
+      const ncs = ncsSf(n);
+      sf.docTipo = ref[0] === 'B' ? 'Boleta' : 'Factura';
       if (f) {
         if (f.cliente) sf.cliente = f.cliente;
         if (f.bodega) sf.bodega = f.bodega;
@@ -114,9 +133,9 @@ const NotasCreditoSection = (() => {
         if (mot) sf.motivo = mot;
         n.sfGlosa = ncs.map(x => x.glosa).filter(Boolean).join(' · ');
       }
-      const ETQ = { cliente: 'Cliente', bodega: 'Bodega', fechaDoc: 'Fecha documento', montoDoc: 'Monto', tipo: 'Tipo', motivo: 'Motivo', folioNc: 'Folio NC' };
+      const ETQ = { docTipo: 'Tipo de documento', cliente: 'Cliente', bodega: 'Bodega', fechaDoc: 'Fecha documento', montoDoc: 'Monto', tipo: 'Tipo', motivo: 'Motivo', folioNc: 'Folio NC' };
       n._dif = [];
-      Object.keys(w).forEach(c => {
+      Object.keys(w).filter(c => c !== 'docNum').forEach(c => {
         if (sf[c] === undefined) { n[c] = w[c]; return; }
         const wv = w[c];
         if (wv !== undefined && wv !== null && wv !== '' && !igual(wv, sf[c]) && !(c.startsWith('monto') && Math.round(Number(wv)) === Math.round(Number(sf[c])))) {
@@ -135,9 +154,9 @@ const NotasCreditoSection = (() => {
     if (!sfNc || !cargado) return;
     const lista = notas.filter(n => POR_EMITIR.includes(n.estado) && !autoHechas.has(n.id) && ncDeSolicitud(n).length);
     if (!lista.length) return;
+    lista.forEach(n => autoHechas.add(n.id));   // antes del primer await: evita dobles envíos si se llama dos veces seguidas
     let ok = 0;
     for (const n of lista) {
-      autoHechas.add(n.id);
       const ncs = ncDeSolicitud(n), fecha = ncs.map(x => String(x.fecha)).sort().pop();
       const tot = ncs.reduce((a, x) => a + x.total, 0);
       try { await post({ action: 'nc_emitir', id: n.id, folio: ncs.map(x => x.folio).join(', '), fecha, montoNc: tot || '', facturaSustituta: '', archivo: null, quien: 'Softland (automático)' }); ok++; }
@@ -360,7 +379,7 @@ const NotasCreditoSection = (() => {
     // 3er respaldo: la guía de entrada por devolución que Softland genera al emitir la NC
     // (visor guia.html, clave EF + factura / EB + boleta).
     const ncSoftland = n => {
-      const clave = (n.docTipo === 'Boleta' ? 'EB' : 'EF') + String(n.docNum || '').trim();
+      const clave = 'E' + refSf(n);
       const titulo = 'Guía de entrada por devolución · ' + docLbl(n) + (n.folioNc ? ' · NC ' + n.folioNc : '');
       const btn = `<button class="nc-b nc-sm" data-guia="${esc(clave)}" data-titulo="${esc(titulo)}">Ver</button>`;
       if (!sfNc) {   // sin conexión a Softland: comportamiento anterior
